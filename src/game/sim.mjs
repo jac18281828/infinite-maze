@@ -26,7 +26,7 @@ export const ROOM_CLEAR = 8;
 export const SHAFT_REACH = 3;
 // Held Up engages an up-gallery once the feet come this close to its stair.
 export const STAIR_REACH = 4;
-// An Up or Down tap stays buffered 150 ms after release.
+// An Up or Down tap stays buffered 150 ms (9 ticks) past its release tick.
 export const BUFFER_TICKS = 9;
 // Key bits of press and release edges.
 export const KEY = { L: 1, R: 2, U: 4, D: 8 };
@@ -81,6 +81,18 @@ export function canGo(s, d) {
 function linkToward(s, v) {
   for (const d of v > 0 ? [1, 4, 5] : [3, 7, 6]) if (canGo(s, d)) return d;
   return -1;
+}
+
+/** The up-link and its stair: +1 or -1, the side an up-gallery rises toward, else 0. */
+function upLink(s) {
+  const up = linkToward(s, 1);
+  return { up, stair: up >= 4 ? DX[up] : 0 };
+}
+
+/** Reach toward side h: unbounded through a corridor or door, 0 at a gallery foot or mouth, else the wall. */
+function sideLimit(s, h) {
+  if (canGo(s, h > 0 ? 0 : 2)) return Infinity;
+  return (h > 0 ? [4, 7] : [5, 6]).some((e) => canGo(s, e)) ? 0 : WALL_REACH;
 }
 
 /** The link vertical intent v picks: the cell's link that way, unless h points away from its gallery. */
@@ -141,13 +153,17 @@ function readEdges(s, { press, release }) {
   }
 }
 
-function floorMove(s, h, v, dt) {
-  if (v !== 0 && v !== s.queued) s.queued = 0;
-  // A buffered tap that finds a link here holds until the link engages.
+/** A buffered tap that finds a link here holds until the link engages. */
+function takeBuffer(s, h, v) {
   if (v === 0 && s.buffer && pickLink(s, h, s.buffer) >= 0) {
     s.queued = s.buffer;
     s.buffer = 0;
   }
+}
+
+function floorMove(s, h, v, dt) {
+  if (v !== 0 && v !== s.queued) s.queued = 0;
+  takeBuffer(s, h, v);
   const d = pickLink(s, h, v || s.queued);
   if (d < 0) s.queued = 0;
   const stepPx = RUN_SPEED * dt;
@@ -179,14 +195,18 @@ function floorMove(s, h, v, dt) {
       linkMove(s, h, diags[0] < 6 ? 1 : -1, dt - used);
       return;
     }
-    // A gallery foot or mouth on this side leaves no floor past the centre.
-    const lim = diags.length ? 0 : WALL_REACH;
-    if (next * h > lim) next = Math.max(s.off * h, lim) * h;
   }
+  // A gallery foot or mouth on this side leaves no floor past the centre.
+  const lim = sideLimit(s, h);
+  if (next * h > lim) next = Math.max(s.off * h, lim) * h;
   s.moving = next !== s.off;
   s.walked += Math.abs(next - s.off);
   s.off = next;
-  if (s.off * h > CELL / 2) crossCell(s, h);
+  if (s.off * h > CELL / 2) {
+    crossCell(s, h);
+    // The cell entered reads the buffer in the tick that enters it.
+    takeBuffer(s, h, v);
+  }
 }
 
 function linkMove(s, h, v, dt) {
@@ -228,17 +248,11 @@ function launch(s) {
  * bounds the feet from below. The air ends on the floor or on a link.
  */
 function airMove(s, h, v, dt) {
-  let up = linkToward(s, 1);
-  let stair = up >= 4 ? DX[up] : 0;
+  let { up, stair } = upLink(s);
   if (h !== 0) {
     s.facing = h;
     let next = s.off + h * RUN_SPEED * dt;
-    let lim = Infinity;
-    if (!canGo(s, h > 0 ? 0 : 2)) {
-      lim = WALL_REACH;
-      if (h === stair) lim = CELL / 2;
-      else if ((h > 0 ? [4, 7] : [5, 6]).some((e) => canGo(s, e))) lim = 0;
-    }
+    let lim = h === stair ? CELL / 2 : sideLimit(s, h);
     // A head in the ladder shaft stays within it.
     if (s.alt > ROOM_CLEAR) lim = Math.min(lim, SHAFT_REACH);
     if (next * h > lim) next = Math.max(s.off * h, lim) * h;
@@ -247,8 +261,7 @@ function airMove(s, h, v, dt) {
     s.off = next;
     if (s.off * h > CELL / 2) {
       crossCell(s, h);
-      up = linkToward(s, 1);
-      stair = up >= 4 ? DX[up] : 0;
+      ({ up, stair } = upLink(s));
     }
   }
   s.alt += s.vy * dt - GRAVITY * dt * dt / 2;
@@ -311,12 +324,12 @@ export function step(s, h, v, jump = false, edges = NO_EDGES) {
   s.time += TICK;
   const dt = TICK + s.carry;
   s.carry = 0;
+  if (s.buffer && --s.bufferTicks < 0) s.buffer = 0;
   readEdges(s, edges);
   if (jump && s.mode === 'floor') launch(s);
   if (s.mode === 'floor') floorMove(s, h, v, dt);
   else if (s.mode === 'air') airMove(s, h, v, dt);
   else linkMove(s, h, v, dt);
-  if (s.buffer && --s.bufferTicks <= 0) s.buffer = 0;
   // Contact with a flame holds the torch at full; events fire once per contact.
   const touch = flameTouch(s);
   if (touch) {

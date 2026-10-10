@@ -240,6 +240,70 @@ test('galleries rejects a world averaging under 4 galleries per board', () => {
   assert.deepEqual(checkTree(w, B0, B1).errors, []);
 });
 
+/**
+ * `bd` relinked as a spanning tree whose galleries are exactly `diagonals`,
+ * [cell, dir] pairs: corridors and ladders join every other cell pair, but
+ * none joins two cells of one gallery's block.
+ */
+function treeWithGalleries(bd, diagonals) {
+  const out = copyBoard(bd);
+  out.links.fill(0);
+  const root = [...Array(84).keys()];
+  const find = (c) => (root[c] === c ? c : (root[c] = find(root[c])));
+  const blocks = diagonals.map(([c, d]) => {
+    const a = d === 4 ? c : c - 1;
+    return [a, a + 1, a + 12, a + 13];
+  });
+  for (const [c, d] of diagonals) {
+    setLink(out, c, d);
+    root[find(c)] = find(c + DX[d] + 12);
+  }
+  for (let c = 0; c < 84; c++) {
+    for (const d of [0, 1]) {
+      if ((d === 0 && c % 12 === 11) || (d === 1 && c >= 72)) continue;
+      const t = c + (d === 0 ? 1 : 12);
+      if (blocks.some((b) => b.includes(c) && b.includes(t)) || find(c) === find(t)) continue;
+      setLink(out, c, d);
+      root[find(c)] = find(t);
+    }
+  }
+  assert.equal(reachable(out.links, 0).length, 84, 'the relinked board spans every cell');
+  return out;
+}
+
+test('galleries rejects two gallery blocks that share a cell in a valid tree', () => {
+  const w = broken(world);
+  const bd = treeBoards()[0];
+  // North-east galleries from cells 0 and 1: their blocks share cells 1 and 13.
+  w._set(bd.x, bd.y, treeWithGalleries(bd, [[0, 4], [1, 4]]));
+  const errors = checkGalleries(w, B0, B1).errors;
+  assert.ok(errors.includes(`board (${bd.x},${bd.y}): gallery 1 dir 4 overlaps another block`), errors.join('\n'));
+  assert.ok(!errors.some((e) => e.includes('shares its block')), errors.join('\n'));
+  // The board stays a valid tree, so only the galleries check catches it.
+  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+});
+
+test('galleries rejects a world averaging over 10 galleries per board', () => {
+  const sound = checkGalleries(world, B0, B1);
+  assert.ok(sound.mean <= 10, `sound mean ${sound.mean}`);
+  // Fifteen disjoint blocks: rows 0-1, 2-3 and 4-5, columns 0-9 in pairs.
+  const dense = [];
+  for (let r = 0; r < 6; r += 2) for (let k = 0; k < 10; k += 2) dense.push([r * 12 + k, 4]);
+  const w = broken(world);
+  let galleries = sound.galleries;
+  for (const bd of treeBoards()) {
+    if (galleries > 10 * sound.boards) break;
+    for (let c = 0; c < 84; c++) galleries -= ((bd.links[c] >> 4) & 1) + ((bd.links[c] >> 5) & 1);
+    galleries += dense.length;
+    w._set(bd.x, bd.y, treeWithGalleries(bd, dense));
+  }
+  const r = checkGalleries(w, B0, B1);
+  assert.ok(r.mean > 10 && r.mean < 10.5, `mean ${r.mean}`);
+  assert.equal(r.conflicts, 0);
+  assert.ok(r.errors.some((e) => e.includes('galleries per board average')), r.errors.join('\n'));
+  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+});
+
 test('flames rejects a removed flame that opens a gap over 150 s', () => {
   // In seed 0000-0013, band 2, dropping chain flame 2 leaves a 152.9 s walk.
   const base = createWorld('00000013');

@@ -241,27 +241,32 @@ test('Up at a ladder from offset +10 engages without turning', () => {
   }
 });
 
-test('an Up tap released 100 ms before reaching a ladder cell takes the ladder', () => {
+test('an Up tap released 9 ticks before the tick that enters a ladder cell takes the ladder, 10 ticks misses', () => {
   // L: a ladder cell; its west corridor neighbour has no up-link.
   const at = findCell((bd, c) => has(bd, c, 1) && bd.links[c] & 4 && UP.every((d) => !has(bd, c - 1, d)));
   const from = { bd: at.bd, cell: at.cell - 1 };
   const probe = simOn(from);
   let reach = 0;
   while (probe.cell !== at.cell && reach < 100) { step(probe, 1, 0); reach++; }
-  // A one-tick Up tap, released `before` ticks ahead of the tick that enters L.
-  const takes = (before) => {
+  // Step reach - 1 enters L. An Up tap released at step reach - 1 - before,
+  // held the tick before (`held`) or pressed and released within that step.
+  const takes = (before, held) => {
     const s = simOn(from);
-    const go = driver(s);
     const release = reach - 1 - before;
     assert.ok(release >= 1);
     for (let i = 0; i < reach + 30; i++) {
-      go(1, i === release - 1 ? 1 : 0);
+      const up = held && i === release - 1;
+      const press = (i === 0 ? KEY.R : 0) | (up || (!held && i === release) ? KEY.U : 0);
+      const lift = i === release ? KEY.U : 0;
+      step(s, 1, up ? 1 : 0, false, { press, release: lift });
       if (s.mode === 'link') return s.link === 1 && s.cell === at.cell;
     }
     return false;
   };
-  assert.ok(takes(6), 'tap released 100 ms ahead');
-  assert.ok(!takes(12), 'tap released 200 ms ahead');
+  for (const held of [true, false]) {
+    for (let g = 0; g <= 9; g++) assert.ok(takes(g, held), `held ${held}: tap released ${g} ticks ahead`);
+    assert.ok(!takes(10, held), `held ${held}: tap released 10 ticks ahead`);
+  }
 });
 
 test('a Left or Right press turns the explorer at once, even on a ladder', () => {
