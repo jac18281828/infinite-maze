@@ -1,6 +1,7 @@
 // Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
 // opening joins exactly the cells of one tree link or door:
-// - room: cell-local [8,40) x [8,40); corridor: the 16 px wall between rooms;
+// - room: cell-local [8,40) x [8,40), only for a cell that holds a link or a
+//   door, so a pruned cell stays rock; corridor: the 16 px wall between rooms;
 // - ladder: a 16 px shaft through the slab above the lower room's centre;
 // - gallery: a 45-degree tunnel from the lower room's centre to the upper
 //   room's centre, 24 px tall over its stair. A gallery's 2x2 block holds no
@@ -26,6 +27,7 @@ export function boardMask(bd) {
   for (let c = 0; c < NCELL; c++) {
     const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
     const m = bd.links[c], doors = bd.doorMask[c];
+    if (!m && !doors) continue;
     set(X + 8, Y + 8, X + 40, Y + 40, 0);
     if (m & 1) set(X + 40, Y + 8, X + 56, Y + 40, 0);
     if (m & 2) set(X + 16, Y + 40, X + 32, Y + 56, 0);

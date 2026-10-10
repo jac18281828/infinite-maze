@@ -2,7 +2,7 @@
 // seams. Everything derives from H; caches only memoize.
 import { makeHasher, worldKey, u32, toHex, writeInt64BE } from './hash.mjs';
 import { sha3_256 } from './keccak.mjs';
-import { BW, BH, NCELL, COST, buildBoardMaze, cellNeighbor } from './board.mjs';
+import { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } from './board.mjs';
 import { BANDW, BANDH, NBOARD, BDX, BDY, buildBandTree } from './band.mjs';
 
 export const GAP_LIMIT_MS = 150000;
@@ -129,9 +129,10 @@ export function cellPath(links, from, to) {
 
 /**
  * `gapLimitMs` bounds the walking time between consecutive route flames;
- * spec section 3 sets 150 s.
+ * spec section 3 sets 150 s. `carveCells` sets the cells each board keeps;
+ * NCELL keeps them all.
  */
-export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS } = {}) {
+export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = {}) {
   const H = makeHasher(worldKey(code));
   const trees = new Map();
   const boards = new Map();
@@ -163,7 +164,7 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS } = {}) {
     for (const dr of doors) doorMask[dr.cell] |= 1 << dr.dir;
     const a = doors.find((dr) => dr.dir === aDir).cell;
     const b = bDir >= 0 ? doors.find((dr) => dr.dir === bDir).cell : -1;
-    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b);
+    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b, carveCells);
     return {
       ...base, kind: t.routeIndex[i] >= 0 ? 'route' : 'dead', doors, doorMask, aDir, bDir,
       links: maze.links, a: maze.a, b: maze.b, k: maze.k, fallback: maze.fallback,
@@ -180,7 +181,7 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS } = {}) {
   }
 
   function routeFlame(bd, pos) {
-    return { x: bd.x, y: bd.y, cell: u32(H('flame', bd.x, bd.y), 4) % NCELL, kind: 'route', pos };
+    return { x: bd.x, y: bd.y, cell: flameCell(H, bd.x, bd.y), kind: 'route', pos };
   }
 
   /** Flames on every third route board from the entry, then band b+1's entry flame. */

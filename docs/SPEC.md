@@ -95,8 +95,8 @@ reverses.
 
 ## 4. Board maze
 
-A board's cells form a spanning tree over its 12×7 grid. It is built with the
-growing-tree algorithm:
+Each attempt grows a spanning tree over a board's 12×7 grid with the
+growing-tree algorithm, and the chosen tree is then carved down to 50 cells:
 
 - Pick the newest active cell with probability 0.6, otherwise a random
   active cell.
@@ -111,8 +111,8 @@ one up-link and one down-link.
 Before growing its tree, each attempt reserves up to 8 disjoint blocks from
 at most 32 random draws. A reserved block loses its four orthogonal links and
 offers one diagonal, drawn at random. A block whose four cells the remaining
-links no longer join is dropped, so those links connect the grid and the tree
-always spans every cell. Boards average 4–10 galleries.
+links no longer join is dropped, so those links connect the grid and each
+attempt's tree spans every cell. Boards average 4–10 galleries.
 
 The board's primary door pair is its route entry and route exit, or, on a
 dead-end board, its single door and its deepest cell. Each attempt must meet
@@ -139,6 +139,28 @@ board takes the attempt with the lowest deficit, the earliest on a tie. The
 cap bounds generation time, and the band and board seeds stay fixed, so the
 chosen attempt is deterministic too. Over bands −1000 to 1000 of seed
 `0000-0000`, under 1% of boards take that fallback.
+
+The carve runs once on the chosen attempt, passing or fallback, and leaves
+`k` and the fallback flag as they were. It roots the tree at the first
+primary cell `a`. A cut at a cell `c ≠ a` removes `c`, every cell beyond it
+away from `a`, and their links. A cut qualifies when:
+
+- it removes no protected cell: a door cell, `a`, the second primary cell `b`
+  (the deepest cell on a dead-end board) or the flame cell of §2;
+- it removes at most (cells − 50) cells, where cells is the tree's current
+  size; and
+- the deficit afterwards, measured against `b`, is at most the deficit the
+  chosen attempt had.
+
+While the tree holds more than 50 cells, the carve lists the qualifying cuts
+that remove no gallery link, or every qualifying cut when none is free of
+one, in ascending cell order. It removes the cut at index `rng() % count`,
+where `rng` is sfc32 of `H("carve", x, y)`. It stops at 50 cells or when no
+cut qualifies. A cut leaves the path between protected cells whole, so every
+flame lies on a carved cell and walking times between flames are unchanged.
+The cells that remain form a tree, and the rest is rock: the game opens a
+room only for a cell that holds a link or a door. Boards average about 51
+carved cells and 5 galleries.
 
 Generation is lazy. The game holds the current band and its neighbours, and
 builds a board when it first comes within one board of the camera.
@@ -317,7 +339,7 @@ torch sputtering at low burn.
 ## 9. Runtime
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
-`requestAnimationFrame`. Building a board takes 0.7 ms on average and 18 ms
+`requestAnimationFrame`. Building a board takes 0.7 ms on average and 17 ms
 at most, and a band under 0.1 ms, measured on node 26.7.0 and an Apple M3 Max.
 Audio starts on the first key press or touch, as browser autoplay policy
 requires.
@@ -368,9 +390,9 @@ same source the game uses:
 - **Keccak:** SHA3-256 matches the FIPS 202 test vectors.
 - **Continuity:** over bands −1000 to 1000, every door matches in position on
   both sides of its wall.
-- **Tree:** over the same range, the graph of all cells and doors is
-  connected and has edges = nodes − 1 for each band. Exactly one door joins
-  consecutive bands.
+- **Tree:** over the same range, the graph of all carved cells and doors is
+  connected and has edges = nodes − 1 for each band. A carved cell holds a
+  link or a door. Exactly one door joins consecutive bands.
 - **Bounds:** every dead-end branch is at most 2 boards deep, and every board
   meets the targets in §4 or records its best-attempt fallback. A run of at
   least 2,000 boards fails when more than 2% of them fall back; a shorter run
@@ -378,6 +400,9 @@ same source the game uses:
 - **Galleries:** every gallery owns its 2×2 block, no two blocks share a
   cell, and galleries average 4–10 per board. The harness reports the mean
   and the block conflicts.
+- **Carve:** every door cell and flame cell holds a link, every tree board
+  carves at least 50 cells, and the mean stays within 48–56. A cell is carved
+  when it holds a link, doors aside. The harness reports the mean.
 - **Flames:** every band entry holds a flame, and the walking time between
   consecutive route flames stays at or under 150 s. The harness reports the
   maximum and the 99th percentile.

@@ -12,10 +12,15 @@ import {
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
 
 export const SEED = '00000000';
-export const DIGEST_0_99 = 'a4cdd32a1e141af34b729c22d50d8ee4c6d1260717c52863b75ad239c4589b42';
+export const DIGEST_0_99 = 'cc19954c165a0e9430f4738b7d3cbc54f3ba76c0dfe0951bffc9c7890e2c2b6e';
 export const GAP_LIMIT_MS = 150000;
 export const GALLERIES_MIN = 4;
 export const GALLERIES_MAX = 10;
+// Every tree board carves at least CARVE_MIN cells, and the mean per board
+// stays within CARVE_MEAN_MIN..CARVE_MEAN_MAX.
+export const CARVE_MIN = 50;
+export const CARVE_MEAN_MIN = 48;
+export const CARVE_MEAN_MAX = 56;
 // A run of CEILING_MIN_BOARDS or more boards fails above CEILING_PERCENT
 // percent on fallback; shorter runs swing too far to enforce it.
 export const CEILING_PERCENT = 2;
@@ -115,7 +120,12 @@ export function bandShape(world, b) {
   return { boards, adj, route, depth, entry: entries[0], exit: exits[0], errors };
 }
 
-/** Path, junction and branch measures, written apart from the generator. */
+/**
+ * Path, junction and branch measures, written apart from the generator.
+ * `deficit` is the section 4 deficit: the path's shortfall below 22 cells,
+ * the junctions' shortfall below 6 and, for each door-free branch under 3
+ * cells, the cells it lacks.
+ */
 export function measureTargets(links, a, b, doorCells) {
   const dist = new Array(NCELL).fill(-1), parent = new Array(NCELL).fill(-1);
   dist[a] = 0;
@@ -135,7 +145,7 @@ export function measureTargets(links, a, b, doorCells) {
   const path = [];
   for (let c = b; c >= 0; c = parent[c]) path.push(c);
   const on = new Set(path);
-  let junctions = 0, shortBranches = 0;
+  let junctions = 0, shortBranches = 0, shortfall = 0;
   for (const j of path) {
     let branches = 0;
     for (let d = 0; d < 8; d++) {
@@ -155,12 +165,13 @@ export function measureTargets(links, a, b, doorCells) {
           if (!seen.has(u)) { seen.add(u); stack.push([u, k + 1]); }
         }
       }
-      if (!door && deepest < 3) shortBranches++;
+      if (!door && deepest < 3) { shortBranches++; shortfall += 3 - deepest; }
     }
     if (branches) junctions++;
   }
   const ok = path.length >= 22 && junctions >= 6 && shortBranches === 0;
-  return { ok, b, pathLen: path.length, junctions, shortBranches };
+  const deficit = Math.max(0, 22 - path.length) + Math.max(0, 6 - junctions) + shortfall;
+  return { ok, b, pathLen: path.length, junctions, shortBranches, deficit };
 }
 
 export function checkKeccak() {
@@ -204,20 +215,24 @@ export function checkContinuity(world, b0, b1) {
   return { errors, doors };
 }
 
-/** Errors when band b's cells and doors are not one tree (edges = nodes - 1). */
+/**
+ * Errors when band b's carved cells and doors are not one tree (edges =
+ * nodes - 1). A carved cell holds a link or a door; the rest is rock.
+ */
 function bandTreeErrors(world, b) {
   const errors = [];
   const boards = bandBoards(world, b);
   const slot = new Map();
   boards.forEach((bd, i) => { if (bd.links) slot.set(bd.p, i); });
   const up = new Int32Array(boards.length * NCELL).map((_, i) => i);
+  const carved = (bd, c) => bd.links[c] !== 0 || bd.doors.some((dr) => dr.cell === c);
   const find = (i) => { while (up[i] !== i) { up[i] = up[up[i]]; i = up[i]; } return i; };
   const join = (u, v) => { up[find(u)] = find(v); };
   let nodes = 0, edges = 0;
   for (const i of slot.values()) {
     const bd = boards[i];
-    nodes += NCELL;
     for (let c = 0; c < NCELL; c++) {
+      if (carved(bd, c)) nodes++;
       for (let d = 0; d < 8; d++) {
         if (!(bd.links[c] & (1 << d))) continue;
         const t = nbCell(c, d);
@@ -235,7 +250,9 @@ function bandTreeErrors(world, b) {
     }
   }
   const roots = new Set();
-  for (const i of slot.values()) for (let c = 0; c < NCELL; c++) roots.add(find(i * NCELL + c));
+  for (const i of slot.values()) {
+    for (let c = 0; c < NCELL; c++) if (carved(boards[i], c)) roots.add(find(i * NCELL + c));
+  }
   if (roots.size !== 1) errors.push(`band ${b}: ${roots.size} components`);
   if (edges !== nodes - 1) errors.push(`band ${b}: ${edges} edges for ${nodes} nodes`);
   return errors;
@@ -340,6 +357,37 @@ export function checkGalleries(world, b0, b1) {
     errors.push(`galleries per board average ${mean.toFixed(2)}, outside ${GALLERIES_MIN}-${GALLERIES_MAX}`);
   }
   return { errors, boards, galleries, conflicts, mean };
+}
+
+/**
+ * Doors and flames sit on carved cells, every tree board carves at least 50
+ * cells and the mean stays within 48-56. A cell is carved when it holds a
+ * link, doors aside.
+ */
+export function checkCarve(world, b0, b1) {
+  const errors = [];
+  let boards = 0, carved = 0;
+  for (let b = b0; b <= b1; b++) {
+    for (const bd of bandBoards(world, b)) {
+      if (!bd.links) continue;
+      boards++;
+      let n = 0;
+      for (let c = 0; c < NCELL; c++) if (bd.links[c]) n++;
+      carved += n;
+      if (n < CARVE_MIN) errors.push(`board (${bd.x},${bd.y}): ${n} carved cells, under ${CARVE_MIN}`);
+      for (const dr of bd.doors) {
+        if (!bd.links[dr.cell]) errors.push(`board (${bd.x},${bd.y}): door cell ${dr.cell} is pruned`);
+      }
+      for (const c of world.flamesAt(bd.x, bd.y)) {
+        if (!bd.links[c]) errors.push(`board (${bd.x},${bd.y}): flame cell ${c} is pruned`);
+      }
+    }
+  }
+  const mean = boards ? carved / boards : 0;
+  if (mean < CARVE_MEAN_MIN || mean > CARVE_MEAN_MAX) {
+    errors.push(`carved cells per board average ${mean.toFixed(2)}, outside ${CARVE_MEAN_MIN}-${CARVE_MEAN_MAX}`);
+  }
+  return { errors, boards, mean };
 }
 
 /** Walking time in ms from cell A to cell B through the cell graph of `boards`. */
@@ -512,6 +560,8 @@ function runChecks(world, code, b0, b1) {
   rows.push(['bounds', bounds, `${bounds.boards} boards, ${bounds.fallbacks} on best-attempt fallback`]);
   const galleries = checkGalleries(world, b0, b1);
   rows.push(['galleries', galleries, `${galleries.mean.toFixed(2)} per board, ${galleries.conflicts} block conflicts`]);
+  const carve = checkCarve(world, b0, b1);
+  rows.push(['carve', carve, `${carve.mean.toFixed(1)} carved cells per board`]);
   rows.push(['flames', flames, `${gaps.length} gaps, ${gapText}`]);
   const solve = checkSolvability(world, b0, b1);
   rows.push(['solvability', solve, `${solve.cells} cells searched`]);
@@ -519,7 +569,7 @@ function runChecks(world, code, b0, b1) {
   rows.push(['saves', saves, `${saves.saves} positions`]);
   const det = code === SEED ? checkDeterminism() : { errors: [], digest: digestBands(createWorld(code), 0, 99) };
   rows.push(['determinism', det, `bands 0..99 digest ${det.digest.slice(0, 16)}...`]);
-  return { rows, bounds, galleries, gapText };
+  return { rows, bounds, galleries, carve, gapText };
 }
 
 function printRows(rows) {
@@ -541,13 +591,14 @@ async function main(argv) {
   const half = Number(arg('--bands', 1000));
   if (!code || !Number.isInteger(half) || half < 1) { console.error('usage: acceptance.mjs [--code XXXX-XXXX] [--bands N]'); return 2; }
   const b0 = -half, b1 = half;
-  const { rows, bounds, galleries, gapText } = runChecks(createWorld(code), code, b0, b1);
+  const { rows, bounds, galleries, carve, gapText } = runChecks(createWorld(code), code, b0, b1);
   const failed = printRows(rows);
   console.log('');
   console.log(`bands checked:  ${b0}..${b1} (${b1 - b0 + 1}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
   console.log(`fallback boards: ${bounds.fallbacks} of ${bounds.boards} (${(100 * bounds.fallbacks / bounds.boards).toFixed(1)}%)`);
   console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
   console.log(`block conflicts: ${galleries.conflicts}`);
+  console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
   console.log(`flame gap:      ${gapText}`);
   console.log(`run time:       ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   console.log(failed ? `FAILED: ${failed} check(s)` : 'ALL CHECKS PASS');

@@ -252,10 +252,11 @@ return { CROCKFORD, parseCode, formatCode, codeFromBytes, worldKey, makeHasher, 
 
 // src/world/board.mjs
 const __m2 = (() => {
-const { sfc32 } = __m1;
+const { sfc32, u32 } = __m1;
 // Board cell maze: a growing-tree spanning tree over the 12x7 cell grid. Each
 // attempt repairs the tree by edge swaps, and attempts reroll until the
-// primary path meets the spec section 4 targets. Each gallery owns a 2x2
+// primary path meets the spec section 4 targets. The chosen tree is then
+// carved down to CARVE_CELLS cells; the rest is rock. Each gallery owns a 2x2
 // block that holds no other link, and blocks never overlap, so a cell has at
 // most one gallery.
 
@@ -269,6 +270,9 @@ const MAX_SWAPS = 24;
 // Each attempt keeps up to MAX_BLOCKS gallery blocks from BLOCK_DRAWS draws.
 const MAX_BLOCKS = 8;
 const BLOCK_DRAWS = 32;
+// The carve keeps this many cells of a board's tree, or more when no cut
+// qualifies.
+const CARVE_CELLS = 50;
 
 // Directions with y up: E N W S NE NW SW SE. The opposite of d is d ^ 2.
 const DX = [1, 0, -1, 0, 1, -1, -1, 1];
@@ -593,14 +597,133 @@ function repairTree(links, a, b, isDoor) {
   return fresh ? figures(a) : analyze(links, a, b, isDoor);
 }
 
+/** The board's flame cell: bytes 4-7 of H("flame", x, y) mod the cell count. */
+function flameCell(H, x, y) {
+  return u32(H('flame', x, y), 4) % NCELL;
+}
+
+const pre = new Int16Array(NCELL);
+const tin = new Int16Array(NCELL);
+const size = new Int16Array(NCELL);
+const protIn = new Uint8Array(NCELL);
+const galIn = new Uint8Array(NCELL);
+const doorIn = new Uint8Array(NCELL);
+const deepIn = new Int16Array(NCELL);
+const rootOf = new Int16Array(NCELL);
+const gallery = new Uint8Array(NCELL);
+const branches = new Uint8Array(NCELL);
+const poolAll = new Int16Array(NCELL);
+const poolFree = new Int16Array(NCELL);
+const stack = new Int16Array(NCELL);
+
+/**
+ * Prunes the tree at `links`, rooted at a, down to `target` cells by cuts.
+ * A cut at c removes c and every cell beyond it away from a. It qualifies
+ * when it removes no `protect`ed cell, at most cells - target cells, and
+ * leaves a deficit (with primary pair a, b) of at most `limit`. Each step
+ * draws one qualifying cut at random, preferring cuts that remove no gallery
+ * link, and stops at `target` cells or when no cut qualifies. A cut never
+ * touches the a-b path, so a cut changes only the branch it lies in.
+ */
+function carve(links, a, b, isDoor, protect, target, limit, rng) {
+  for (;;) {
+    // Depth-first preorder, so every subtree is a contiguous range of `pre`.
+    dist.fill(-1);
+    let n = 0, top = 0;
+    dist[a] = 0;
+    parent[a] = -1;
+    gallery[a] = 0;
+    stack[top++] = a;
+    while (top) {
+      const c = stack[--top];
+      tin[c] = n;
+      pre[n++] = c;
+      const m = links[c];
+      for (let d = 7; d >= 0; d--) {
+        if (!(m & (1 << d))) continue;
+        const t = NB[8 * c + d];
+        if (dist[t] >= 0) continue;
+        dist[t] = dist[c] + 1;
+        parent[t] = c;
+        gallery[t] = d >= 4 ? 1 : 0;
+        stack[top++] = t;
+      }
+    }
+    const cells = n;
+    if (cells <= target) return;
+    onPath.fill(0);
+    branches.fill(0);
+    for (let i = 0; i < n; i++) {
+      const c = pre[i];
+      size[c] = 1; protIn[c] = protect[c]; galIn[c] = gallery[c];
+      doorIn[c] = isDoor[c]; deepIn[c] = dist[c];
+    }
+    for (let i = n - 1; i > 0; i--) {
+      const c = pre[i], p = parent[c];
+      size[p] += size[c]; protIn[p] += protIn[c]; galIn[p] += galIn[c];
+      doorIn[p] |= doorIn[c];
+      if (deepIn[c] > deepIn[p]) deepIn[p] = deepIn[c];
+    }
+    for (let c = b; c >= 0; c = parent[c]) onPath[c] = 1;
+    const pathLen = dist[b] + 1;
+    // Branch roots hang off the path; rootOf maps a branch cell to its root.
+    let junctions = 0, shortfall = 0;
+    for (let i = 1; i < n; i++) {
+      const c = pre[i], p = parent[c];
+      if (onPath[c]) continue;
+      if (onPath[p]) {
+        rootOf[c] = c;
+        if (!branches[p]++) junctions++;
+        if (!doorIn[c]) shortfall += Math.max(0, TARGET_BRANCH - (deepIn[c] - dist[p]));
+      } else rootOf[c] = rootOf[p];
+    }
+    const base = Math.max(0, TARGET_PATH - pathLen) + shortfall;
+    const room = cells - target;
+    let nAll = 0, nFree = 0;
+    for (let c = 0; c < NCELL; c++) {
+      if (dist[c] <= 0 || protIn[c] || size[c] > room) continue;
+      const t = rootOf[c], j = parent[t];
+      let deficit;
+      if (c === t) {
+        const js = junctions - (branches[j] === 1 ? 1 : 0);
+        deficit = base - (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deepIn[t] - dist[j])))
+          + Math.max(0, TARGET_JUNCTIONS - js);
+      } else {
+        let deep = dist[t];
+        const lo = tin[c], hi = lo + size[c];
+        for (let i = tin[t], end = i + size[t]; i < end; i++) {
+          if (i === lo) { i = hi - 1; continue; }
+          if (dist[pre[i]] > deep) deep = dist[pre[i]];
+        }
+        deficit = base - (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deepIn[t] - dist[j])))
+          + (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deep - dist[j])))
+          + Math.max(0, TARGET_JUNCTIONS - junctions);
+      }
+      if (deficit > limit) continue;
+      poolAll[nAll++] = c;
+      if (!galIn[c]) poolFree[nFree++] = c;
+    }
+    const pool = nFree ? poolFree : poolAll, count = nFree || nAll;
+    if (!count) return;
+    const c = pool[rng() % count];
+    for (let i = tin[c], end = i + size[c]; i < end; i++) {
+      const u = pre[i], m = links[u];
+      for (let d = 0; d < 8; d++) if (m & (1 << d)) links[NB[8 * u + d]] &= ~(1 << (d ^ 2));
+      links[u] = 0;
+    }
+  }
+}
+
 /**
  * Builds the cell maze of board (x, y). `doorCells` lists every door cell;
  * the primary pair is (a, b), with b = -1 on a dead-end board. Attempts run
  * k = 0..MAX_REROLL, each repaired by edge swaps; the first to meet every
  * target wins, else the lowest deficit (earliest k on ties) is kept as the
- * best-attempt fallback.
+ * best-attempt fallback. The winner is then carved to `carveCells` cells,
+ * keeping every door cell, a, b and the flame cell; its figures describe the
+ * carved tree.
  */
-function buildBoardMaze(H, x, y, doorCells, a, b) {
+function buildBoardMaze(H, x, y, doorCells, a, b, carveCells = CARVE_CELLS) {
   const isDoor = new Uint8Array(NCELL);
   for (const c of doorCells) isDoor[c] = 1;
   const links = new Uint8Array(NCELL);
@@ -609,16 +732,27 @@ function buildBoardMaze(H, x, y, doorCells, a, b) {
     growTree(sfc32(H('board', x, y, k)), links);
     const r = repairTree(links, a, b, isDoor);
     if (r.deficit === 0) {
-      return { links, k, fallback: false, ...r };
+      return carved(H, x, y, isDoor, links, { k, fallback: false, ...r }, carveCells);
     }
     if (!best || r.deficit < best.deficit) {
       best = { k, ...r };
       bestLinks = links.slice();
     }
   }
-  return { links: bestLinks, fallback: true, ...best };
+  return carved(H, x, y, isDoor, bestLinks, { fallback: true, ...best }, carveCells);
 }
-return { BW, BH, NCELL, MAX_REROLL, MAX_SWAPS, MAX_BLOCKS, BLOCK_DRAWS, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, repairTree, buildBoardMaze };
+
+/** The record `won` for `links`, carved and re-measured. */
+function carved(H, x, y, isDoor, links, won, carveCells) {
+  if (carveCells >= NCELL) return { links, ...won };
+  const protect = new Uint8Array(isDoor);
+  protect[won.a] = protect[won.b] = 1;
+  protect[flameCell(H, x, y)] = 1;
+  carve(links, won.a, won.b, isDoor, protect, carveCells, won.deficit, sfc32(H('carve', x, y)));
+  const { a, b, pathLen, junctions, shortBranches, deficit } = analyze(links, won.a, won.b, isDoor);
+  return { ...won, links, a, b, pathLen, junctions, shortBranches, deficit };
+}
+return { BW, BH, NCELL, MAX_REROLL, MAX_SWAPS, MAX_BLOCKS, BLOCK_DRAWS, CARVE_CELLS, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, repairTree, flameCell, buildBoardMaze };
 })();
 
 // src/world/band.mjs
@@ -725,7 +859,7 @@ return { BANDW, BANDH, NBOARD, MIN_ROUTE, MAX_DEPTH, BDX, BDY, boardNeighbor, ed
 const __m4 = (() => {
 const { makeHasher, worldKey, u32, toHex, writeInt64BE } = __m1;
 const { sha3_256 } = __m0;
-const { BW, BH, NCELL, COST, buildBoardMaze, cellNeighbor } = __m2;
+const { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } = __m2;
 const { BANDW, BANDH, NBOARD, BDX, BDY, buildBandTree } = __m3;
 // The world: band trees, boards with doors, flames and the cell graph across
 // seams. Everything derives from H; caches only memoize.
@@ -858,9 +992,10 @@ function cellPath(links, from, to) {
 
 /**
  * `gapLimitMs` bounds the walking time between consecutive route flames;
- * spec section 3 sets 150 s.
+ * spec section 3 sets 150 s. `carveCells` sets the cells each board keeps;
+ * NCELL keeps them all.
  */
-function createWorld(code, { gapLimitMs = GAP_LIMIT_MS } = {}) {
+function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = {}) {
   const H = makeHasher(worldKey(code));
   const trees = new Map();
   const boards = new Map();
@@ -892,7 +1027,7 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS } = {}) {
     for (const dr of doors) doorMask[dr.cell] |= 1 << dr.dir;
     const a = doors.find((dr) => dr.dir === aDir).cell;
     const b = bDir >= 0 ? doors.find((dr) => dr.dir === bDir).cell : -1;
-    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b);
+    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b, carveCells);
     return {
       ...base, kind: t.routeIndex[i] >= 0 ? 'route' : 'dead', doors, doorMask, aDir, bDir,
       links: maze.links, a: maze.a, b: maze.b, k: maze.k, fallback: maze.fallback,
@@ -909,7 +1044,7 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS } = {}) {
   }
 
   function routeFlame(bd, pos) {
-    return { x: bd.x, y: bd.y, cell: u32(H('flame', bd.x, bd.y), 4) % NCELL, kind: 'route', pos };
+    return { x: bd.x, y: bd.y, cell: flameCell(H, bd.x, bd.y), kind: 'route', pos };
   }
 
   /** Flames on every third route board from the entry, then band b+1's entry flame. */
@@ -2253,7 +2388,8 @@ const __m8 = (() => {
 const { BW, NCELL } = __m2;
 // Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
 // opening joins exactly the cells of one tree link or door:
-// - room: cell-local [8,40) x [8,40); corridor: the 16 px wall between rooms;
+// - room: cell-local [8,40) x [8,40), only for a cell that holds a link or a
+//   door, so a pruned cell stays rock; corridor: the 16 px wall between rooms;
 // - ladder: a 16 px shaft through the slab above the lower room's centre;
 // - gallery: a 45-degree tunnel from the lower room's centre to the upper
 //   room's centre, 24 px tall over its stair. A gallery's 2x2 block holds no
@@ -2279,6 +2415,7 @@ function boardMask(bd) {
   for (let c = 0; c < NCELL; c++) {
     const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
     const m = bd.links[c], doors = bd.doorMask[c];
+    if (!m && !doors) continue;
     set(X + 8, Y + 8, X + 40, Y + 40, 0);
     if (m & 1) set(X + 40, Y + 8, X + 56, Y + 40, 0);
     if (m & 2) set(X + 16, Y + 40, X + 32, Y + 56, 0);

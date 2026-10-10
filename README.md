@@ -2,8 +2,9 @@
 
 An endless tomb maze, climbed by torchlight. One seed code grows a world of
 bands stacked without end. Every band is a 6x4 grid of boards and every board
-a 12x7 grid of cells. The maze has no loops at any scale, and one route always
-leads up. `docs/SPEC.md` is the full specification.
+a 12x7 grid of cells, of which a board carves about 60% and leaves the rest
+rock. The maze has no loops at any scale, and one route always leads up.
+`docs/SPEC.md` is the full specification.
 
 ## Play
 

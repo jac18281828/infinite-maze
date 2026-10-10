@@ -2,9 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld, acrossDoor, posOf, cellPath } from '../src/world/world.mjs';
-import { DX, DY } from '../src/world/board.mjs';
+import { DX, DY, NCELL } from '../src/world/board.mjs';
 import {
-  checkContinuity, checkTree, checkBounds, checkGalleries, checkFlames, checkSolvability, checkSaves, bandShape,
+  checkContinuity, checkTree, checkBounds, checkGalleries, checkCarve, checkFlames, checkSolvability, checkSaves,
+  bandShape,
 } from '../tools/acceptance.mjs';
 
 const B0 = -2, B1 = 2;
@@ -55,8 +56,10 @@ function treeBoards() {
 }
 
 /**
- * Replaces each gallery of `bd` with one orthogonal link of its block that
- * rejoins the two halves, so the board stays a tree.
+ * Replaces each gallery of `bd` with orthogonal links through a free corner
+ * of its block that rejoin the two halves, so the board stays a tree. A
+ * corner the carved tree holds takes one link to the far end; when both
+ * corners are pruned, one takes two links and becomes carved.
  */
 function withoutGalleries(bd) {
   const flat = copyBoard(bd);
@@ -64,9 +67,15 @@ function withoutGalleries(bd) {
     for (const d of [4, 5]) {
       if (!(flat.links[c] & (1 << d))) continue;
       clearLink(flat, c, d);
-      const side = c + DX[d], top = c + DX[d] + 12;
-      if (reachable(flat.links, c).includes(side)) setLink(flat, side, 1);
-      else setLink(flat, c, d === 4 ? 0 : 2);
+      const top = c + DX[d] + 12, side = d === 4 ? 0 : 2;
+      // Free corners as [cell, direction from c, direction to the top].
+      const corners = [[c + DX[d], side, 1], [c + 12, 1, side]];
+      const held = corners.find(([f]) => flat.links[f]);
+      if (!held) {
+        setLink(flat, c, corners[0][1]);
+        setLink(flat, corners[0][0], corners[0][2]);
+      } else if (reachable(flat.links, c).includes(held[0])) setLink(flat, held[0], held[2]);
+      else setLink(flat, c, held[1]);
       assert.ok(reachable(flat.links, c).includes(top));
     }
   }
@@ -90,6 +99,7 @@ test('every check passes the sound world', () => {
   assert.deepEqual(checkTree(world, B0, B1).errors, []);
   assert.deepEqual(checkBounds(world, B0, B1).errors, []);
   assert.deepEqual(checkGalleries(world, B0, B1).errors, []);
+  assert.deepEqual(checkCarve(world, B0, B1).errors, []);
   assert.deepEqual(checkFlames(world, B0, B1).errors, []);
   assert.deepEqual(checkSolvability(world, B0, B1).errors, []);
 });
@@ -111,7 +121,8 @@ test('tree rejects an extra link that closes a loop', () => {
   const w = broken(world);
   const bd = world.board(world.tree(0).entryX, 0);
   const looped = copyBoard(bd);
-  const c = [...Array(84).keys()].find((i) => i % 12 < 11 && !(looped.links[i] & 1));
+  // Two carved east neighbours that no link joins; the tree already joins them.
+  const c = [...Array(84).keys()].find((i) => i % 12 < 11 && looped.links[i] && looped.links[i + 1] && !(looped.links[i] & 1));
   setLink(looped, c, 0);
   w._set(bd.x, bd.y, looped);
   const errors = checkTree(w, B0, B1).errors;
@@ -201,7 +212,8 @@ test('galleries rejects a corridor inside a gallery block of a valid tree', () =
   // tree. The first board whose tangle still meets the targets serves.
   let found = null;
   for (const bd of treeBoards()) {
-    const c = bd.links.findIndex((m) => m & 16);
+    // The carve may prune the side cell c + 1, which cellPath cannot reach.
+    const c = bd.links.findIndex((m, i) => m & 16 && bd.links[i + 1]);
     if (c < 0) continue;
     const g = new Set([c, c + 13]);
     const tangled = copyBoard(bd);
@@ -302,6 +314,57 @@ test('galleries rejects a world averaging over 10 galleries per board', () => {
   assert.equal(r.conflicts, 0);
   assert.ok(r.errors.some((e) => e.includes('galleries per board average')), r.errors.join('\n'));
   assert.deepEqual(checkTree(w, B0, B1).errors, []);
+});
+
+/** Cells of `bd` that hold exactly one link, none of them a door cell. */
+function leaves(bd) {
+  const doorCells = bd.doors.map((d) => d.cell);
+  return [...Array(NCELL).keys()].filter((c) => bd.links[c] && !(bd.links[c] & (bd.links[c] - 1)) && !doorCells.includes(c));
+}
+
+/** `bd` copied with the single link of leaf c cleared, so c is pruned. */
+function pruned(bd, c) {
+  const out = copyBoard(bd);
+  clearLink(out, c, Math.log2(out.links[c]));
+  return out;
+}
+
+test('carve rejects the uncarved world', () => {
+  const full = createWorld('00000000', { carveCells: NCELL });
+  const r = checkCarve(full, B0, B1);
+  assert.equal(r.mean, NCELL);
+  assert.ok(r.errors.some((e) => e.includes('average 84.00')), r.errors.join('\n'));
+  assert.deepEqual(checkTree(full, B0, B1).errors, []);
+});
+
+test('carve rejects a pruned flame cell', () => {
+  const w = broken(world);
+  const bd = treeBoards().find((b) => leaves(b).some((c) => world.flamesAt(b.x, b.y).includes(c)));
+  const c = leaves(bd).find((u) => world.flamesAt(bd.x, bd.y).includes(u));
+  w._set(bd.x, bd.y, pruned(bd, c));
+  const errors = checkCarve(w, B0, B1).errors;
+  assert.ok(errors.includes(`board (${bd.x},${bd.y}): flame cell ${c} is pruned`), errors.join('\n'));
+  // The board stays a tree, so only the carve check catches it.
+  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+});
+
+test('carve rejects a door cell stripped of its links', () => {
+  const w = broken(world);
+  const bd = treeBoards().find((b) => b.doors.some((d) => b.links[d.cell] && !(b.links[d.cell] & (b.links[d.cell] - 1))));
+  const door = bd.doors.find((d) => bd.links[d.cell] && !(bd.links[d.cell] & (bd.links[d.cell] - 1)));
+  w._set(bd.x, bd.y, pruned(bd, door.cell));
+  const errors = checkCarve(w, B0, B1).errors;
+  assert.ok(errors.includes(`board (${bd.x},${bd.y}): door cell ${door.cell} is pruned`), errors.join('\n'));
+});
+
+test('carve rejects a board carved to 49 cells', () => {
+  const w = broken(world);
+  const bd = treeBoards().find((b) => b.links.filter(Boolean).length === 50 && leaves(b).length);
+  const c = leaves(bd)[0];
+  assert.deepEqual(checkCarve(world, B0, B1).errors, []);
+  w._set(bd.x, bd.y, pruned(bd, c));
+  const errors = checkCarve(w, B0, B1).errors;
+  assert.ok(errors.includes(`board (${bd.x},${bd.y}): 49 carved cells, under 50`), errors.join('\n'));
 });
 
 test('flames rejects a removed flame that opens a gap over 150 s', () => {
