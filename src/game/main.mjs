@@ -7,6 +7,7 @@ import { createSim, step, TICK, BURN_S, KEY, feet, pose } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
+import { createTouch, layout, viewport } from './touch.mjs';
 
 const KEY_SAVE = 'infinite-maze.save';
 const KEY_BEST = 'infinite-maze.best';
@@ -25,10 +26,19 @@ const view = document.createElement('canvas');
 view.width = VIEW_W;
 view.height = VIEW_H;
 
+// Set by `boot`; null before it runs and in the self-test's first phase.
+let touch = null;
+
+/** Sizes and places the display canvas by the layout for the current input mode. */
 function fit() {
-  const k = Math.max(1, Math.floor(Math.min(innerWidth / VIEW_W, innerHeight / VIEW_H)));
-  display.width = VIEW_W * k;
-  display.height = VIEW_H * k;
+  const lay = touch ? touch.relayout() : layout({ ...viewport(), touch: false });
+  display.width = lay.backing.w;
+  display.height = lay.backing.h;
+  const s = display.style;
+  s.left = `${lay.view.x}px`;
+  s.top = `${lay.view.y}px`;
+  s.width = `${lay.view.w}px`;
+  s.height = `${lay.view.h}px`;
 }
 
 function present() {
@@ -84,11 +94,131 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
+    touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
   } catch (e) {
     finish(`fail: ${e && e.message ? e.message : e}`);
   }
+}
+
+/**
+ * Boots the game and drives the real controls with dispatched touch pointer
+ * events and clicks. One synchronous task: an animation frame landing
+ * mid-leg would tick play and clear the press edges the leg reads. Throws
+ * `touch <what>` on the first miss.
+ */
+function touchLeg() {
+  const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
+  const g = boot();
+  need(touch && !touch.on, 'starts in keyboard mode');
+  need(touch.soft('title', 'begin').getBoundingClientRect().width === 0, 'controls hidden in keyboard mode');
+  // A dispatched click fires on a hidden button, so a control must have a box first.
+  const live = (el, what) => {
+    const r = el.getBoundingClientRect();
+    need(r.width > 0 && r.height > 0, `${what} is shown`);
+    return r;
+  };
+  const click = (sid, id) => { const el = touch.soft(sid, id); live(el, `${sid}/${id}`); el.click(); };
+  const pointer = (type, el, x, y) => el.dispatchEvent(new PointerEvent(type, {
+    pointerId: 7, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true,
+  }));
+  const press = (code, key) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }));
+  const toggles = (sid) => {
+    const was = g.audio.muted;
+    click(sid, 'sound');
+    need(g.audio.muted !== was, `${sid} SOUND toggles mute`);
+    click(sid, 'sound');
+    need(g.audio.muted === was, `${sid} SOUND toggles back`);
+  };
+
+  // Mode switch and canvas size.
+  pointer('pointerdown', display, 10, 10);
+  need(touch.on, 'a touch pointerdown turns touch mode on');
+  live(touch.soft('title', 'begin'), 'title/begin');
+  const lay = layout({ ...viewport(), touch: true });
+  need(display.width === lay.backing.w && display.height === lay.backing.h, 'canvas backing size follows the layout');
+  // The style reads back in layout units of 1/64 CSS px.
+  need(Math.abs(parseFloat(display.style.width) - lay.view.w) < 0.05
+    && Math.abs(parseFloat(display.style.height) - lay.view.h) < 0.05, 'canvas CSS size follows the layout');
+
+  // Title.
+  const rolled = g.code;
+  click('title', 'roll');
+  need(g.code !== rolled, 'NEW ROLL changes the code');
+  toggles('title');
+  const realPrompt = window.prompt;
+  try {
+    window.prompt = () => 'K7Q2-M9XA';
+    click('title', 'type');
+    need(g.code === 'K7Q2M9XA' && g.typing === null, 'TYPE CODE takes the answer');
+    window.prompt = () => null;
+    click('title', 'type');
+    need(g.code === 'K7Q2M9XA' && g.typing === null, 'TYPE CODE cancel keeps the code and closes typing');
+  } finally {
+    window.prompt = realPrompt;
+  }
+
+  // Typing.
+  press('KeyT', 't');
+  draw(g, 0);
+  need(g.typing !== null, 'KeyT opens typing');
+  click('typing', 'cancel');
+  need(g.typing === null, 'CANCEL closes typing');
+  press('KeyT', 't');
+  for (const ch of '7ZZ0-1111') press(/[0-9]/.test(ch) ? `Digit${ch}` : ch === '-' ? 'Minus' : `Key${ch}`, ch);
+  draw(g, 0);
+  click('typing', 'accept');
+  need(g.code === '7ZZ01111' && g.typing === null, 'ACCEPT takes the typed code');
+
+  // Play.
+  click('title', 'begin');
+  need(g.screen === 'play', 'BEGIN reaches play');
+  const pad = touch.padEl;
+  const r = live(pad, 'pad');
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2, d = r.width / 3;
+  pointer('pointerdown', pad, cx + d, cy);
+  need(g.keys.has('r') && (g.press & KEY.R) !== 0, 'the right arm holds Right');
+  pointer('pointermove', pad, cx, cy - d);
+  need(!g.keys.has('r') && (g.release & KEY.R) !== 0 && g.keys.has('u') && (g.press & KEY.U) !== 0, 'sliding to the up arm swaps Right for Up');
+  pointer('pointerup', pad, cx, cy - d);
+  need(!g.keys.has('u') && (g.release & KEY.U) !== 0, 'lifting releases Up');
+  pointer('pointerdown', pad, cx, cy);
+  need(g.jump, 'the centre jumps');
+  pointer('pointerup', pad, cx, cy);
+  g.press = 0;
+  g.release = 0;
+  g.jump = false;
+
+  // Pause.
+  click('play', 'pause');
+  need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
+  toggles('pause');
+  click('pause', 'resume');
+  need(g.screen === 'play', 'RESUME returns to play');
+  click('play', 'pause');
+  click('pause', 'title');
+  need(g.screen === 'title', 'TITLE reaches the title');
+
+  // Continue.
+  click('title', 'continue');
+  need(g.screen === 'play', 'CONTINUE reaches play');
+
+  // End screen.
+  endRun(g);
+  draw(g, 0);
+  click('over', 'continue');
+  need(g.screen === 'play', 'the end screen CONTINUE reaches play');
+  endRun(g);
+  draw(g, 0);
+  click('over', 'title');
+  need(g.screen === 'title', 'the end screen TITLE reaches the title');
+
+  // Leave a run on screen for the screenshot.
+  click('title', 'begin');
+  need(g.screen === 'play', 'BEGIN reaches play again');
+  g.keys.clear();
+  draw(g, 0);
 }
 
 const DIRS = {
@@ -289,7 +419,7 @@ function drawTitle(g, t) {
     r.text(best === null ? 'NO BAND REACHED YET' : `BEST BAND  ${best}`, VIEW_W / 2, saved ? 132 : 120, 'p', { align: 'center' });
   }
   if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
-  r.text('ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+  r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
 function drawPause(g) {
@@ -323,6 +453,7 @@ function draw(g, t) {
     else if (g.screen === 'over') drawOver(g);
   }
   present();
+  if (touch) touch.refresh();
 }
 
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
@@ -341,6 +472,13 @@ function runLoop(g) {
 
 function boot() {
   const g = createGame();
+  touch = createTouch({
+    state: () => ({
+      screen: g.screen, typing: g.typing !== null, muted: g.audio.muted,
+      save: g.screen === 'title' && Boolean(decodeSave(load(KEY_SAVE) || '')),
+    }),
+    onMode: fit,
+  });
   window.addEventListener('keydown', (e) => onKeyDown(g, e));
   window.addEventListener('keyup', (e) => {
     const k = DIRS[e.code];
@@ -349,10 +487,14 @@ function boot() {
     if (g.screen === 'play') g.release |= DIR_BITS[k];
   });
   window.addEventListener('blur', () => g.keys.clear());
+  // A tap grants activation on pointerup and click; pointerdown grants none.
+  window.addEventListener('pointerup', () => g.audio.start());
   window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
   fit();
   useCode(g, g.code);
   runLoop(g);
+  return g;
 }
 
 if (location.hash === '#selftest') selftest();

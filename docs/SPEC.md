@@ -218,8 +218,16 @@ entry reached, and Continue resumes there with a full torch.
 ## 8. Presentation
 
 **Graphics.**
-- Canvas 2D at a 320×180 internal resolution, scaled up by the largest whole
-  multiple, with `imageSmoothingEnabled = false`.
+- Canvas 2D at a 320×180 internal resolution, with `imageSmoothingEnabled =
+  false`. In keyboard mode the view scales up by the largest whole multiple of
+  CSS pixels, centred.
+- In touch mode (§9) the view fills the safe area at a fractional scale; the
+  page background fills the letterbox. The canvas's backing store is in device
+  pixels, so a game pixel spans ⌊s⌋ or ⌈s⌉ of them and the nearest-neighbour
+  draw is the only resample. When the safe area's height less a full-width
+  16:9 view leaves room for the d-pad and its margins, the view spans the
+  width at the top and the controls fill the band below. Otherwise the view
+  fits the safe area and the controls overlay it.
 - 16×16 tiles. A cell is 3×3 tiles, so a board is 576×336 px.
 - A palette of 32 colours: sandstone, ochre, lapis, turquoise, gold, torch
   orange and violet shadow.
@@ -261,13 +269,39 @@ torch sputtering at low burn.
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
 `requestAnimationFrame`. Building a board takes under 1 ms, and a band under
-0.1 ms. Audio starts on the first key press, as browser autoplay policy
-requires.
+0.1 ms. Audio starts on the first key press or touch, as browser autoplay
+policy requires.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
 mute and Esc to pause and show the save code. The title and end screens
 ignore auto-repeated Space presses, so a held jump cannot skip the end screen
 and its save code.
+
+**Touch.** Touch mode is on at boot when the device reports a touch point or a
+coarse pointer, or when the URL hash is `#touch`. A touch `pointerdown` turns
+it on and a trusted keydown turns it off, so the page follows the last input
+type. Every control dispatches the keyboard's own `keydown` and `keyup` events
+on `window`, so the key handlers serve touch unchanged. The page never
+scrolls, zooms or selects.
+- **D-pad.** In play, a 4-way pad sits at the bottom left in overlay mode and
+  centred in the band otherwise. Its centre jumps on `pointerdown`. An arm
+  holds its arrow key while a pointer is on it, a slide from arm to arm swaps
+  the key, and a pointer that left the pad keeps mapping by angle until it
+  lifts. The pad has no diagonals.
+- **Soft keys.** Each acts on `click`:
+
+  | Screen | Keys |
+  |---|---|
+  | title | BEGIN (Enter), NEW ROLL (R), TYPE CODE, CONTINUE (C, with a save), SOUND (M) |
+  | title, typing | ACCEPT (Enter), CANCEL (Esc) |
+  | play | PAUSE (Esc) |
+  | pause | RESUME (Esc), SOUND (M), TITLE (Q) |
+  | over | CONTINUE (Enter), TITLE (Q) |
+
+  TYPE CODE sends T, opens the browser's `prompt`, then sends each character
+  of the answer as a key press and finally Enter, or Esc on cancel. The
+  prompt takes a pasted save code.
+- **Audio.** Any `pointerup` starts audio.
 
 ## 10. Acceptance
 

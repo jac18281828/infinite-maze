@@ -35,7 +35,8 @@ and does not search it.
 - `src/world/`: the generator. Pure: no DOM, integer arithmetic only, so node
   and the browser build the same worlds.
 - `src/game/`: simulation (`sim.mjs`, DOM-free), rendering, audio, the
-  self-test autopilot and the entry module `main.mjs`.
+  touch layer (`touch.mjs`: layout, d-pad and soft keys, emitting keyboard
+  events), the self-test autopilot and the entry module `main.mjs`.
 - `tools/build.mjs`: the bundler. It accepts `import { a, b as c } from
   './x.mjs';` and `export` before `function`, `class`, `const` or `let`, and
   rejects any other module syntax.

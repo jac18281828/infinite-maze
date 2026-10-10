@@ -1,4 +1,4 @@
-// WebAudio music and sound, synthesized; starts on the first key press.
+// WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
 // drum at 110 BPM. As the torch dims, layers enter and the tempo rises to
 // 128 BPM; a relight drops both back. A low-pass, a light bit-crush and tape
