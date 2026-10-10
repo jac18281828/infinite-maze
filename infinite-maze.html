@@ -1,0 +1,3043 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infinite Maze</title>
+<style>
+html, body { margin: 0; height: 100%; background: #0d0a14; overflow: hidden; }
+body { display: flex; align-items: center; justify-content: center; }
+canvas { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="320" height="180"></canvas>
+<script>
+(() => {
+'use strict';
+// src/world/keccak.mjs
+const __m0 = (() => {
+
+// SHA3-256 (FIPS 202) over Keccak-f[1600]. Lanes are held as 32-bit halves:
+// lane i occupies s[2i] (low word) and s[2i + 1] (high word).
+
+const RC = [
+  0x00000001, 0x00000000, 0x00008082, 0x00000000, 0x0000808a, 0x80000000,
+  0x80008000, 0x80000000, 0x0000808b, 0x00000000, 0x80000001, 0x00000000,
+  0x80008081, 0x80000000, 0x00008009, 0x80000000, 0x0000008a, 0x00000000,
+  0x00000088, 0x00000000, 0x80008009, 0x00000000, 0x8000000a, 0x00000000,
+  0x8000808b, 0x00000000, 0x0000008b, 0x80000000, 0x00008089, 0x80000000,
+  0x00008003, 0x80000000, 0x00008002, 0x80000000, 0x00000080, 0x80000000,
+  0x0000800a, 0x00000000, 0x8000000a, 0x80000000, 0x80008081, 0x80000000,
+  0x00008080, 0x80000000, 0x80000001, 0x00000000, 0x80008008, 0x80000000,
+];
+
+// Rotation offset for lane x + 5y.
+const RHO = [
+  0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39,
+  41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
+];
+
+// Destination lane of lane x + 5y under pi: (y, 2x + 3y).
+const PI = new Int32Array(25);
+for (let x = 0; x < 5; x++) {
+  for (let y = 0; y < 5; y++) PI[x + 5 * y] = y + 5 * ((2 * x + 3 * y) % 5);
+}
+
+const B = new Int32Array(50);
+const C = new Int32Array(10);
+
+function keccakF(s) {
+  for (let round = 0; round < 24; round++) {
+    // theta
+    for (let x = 0; x < 5; x++) {
+      const i = 2 * x;
+      C[i] = s[i] ^ s[i + 10] ^ s[i + 20] ^ s[i + 30] ^ s[i + 40];
+      C[i + 1] = s[i + 1] ^ s[i + 11] ^ s[i + 21] ^ s[i + 31] ^ s[i + 41];
+    }
+    for (let x = 0; x < 5; x++) {
+      const p = 2 * ((x + 4) % 5);
+      const n = 2 * ((x + 1) % 5);
+      const lo = C[n], hi = C[n + 1];
+      const dl = C[p] ^ ((lo << 1) | (hi >>> 31));
+      const dh = C[p + 1] ^ ((hi << 1) | (lo >>> 31));
+      for (let y = 0; y < 50; y += 10) {
+        s[2 * x + y] ^= dl;
+        s[2 * x + y + 1] ^= dh;
+      }
+    }
+    // rho and pi
+    for (let i = 0; i < 25; i++) {
+      const lo = s[2 * i], hi = s[2 * i + 1];
+      const r = RHO[i];
+      const d = 2 * PI[i];
+      if (r === 0) {
+        B[d] = lo; B[d + 1] = hi;
+      } else if (r < 32) {
+        B[d] = (lo << r) | (hi >>> (32 - r));
+        B[d + 1] = (hi << r) | (lo >>> (32 - r));
+      } else if (r === 32) {
+        B[d] = hi; B[d + 1] = lo;
+      } else {
+        const m = r - 32;
+        B[d] = (hi << m) | (lo >>> (32 - m));
+        B[d + 1] = (lo << m) | (hi >>> (32 - m));
+      }
+    }
+    // chi
+    for (let y = 0; y < 50; y += 10) {
+      for (let x = 0; x < 5; x++) {
+        const a = y + 2 * x;
+        const b = y + 2 * ((x + 1) % 5);
+        const c = y + 2 * ((x + 2) % 5);
+        s[a] = B[a] ^ (~B[b] & B[c]);
+        s[a + 1] = B[a + 1] ^ (~B[b + 1] & B[c + 1]);
+      }
+    }
+    // iota
+    s[0] ^= RC[2 * round];
+    s[1] ^= RC[2 * round + 1];
+  }
+}
+
+const RATE = 136;
+
+/** SHA3-256 of `bytes`. */
+function sha3_256(bytes) {
+  const s = new Int32Array(50);
+  const len = bytes.length;
+  let off = 0;
+  // Absorb full blocks; the final padded block is always absorbed below.
+  while (len - off >= RATE) {
+    for (let j = 0; j < RATE; j++) {
+      s[j >> 2] ^= bytes[off + j] << ((j & 3) << 3);
+    }
+    keccakF(s);
+    off += RATE;
+  }
+  const rest = len - off;
+  for (let j = 0; j < rest; j++) {
+    s[j >> 2] ^= bytes[off + j] << ((j & 3) << 3);
+  }
+  s[rest >> 2] ^= 0x06 << ((rest & 3) << 3);
+  s[(RATE - 1) >> 2] ^= 0x80 << (((RATE - 1) & 3) << 3);
+  keccakF(s);
+  const out = new Uint8Array(32);
+  for (let j = 0; j < 32; j++) out[j] = (s[j >> 2] >>> ((j & 3) << 3)) & 0xff;
+  return out;
+}
+return { sha3_256 };
+})();
+
+// src/world/hash.mjs
+const __m1 = (() => {
+const { sha3_256 } = __m0;
+// Seed codes, the world key, the tagged hash H and sfc32.
+
+
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/**
+ * Canonical 8-character seed code from user text, or null. Accepts
+ * lower case, an optional hyphen and Crockford's aliases (I, L -> 1; O -> 0).
+ */
+function parseCode(text) {
+  const t = String(text).toUpperCase().replace(/[\s-]/g, '')
+    .replace(/[IL]/g, '1').replace(/O/g, '0');
+  if (t.length !== 8) return null;
+  for (const ch of t) if (!CROCKFORD.includes(ch)) return null;
+  return t;
+}
+
+/** `K7Q2M9XA` -> `K7Q2-M9XA`. */
+function formatCode(code) {
+  return code.slice(0, 4) + '-' + code.slice(4);
+}
+
+/** Eight Crockford characters from five random bytes (40 bits). */
+function codeFromBytes(bytes) {
+  let v = 0n;
+  for (let i = 0; i < 5; i++) v = (v << 8n) | BigInt(bytes[i]);
+  let out = '';
+  for (let i = 7; i >= 0; i--) out += CROCKFORD[Number((v >> BigInt(5 * i)) & 31n)];
+  return out;
+}
+
+function ascii(s) {
+  const b = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+  return b;
+}
+
+/** WORLD = SHA3-256("infinite-maze/v1" ‖ code), code as 8 ASCII characters. */
+function worldKey(code) {
+  return sha3_256(ascii('infinite-maze/v1' + code));
+}
+
+/**
+ * Returns H(tag, n1, n2, ...) = SHA3-256(WORLD ‖ tag ‖ int64be(n1) ‖ ...).
+ * Integers must be safe integers; negatives encode as two's complement.
+ */
+function makeHasher(world) {
+  const buf = new Uint8Array(32 + 16 + 8 * 4);
+  buf.set(world, 0);
+  return function H(tag, ...ns) {
+    let o = 32;
+    for (let i = 0; i < tag.length; i++) buf[o++] = tag.charCodeAt(i);
+    for (const n of ns) {
+      writeInt64BE(buf, o, n);
+      o += 8;
+    }
+    return sha3_256(buf.subarray(0, o));
+  };
+}
+
+/** Writes safe integer n at b[o..o+7] as big-endian two's complement. */
+function writeInt64BE(b, o, n) {
+  const hi = Math.floor(n / 4294967296);
+  writeU32(b, o, hi >>> 0);
+  writeU32(b, o + 4, (n - hi * 4294967296) >>> 0);
+}
+
+function writeU32(b, o, v) {
+  b[o] = v >>> 24; b[o + 1] = (v >>> 16) & 255; b[o + 2] = (v >>> 8) & 255; b[o + 3] = v & 255;
+}
+
+/** Big-endian u32 at byte offset `o` of a digest. */
+function u32(d, o = 0) {
+  return ((d[o] << 24) | (d[o + 1] << 16) | (d[o + 2] << 8) | d[o + 3]) >>> 0;
+}
+
+/** sfc32 seeded with the first 16 bytes of a digest; yields u32 values. */
+function sfc32(d) {
+  let a = u32(d, 0) | 0, b = u32(d, 4) | 0, c = u32(d, 8) | 0, n = u32(d, 12) | 0;
+  return function next() {
+    const t = (((a + b) | 0) + n) | 0;
+    n = (n + 1) | 0;
+    a = b ^ (b >>> 9);
+    b = (c + (c << 3)) | 0;
+    c = (c << 21) | (c >>> 11);
+    c = (c + t) | 0;
+    return t >>> 0;
+  };
+}
+
+function toHex(bytes) {
+  let s = '';
+  for (const b of bytes) s += b.toString(16).padStart(2, '0');
+  return s;
+}
+return { CROCKFORD, parseCode, formatCode, codeFromBytes, worldKey, makeHasher, writeInt64BE, u32, sfc32, toHex };
+})();
+
+// src/world/board.mjs
+const __m2 = (() => {
+const { sfc32 } = __m1;
+// Board cell maze: a growing-tree spanning tree over the 12x7 cell grid,
+// rerolled until the primary path meets the spec section 4 targets.
+
+
+const BW = 12;
+const BH = 7;
+const NCELL = BW * BH;
+const MAX_REROLL = 64;
+
+// Directions with y up: E N W S NE NW SW SE. The opposite of d is d ^ 2.
+const DX = [1, 0, -1, 0, 1, -1, -1, 1];
+const DY = [0, 1, 0, -1, 1, 1, -1, -1];
+const WEIGHT = [4, 1, 4, 1, 1, 1, 1, 1];
+
+// Walking time per link in ms at spec speeds over 48 px cells:
+// run 48/96 s, ladder 48/48 s, gallery 48*sqrt(2)/72 s rounded to 943 ms.
+const COST = [500, 1000, 500, 1000, 943, 943, 943, 943];
+
+const TARGET_PATH = 22;
+const TARGET_JUNCTIONS = 6;
+const TARGET_BRANCH = 3;
+
+// NB[8c + d] is the cell beside c in direction d, or -1 off the grid.
+const NB = new Int16Array(NCELL * 8);
+// XC[8c + d] for a diagonal d: the crossing link as (cell << 3) | dir.
+const XC = new Int16Array(NCELL * 8);
+for (let c = 0; c < NCELL; c++) {
+  const x = c % BW, y = (c / BW) | 0;
+  for (let d = 0; d < 8; d++) {
+    const nx = x + DX[d], ny = y + DY[d];
+    NB[8 * c + d] = nx < 0 || nx >= BW || ny < 0 || ny >= BH ? -1 : ny * BW + nx;
+  }
+  XC[8 * c + 4] = ((c + 1) << 3) | 5;        // NE crosses (x+1,y) NW
+  XC[8 * c + 5] = ((c - 1) << 3) | 4;        // NW crosses (x-1,y) NE
+  XC[8 * c + 6] = ((c - BW) << 3) | 5;       // SW crosses (x,y-1) NW
+  XC[8 * c + 7] = ((c - BW) << 3) | 4;       // SE crosses (x,y-1) NE
+}
+
+function cellNeighbor(c, d) {
+  return NB[8 * c + d];
+}
+
+const seen = new Uint8Array(NCELL);
+const active = new Int16Array(NCELL);
+const cand = new Int32Array(8);
+
+/** Carves a spanning tree into `links` (bit d set = link in direction d). */
+function growTree(rng, links) {
+  links.fill(0);
+  seen.fill(0);
+  let len = 0;
+  const start = rng() % NCELL;
+  seen[start] = 1;
+  active[len++] = start;
+  while (len) {
+    const i = rng() % 5 < 3 ? len - 1 : rng() % len;
+    const c = active[i];
+    let n = 0, total = 0;
+    for (let d = 0; d < 8; d++) {
+      const t = NB[8 * c + d];
+      if (t < 0 || seen[t]) continue;
+      if (d >= 4) {
+        const x = XC[8 * c + d];
+        if (links[x >> 3] & (1 << (x & 7))) continue;
+      }
+      cand[n++] = d;
+      total += WEIGHT[d];
+    }
+    if (n === 0) {
+      // Removal keeps age order, so the last entry stays the newest cell.
+      active.copyWithin(i, i + 1, len);
+      len--;
+      continue;
+    }
+    let r = rng() % total;
+    let d = cand[0];
+    for (let j = 0; j < n; j++) {
+      r -= WEIGHT[cand[j]];
+      if (r < 0) { d = cand[j]; break; }
+    }
+    const t = NB[8 * c + d];
+    links[c] |= 1 << d;
+    links[t] |= 1 << (d ^ 2);
+    seen[t] = 1;
+    active[len++] = t;
+  }
+  return links;
+}
+
+const dist = new Int16Array(NCELL);
+const parent = new Int16Array(NCELL);
+const order = new Int16Array(NCELL);
+const onPath = new Uint8Array(NCELL);
+const subMax = new Int16Array(NCELL);
+const subDoor = new Uint8Array(NCELL);
+
+/**
+ * Measures a tree against the targets. `a` is the first primary cell; `b` is
+ * the second, or -1 for the deepest cell from `a` (ties to the lowest index).
+ * Branches holding a cell flagged in `isDoor` are exempt from the length rule.
+ */
+function analyze(links, a, b, isDoor) {
+  dist.fill(-1);
+  parent.fill(-1);
+  onPath.fill(0);
+  let head = 0, tail = 0;
+  dist[a] = 0;
+  order[tail++] = a;
+  while (head < tail) {
+    const c = order[head++];
+    const m = links[c];
+    for (let d = 0; d < 8; d++) {
+      if (!(m & (1 << d))) continue;
+      const t = NB[8 * c + d];
+      if (dist[t] >= 0) continue;
+      dist[t] = dist[c] + 1;
+      parent[t] = c;
+      order[tail++] = t;
+    }
+  }
+  if (b < 0) {
+    b = a;
+    for (let c = 0; c < NCELL; c++) if (dist[c] > dist[b]) b = c;
+  }
+  let pathLen = 0;
+  for (let c = b; c >= 0; c = parent[c]) { onPath[c] = 1; pathLen++; }
+  for (let c = 0; c < NCELL; c++) { subMax[c] = dist[c]; subDoor[c] = isDoor[c]; }
+  for (let i = tail - 1; i > 0; i--) {
+    const c = order[i], p = parent[c];
+    if (subMax[c] > subMax[p]) subMax[p] = subMax[c];
+    subDoor[p] |= subDoor[c];
+  }
+  let junctions = 0, shortfall = 0, shortBranches = 0;
+  for (let j = b; j >= 0; j = parent[j]) {
+    let branches = 0;
+    const m = links[j];
+    for (let d = 0; d < 8; d++) {
+      if (!(m & (1 << d))) continue;
+      const t = NB[8 * j + d];
+      if (onPath[t]) continue;
+      branches++;
+      const depth = subMax[t] - dist[j];
+      if (!subDoor[t] && depth < TARGET_BRANCH) {
+        shortBranches++;
+        shortfall += TARGET_BRANCH - depth;
+      }
+    }
+    if (branches) junctions++;
+  }
+  const deficit = Math.max(0, TARGET_PATH - pathLen)
+    + Math.max(0, TARGET_JUNCTIONS - junctions) + shortfall;
+  return { a, b, pathLen, junctions, shortBranches, deficit };
+}
+
+/**
+ * Builds the cell maze of board (x, y). `doorCells` lists every door cell;
+ * the primary pair is (a, b), with b = -1 on a dead-end board. Attempts run
+ * k = 0..64; the first to meet every target wins, else the lowest deficit
+ * (earliest k on ties) is kept as the best-attempt fallback.
+ */
+function buildBoardMaze(H, x, y, doorCells, a, b) {
+  const isDoor = new Uint8Array(NCELL);
+  for (const c of doorCells) isDoor[c] = 1;
+  const links = new Uint8Array(NCELL);
+  let best = null, bestLinks = null;
+  for (let k = 0; k <= MAX_REROLL; k++) {
+    growTree(sfc32(H('board', x, y, k)), links);
+    const r = analyze(links, a, b, isDoor);
+    if (r.deficit === 0) {
+      return { links, k, fallback: false, ...r };
+    }
+    if (!best || r.deficit < best.deficit) {
+      best = { k, ...r };
+      bestLinks = links.slice();
+    }
+  }
+  return { links: bestLinks, fallback: true, ...best };
+}
+return { BW, BH, NCELL, MAX_REROLL, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, buildBoardMaze };
+})();
+
+// src/world/band.mjs
+const __m3 = (() => {
+const { sfc32, u32 } = __m1;
+// Band maze (spec section 3): a randomized DFS route through the 6x4 boards,
+// then dead-end branches at most two boards deep. Board index i = 6 * row + x.
+
+
+const BANDW = 6;
+const BANDH = 4;
+const NBOARD = BANDW * BANDH;
+const MIN_ROUTE = 12;
+const MAX_DEPTH = 2;
+
+// Board directions match cell directions 0..3: E N W S.
+const BDX = [1, 0, -1, 0];
+const BDY = [0, 1, 0, -1];
+
+function boardNeighbor(i, d) {
+  const x = (i % BANDW) + BDX[d], y = ((i / BANDW) | 0) + BDY[d];
+  if (x < 0 || x >= BANDW || y < 0 || y >= BANDH) return -1;
+  return y * BANDW + x;
+}
+
+/** Column e_b of the door between bands b-1 and b. */
+function edgeColumn(H, b) {
+  return u32(H('edge', b)) % BANDW;
+}
+
+function dfsRoute(rng, entry, exit) {
+  const seen = new Uint8Array(NBOARD);
+  const stack = [entry];
+  seen[entry] = 1;
+  const open = [];
+  while (stack[stack.length - 1] !== exit) {
+    const top = stack[stack.length - 1];
+    open.length = 0;
+    for (let d = 0; d < 4; d++) {
+      const n = boardNeighbor(top, d);
+      if (n >= 0 && !seen[n]) open.push(n);
+    }
+    if (open.length === 0) { stack.pop(); continue; }
+    const n = open[rng() % open.length];
+    seen[n] = 1;
+    stack.push(n);
+  }
+  return stack;
+}
+
+/**
+ * Attaches dead ends: repeatedly picks, uniformly, a tree board at depth
+ * below MAX_DEPTH with an unused neighbour and attaches one such neighbour.
+ */
+function attachDeadEnds(rng, depth, parent) {
+  const cands = [], free = [];
+  for (;;) {
+    cands.length = 0;
+    for (let i = 0; i < NBOARD; i++) {
+      if (depth[i] < 0 || depth[i] >= MAX_DEPTH) continue;
+      for (let d = 0; d < 4; d++) {
+        const n = boardNeighbor(i, d);
+        if (n >= 0 && depth[n] < 0) { cands.push(i); break; }
+      }
+    }
+    if (cands.length === 0) return;
+    const i = cands[rng() % cands.length];
+    free.length = 0;
+    for (let d = 0; d < 4; d++) {
+      const n = boardNeighbor(i, d);
+      if (n >= 0 && depth[n] < 0) free.push(n);
+    }
+    const n = free[rng() % free.length];
+    depth[n] = depth[i] + 1;
+    parent[n] = i;
+  }
+}
+
+/**
+ * The band tree of band b. `routeIndex[i]` is the route position or -1;
+ * `depth[i]` is 0 on the route, 1..2 on a dead end, -1 for rock;
+ * `parent[i]` is the board a dead end hangs from, else -1.
+ */
+function buildBandTree(H, b) {
+  const entryX = edgeColumn(H, b);
+  const exitX = edgeColumn(H, b + 1);
+  const entry = entryX, exit = (BANDH - 1) * BANDW + exitX;
+  for (let k = 0; ; k++) {
+    const rng = sfc32(H('band', b, k));
+    const route = dfsRoute(rng, entry, exit);
+    if (route.length < MIN_ROUTE) continue;
+    const routeIndex = new Int8Array(NBOARD).fill(-1);
+    const depth = new Int8Array(NBOARD).fill(-1);
+    const parent = new Int8Array(NBOARD).fill(-1);
+    route.forEach((i, r) => { routeIndex[i] = r; depth[i] = 0; });
+    attachDeadEnds(rng, depth, parent);
+    return { b, k, entryX, exitX, route, routeIndex, depth, parent };
+  }
+}
+return { BANDW, BANDH, NBOARD, MIN_ROUTE, MAX_DEPTH, BDX, BDY, boardNeighbor, edgeColumn, buildBandTree };
+})();
+
+// src/world/world.mjs
+const __m4 = (() => {
+const { makeHasher, worldKey, u32, toHex, writeInt64BE } = __m1;
+const { sha3_256 } = __m0;
+const { BW, BH, NCELL, COST, buildBoardMaze, cellNeighbor } = __m2;
+const { BANDW, BANDH, NBOARD, BDX, BDY, buildBandTree } = __m3;
+// The world: band trees, boards with doors, flames and the cell graph across
+// seams. Everything derives from H; caches only memoize.
+
+
+
+
+
+const GAP_LIMIT_MS = 150000;
+
+function bandOf(y) {
+  return Math.floor(y / BANDH);
+}
+
+function posOf(x, y) {
+  return BANDW * y + x;
+}
+
+function boardOfPos(p) {
+  const y = Math.floor(p / BANDW);
+  return { x: p - BANDW * y, y };
+}
+
+/** Board (x, y) at index i = 6 * row + x within band b. */
+function boardCoords(b, i) {
+  return { x: i % BANDW, y: BANDH * b + ((i / BANDW) | 0) };
+}
+
+/** Index of board (x, y) within its band. */
+function boardIndex(x, y) {
+  return (y - BANDH * bandOf(y)) * BANDW + x;
+}
+
+/** Door cell on wall d (E N W S) of board (x, y); both sides read one key. */
+function doorCell(H, x, y, d) {
+  switch (d) {
+    case 0: return (u32(H('hdoor', x, y)) % 5 + 1) * BW + (BW - 1);
+    case 2: return (u32(H('hdoor', x - 1, y)) % 5 + 1) * BW;
+    case 1: return (BH - 1) * BW + u32(H('vdoor', x, y)) % 10 + 1;
+    default: return u32(H('vdoor', x, y - 1)) % 10 + 1;
+  }
+}
+
+/** The cell across wall d from a door cell of the neighbouring board. */
+function acrossDoor(cell, d) {
+  switch (d) {
+    case 0: return cell - (BW - 1);
+    case 2: return cell + (BW - 1);
+    case 1: return cell - (BH - 1) * BW;
+    default: return cell + (BH - 1) * BW;
+  }
+}
+
+function dirBetween(i, n) {
+  if (n === i + 1) return 0;
+  if (n === i - 1) return 2;
+  return n > i ? 1 : 3;
+}
+
+/** First index of `cum` at or past half of `total`. */
+function midpointIndex(cum, total) {
+  let j = 0;
+  while (2 * cum[j] < total) j++;
+  return j;
+}
+
+/**
+ * Door directions of board i in band tree t: `aDir` leads back toward the
+ * band entry, `bDir` up the route (-1 off the route), `dirs` holds all.
+ */
+function boardLinks(t, i) {
+  const r = t.routeIndex[i], L = t.route.length;
+  let aDir, bDir = -1;
+  if (r >= 0) {
+    aDir = r > 0 ? dirBetween(i, t.route[r - 1]) : 3;
+    bDir = r < L - 1 ? dirBetween(i, t.route[r + 1]) : 1;
+  } else {
+    aDir = dirBetween(i, t.parent[i]);
+  }
+  const dirs = bDir >= 0 ? [aDir, bDir] : [aDir];
+  for (let n = 0; n < NBOARD; n++) if (t.parent[n] === i) dirs.push(dirBetween(i, n));
+  dirs.sort((u, v) => u - v);
+  return { aDir, bDir, dirs };
+}
+
+/**
+ * Cells and cumulative walking times from flame A to flame B, where
+ * `at(pos)` is the board at route position pos and A.pos <= B.pos.
+ */
+function routePath(at, A, B) {
+  const cells = [], cum = [];
+  let ms = 0;
+  for (let pos = A.pos; pos <= B.pos; pos++) {
+    const bd = at(pos);
+    const seg = cellPath(bd.links, pos === A.pos ? A.cell : bd.a, pos === B.pos ? B.cell : bd.b);
+    for (let j = 0; j < seg.cells.length; j++) {
+      if (j > 0) ms += COST[seg.dirs[j - 1]];
+      cells.push({ pos, cell: seg.cells[j] });
+      cum.push(ms);
+    }
+    if (pos < B.pos) ms += COST[bd.bDir];
+  }
+  return { cells, cum, total: ms };
+}
+
+/** Cells and link directions of the tree path from `from` to `to`. */
+function cellPath(links, from, to) {
+  const parent = new Int16Array(NCELL).fill(-1);
+  const pdir = new Int8Array(NCELL);
+  const queue = [from];
+  parent[from] = from;
+  for (let h = 0; h < queue.length && parent[to] < 0; h++) {
+    const c = queue[h];
+    for (let d = 0; d < 8; d++) {
+      if (!(links[c] & (1 << d))) continue;
+      const t = cellNeighbor(c, d);
+      if (parent[t] >= 0) continue;
+      parent[t] = c;
+      pdir[t] = d;
+      queue.push(t);
+    }
+  }
+  const cells = [], dirs = [];
+  for (let c = to; c !== from; c = parent[c]) { cells.push(c); dirs.push(pdir[c]); }
+  cells.push(from);
+  cells.reverse();
+  dirs.reverse();
+  return { cells, dirs };
+}
+
+/**
+ * `gapLimitMs` bounds the walking time between consecutive route flames;
+ * spec section 3 sets 150 s.
+ */
+function createWorld(code, { gapLimitMs = GAP_LIMIT_MS } = {}) {
+  const H = makeHasher(worldKey(code));
+  const trees = new Map();
+  const boards = new Map();
+  const flameSets = new Map();
+  const flameCells = new Map();
+
+  function tree(b) {
+    let t = trees.get(b);
+    if (!t) { t = buildBandTree(H, b); trees.set(b, t); }
+    return t;
+  }
+
+  function board(x, y) {
+    const p = posOf(x, y);
+    let bd = boards.get(p);
+    if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); }
+    return bd;
+  }
+
+  function buildBoard(x, y, p) {
+    const band = bandOf(y);
+    const t = tree(band);
+    const i = boardIndex(x, y);
+    const base = { x, y, p, band, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i] };
+    if (t.depth[i] < 0) return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
+    const { aDir, bDir, dirs } = boardLinks(t, i);
+    const doors = dirs.map((d) => ({ dir: d, cell: doorCell(H, x, y, d) }));
+    const doorMask = new Uint8Array(NCELL);
+    for (const dr of doors) doorMask[dr.cell] |= 1 << dr.dir;
+    const a = doors.find((dr) => dr.dir === aDir).cell;
+    const b = bDir >= 0 ? doors.find((dr) => dr.dir === bDir).cell : -1;
+    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b);
+    return {
+      ...base, kind: t.routeIndex[i] >= 0 ? 'route' : 'dead', doors, doorMask, aDir, bDir,
+      links: maze.links, a: maze.a, b: maze.b, k: maze.k, fallback: maze.fallback,
+      pathLen: maze.pathLen, junctions: maze.junctions, deficit: maze.deficit,
+    };
+  }
+
+  /** Board at route position pos of band b; pos = route length is band b+1's entry. */
+  function routeBoard(b, pos) {
+    const t = tree(b);
+    if (pos === t.route.length) return board(tree(b + 1).entryX, BANDH * (b + 1));
+    const { x, y } = boardCoords(b, t.route[pos]);
+    return board(x, y);
+  }
+
+  function routeFlame(bd, pos) {
+    return { x: bd.x, y: bd.y, cell: u32(H('flame', bd.x, bd.y), 4) % NCELL, kind: 'route', pos };
+  }
+
+  /** Flames on every third route board from the entry, then band b+1's entry flame. */
+  function routeChain(b) {
+    const L = tree(b).route.length;
+    const chain = [];
+    for (let pos = 0; pos < L; pos += 3) chain.push(routeFlame(routeBoard(b, pos), pos));
+    chain.push(routeFlame(routeBoard(b, L), L));
+    return chain;
+  }
+
+  /** Dead-end boards with flame byte 0 below 128 burn at their deepest cell. */
+  function deadEndFlames(b) {
+    const t = tree(b);
+    const out = [];
+    for (let i = 0; i < NBOARD; i++) {
+      if (t.depth[i] <= 0) continue;
+      const { x, y } = boardCoords(b, i);
+      if (H('flame', x, y)[0] < 128) out.push({ x, y, cell: board(x, y).b, kind: 'dead', pos: -1 });
+    }
+    return out;
+  }
+
+  /**
+   * Inserts a flame at the midpoint cell of each chain gap over the limit
+   * until none remains; returns the inserted flames and the final gaps.
+   */
+  function splitGaps(b, chain) {
+    const at = (pos) => routeBoard(b, pos);
+    const added = [], gaps = [];
+    for (let i = 0; i + 1 < chain.length;) {
+      const path = routePath(at, chain[i], chain[i + 1]);
+      if (path.total > gapLimitMs) {
+        const { pos, cell } = path.cells[midpointIndex(path.cum, path.total)];
+        const bd = at(pos);
+        const f = { x: bd.x, y: bd.y, cell, kind: 'gap', pos };
+        added.push(f);
+        chain.splice(i + 1, 0, f);
+      } else {
+        gaps.push(path.total);
+        i++;
+      }
+    }
+    return { added, gaps };
+  }
+
+  /**
+   * Flames of band b and its chain of route flames, ordered up the route and
+   * ending at band b+1's entry flame.
+   */
+  function bandFlames(b) {
+    let fs = flameSets.get(b);
+    if (fs) return fs;
+    const chain = routeChain(b);
+    const route = chain.slice(0, -1);
+    const dead = deadEndFlames(b);
+    const { added, gaps } = splitGaps(b, chain);
+    fs = { b, flames: [...route, ...dead, ...added], chain, gaps };
+    flameSets.set(b, fs);
+    return fs;
+  }
+
+  /** Flame cells on board (x, y), ascending; band b-1 may light b's entry. */
+  function flamesAt(x, y) {
+    const p = posOf(x, y);
+    let cells = flameCells.get(p);
+    if (cells) return cells;
+    const b = bandOf(y);
+    const t = tree(b);
+    const set = new Set();
+    if (t.depth[boardIndex(x, y)] >= 0) {
+      for (const f of bandFlames(b).flames) if (f.x === x && f.y === y) set.add(f.cell);
+      if (y === BANDH * b && x === t.entryX) {
+        for (const f of bandFlames(b - 1).flames) if (f.x === x && f.y === y) set.add(f.cell);
+      }
+    }
+    cells = [...set].sort((u, v) => u - v);
+    flameCells.set(p, cells);
+    return cells;
+  }
+
+  /** Neighbour of `cell` on board `bd` through link or door d, or null. */
+  function step(bd, cell, d) {
+    if (!bd.links) return null;
+    if (bd.links[cell] & (1 << d)) return { board: bd, cell: cellNeighbor(cell, d) };
+    if (d < 4 && (bd.doorMask[cell] & (1 << d))) {
+      const nb = board(bd.x + BDX[d], bd.y + BDY[d]);
+      const nc = acrossDoor(cell, d);
+      if (nb.doorMask && (nb.doorMask[nc] & (1 << (d ^ 2)))) return { board: nb, cell: nc };
+    }
+    return null;
+  }
+
+  /**
+   * Where a resumed run starts on board (x, y): the door leading back toward
+   * the band entry. A rock board resumes at its band's entry instead.
+   */
+  function resumePoint(x, y) {
+    let bd = board(x, y);
+    if (bd.kind === 'rock') {
+      const b = bandOf(y);
+      bd = board(tree(b).entryX, BANDH * b);
+    }
+    return { board: bd, cell: bd.a };
+  }
+
+  /** Drops cached bands outside [lo, hi] and their boards. */
+  function retain(lo, hi) {
+    for (const b of trees.keys()) if (b < lo || b > hi) trees.delete(b);
+    for (const b of flameSets.keys()) if (b < lo || b > hi) flameSets.delete(b);
+    for (const [p, bd] of boards) if (bd.band < lo || bd.band > hi) boards.delete(p);
+    for (const p of flameCells.keys()) {
+      const b = bandOf(boardOfPos(p).y);
+      if (b < lo || b > hi) flameCells.delete(p);
+    }
+  }
+
+  return { code, H, tree, board, bandFlames, flamesAt, step, resumePoint, retain };
+}
+
+class Bytes {
+  constructor() { this.a = []; }
+  u8(v) { this.a.push(v & 255); }
+  i64(n) {
+    const b = new Uint8Array(8);
+    writeInt64BE(b, 0, n);
+    this.bytes(b);
+  }
+  bytes(b) { for (const v of b) this.a.push(v); }
+  done() { return Uint8Array.from(this.a); }
+}
+
+/** Canonical bytes of a board: layout, maze, doors and flames. */
+function serializeBoard(world, x, y) {
+  const bd = world.board(x, y);
+  const w = new Bytes();
+  w.i64(x); w.i64(y);
+  w.u8(bd.kind === 'rock' ? 0 : bd.kind === 'route' ? 1 : 2);
+  w.u8(bd.routeIndex); w.u8(bd.depth);
+  if (bd.kind !== 'rock') {
+    w.u8(bd.k); w.u8(bd.fallback ? 1 : 0); w.u8(bd.a); w.u8(bd.b);
+    w.u8(bd.doors.length);
+    for (const dr of bd.doors) { w.u8(dr.dir); w.u8(dr.cell); }
+    w.bytes(bd.links);
+    const fl = world.flamesAt(x, y);
+    w.u8(fl.length);
+    w.bytes(fl);
+  }
+  return w.done();
+}
+
+/** SHA3-256 hex digest over every board and flame chain of bands b0..b1. */
+function digestBands(world, b0, b1) {
+  const parts = [];
+  for (let b = b0; b <= b1; b++) {
+    const t = world.tree(b);
+    const w = new Bytes();
+    w.i64(b); w.u8(t.k); w.u8(t.entryX); w.u8(t.exitX);
+    w.u8(t.route.length); w.bytes(t.route);
+    const fs = world.bandFlames(b);
+    w.u8(fs.chain.length);
+    for (const f of fs.chain) { w.i64(f.x); w.i64(f.y); w.u8(f.cell); }
+    parts.push(w.done());
+    for (let i = 0; i < NBOARD; i++) {
+      const { x, y } = boardCoords(b, i);
+      parts.push(serializeBoard(world, x, y));
+    }
+  }
+  let n = 0;
+  for (const p of parts) n += p.length;
+  const all = new Uint8Array(n);
+  let o = 0;
+  for (const p of parts) { all.set(p, o); o += p.length; }
+  return toHex(sha3_256(all));
+}
+return { GAP_LIMIT_MS, bandOf, posOf, boardOfPos, boardCoords, boardIndex, doorCell, acrossDoor, midpointIndex, cellPath, createWorld, serializeBoard, digestBands };
+})();
+
+// src/world/save.mjs
+const __m5 = (() => {
+const { parseCode, formatCode } = __m1;
+const { boardOfPos, posOf } = __m4;
+// Save strings: `CODE4-CODE4:p` with p = 6y + x, p possibly negative.
+
+
+
+function encodeSave(code, x, y) {
+  return formatCode(code) + ':' + posOf(x, y);
+}
+
+/** `{ code, p, x, y }` from a save string, or null when malformed. */
+function decodeSave(text) {
+  const m = /^\s*([^:]+):\s*(-?\d+)\s*$/.exec(String(text));
+  if (!m) return null;
+  const code = parseCode(m[1]);
+  const p = Number(m[2]);
+  if (!code || !Number.isSafeInteger(p)) return null;
+  return { code, p, ...boardOfPos(p) };
+}
+return { encodeSave, decodeSave };
+})();
+
+// src/game/sim.mjs
+const __m6 = (() => {
+const { DX, DY, BW } = __m2;
+// Simulation: the explorer moves along the cell graph, so motion admits
+// exactly the tree's links. Runs on a fixed 60 Hz tick; no DOM.
+
+
+const TICK = 1 / 60;
+const CELL = 48;
+const BOARD_W = 576;
+const BOARD_H = 336;
+const RUN_SPEED = 96;
+const GALLERY_SPEED = 72;
+const LADDER_SPEED = 48;
+const BURN_S = 300;
+const EMBER_S = 10;
+const R_FULL = 96;
+const R_LOW = 24;
+const R_EMBER = 8;
+const SCONCE_R = 64;
+// Floor reach from the cell centre toward a wall: interior half-width 16
+// less the explorer's half-width 5.
+const WALL_REACH = 11;
+const TOUCH = 12;
+
+/** World position of a cell's standing point (centre, on the floor). */
+function nodeXY(bd, cell) {
+  return [bd.x * BOARD_W + (cell % BW) * CELL + 24, bd.y * BOARD_H + ((cell / BW) | 0) * CELL + 8];
+}
+
+/** Light radius: 96 px full, falling linearly to 24 px at 10% burn. */
+function torchRadius(burn) {
+  if (burn <= 0) return R_EMBER;
+  const f = burn / BURN_S;
+  return f <= 0.1 ? R_LOW : R_LOW + (R_FULL - R_LOW) * (f - 0.1) / 0.9;
+}
+
+function diagFor(h, v) {
+  if (v > 0) return h > 0 ? 4 : 5;
+  return h > 0 ? 7 : 6;
+}
+
+/** A run from `start` = { board, cell }, standing on the door's cell. */
+function createSim(world, start, carry = null) {
+  const s = {
+    world, bd: start.board, cell: start.cell,
+    mode: 'floor', off: 0, link: -1, to: null, prog: 0, len: 0,
+    facing: 1, moving: false, burn: BURN_S, ember: 0,
+    state: 'play', time: carry ? carry.time : 0,
+    startBand: carry ? carry.startBand : start.board.band,
+    maxBand: carry ? Math.max(carry.maxBand, start.board.band) : start.board.band,
+    lastEntry: start.board.routeIndex === 0 ? start.board.p : (carry ? carry.lastEntry : start.board.p),
+    touching: false, walked: 0, climbed: 0, carry: 0,
+    stats: { corridor: 0, ladderUp: 0, seams: 0, flames: 0 },
+    events: [],
+  };
+  return s;
+}
+
+function canGo(s, d) {
+  return !!s.world.step(s.bd, s.cell, d);
+}
+
+/** The ladder or gallery that input (h, v) asks for at the current cell. */
+function pickLink(s, h, v) {
+  if (v === 0) return -1;
+  if (h !== 0 && canGo(s, diagFor(h, v))) return diagFor(h, v);
+  const vert = v > 0 ? 1 : 3;
+  if (canGo(s, vert)) return vert;
+  if (h !== 0) return -1;
+  const diags = (v > 0 ? [4, 5] : [7, 6]).filter((d) => canGo(s, d));
+  return diags.length === 1 ? diags[0] : -1;
+}
+
+function engage(s, d, prog = 0) {
+  s.mode = 'link';
+  s.link = d;
+  s.to = s.world.step(s.bd, s.cell, d);
+  s.len = d < 4 ? CELL : CELL * Math.SQRT2;
+  s.prog = prog;
+  s.off = 0;
+}
+
+function enterBoard(s, bd) {
+  if (bd === s.bd) return;
+  s.stats.seams++;
+  s.events.push('seam');
+  if (bd.band > s.maxBand) { s.maxBand = bd.band; s.events.push('band'); }
+  if (bd.routeIndex === 0 && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
+}
+
+function floorMove(s, h, v, dt) {
+  const d = pickLink(s, h, v);
+  const stepPx = RUN_SPEED * dt;
+  if (d >= 0) {
+    if (Math.abs(s.off) > stepPx) {
+      const dir = -Math.sign(s.off);
+      s.off += dir * stepPx;
+      s.facing = dir;
+      s.moving = true;
+      s.walked += stepPx;
+      return;
+    }
+    const used = Math.abs(s.off) / RUN_SPEED;
+    s.walked += Math.abs(s.off);
+    engage(s, d);
+    if (DX[d]) s.facing = DX[d];
+    linkMove(s, h, v, dt - used);
+    return;
+  }
+  if (h === 0) { s.moving = false; return; }
+  s.facing = h;
+  const hd = h > 0 ? 0 : 2;
+  let next = s.off + h * stepPx;
+  if (!canGo(s, hd)) {
+    const diags = (h > 0 ? [4, 7] : [5, 6]).filter((e) => canGo(s, e));
+    if (diags.length === 1 && s.off * h <= 0 && next * h >= 0) {
+      const used = Math.abs(s.off) / RUN_SPEED;
+      s.walked += Math.abs(s.off);
+      engage(s, diags[0]);
+      linkMove(s, h, diags[0] < 6 ? 1 : -1, dt - used);
+      return;
+    }
+    // A gallery foot or mouth on this side leaves no floor past the centre.
+    const lim = diags.length ? 0 : WALL_REACH;
+    if (next * h > lim) next = Math.max(s.off * h, lim) * h;
+  }
+  s.moving = next !== s.off;
+  s.walked += Math.abs(next - s.off);
+  s.off = next;
+  if (s.off * h > CELL / 2) {
+    const nb = s.world.step(s.bd, s.cell, hd);
+    enterBoard(s, nb.board);
+    s.bd = nb.board;
+    s.cell = nb.cell;
+    s.off -= h * CELL;
+    s.stats.corridor++;
+  }
+}
+
+function linkMove(s, h, v, dt) {
+  const d = s.link;
+  const along = d === 1 || d === 3 ? v * DY[d] : Math.sign(h * DX[d] + v * DY[d]);
+  if (along === 0) { s.moving = false; return; }
+  const speed = d < 4 ? LADDER_SPEED : GALLERY_SPEED;
+  s.prog += along * speed * dt;
+  s.moving = true;
+  if (d < 4) s.climbed += speed * dt;
+  else { s.walked += speed * dt; s.facing = DX[d] * along; }
+  // A link always ends at its node; unspent tick time carries to the next tick.
+  if (s.prog >= s.len - 1e-9) {
+    s.carry = Math.max(0, s.prog - s.len) / speed;
+    if (d === 1) s.stats.ladderUp++;
+    enterBoard(s, s.to.board);
+    s.bd = s.to.board;
+    s.cell = s.to.cell;
+    s.mode = 'floor';
+    s.off = 0;
+  } else if (s.prog <= 1e-9) {
+    s.carry = Math.max(0, -s.prog) / speed;
+    s.mode = 'floor';
+    s.off = 0;
+  }
+}
+
+/** Feet position in world px. */
+function feet(s) {
+  const [nx, ny] = nodeXY(s.bd, s.cell);
+  if (s.mode === 'floor') return [nx + s.off, ny];
+  const k = (CELL * s.prog) / s.len;
+  return [nx + DX[s.link] * k, ny + DY[s.link] * k];
+}
+
+function flameTouch(s) {
+  const [fx, fy] = feet(s);
+  const boards = s.mode === 'link' && s.to.board !== s.bd ? [s.bd, s.to.board] : [s.bd];
+  for (const bd of boards) {
+    for (const cell of s.world.flamesAt(bd.x, bd.y)) {
+      const [x, y] = nodeXY(bd, cell);
+      if (Math.abs(fx - x) <= TOUCH && Math.abs(fy - y) <= TOUCH) return true;
+    }
+  }
+  return false;
+}
+
+/** Advances one tick with input h, v in {-1, 0, 1} (v > 0 is up). */
+function step(s, h, v) {
+  s.events.length = 0;
+  if (s.state !== 'play') return s;
+  s.time += TICK;
+  const dt = TICK + s.carry;
+  s.carry = 0;
+  if (s.mode === 'floor') floorMove(s, h, v, dt);
+  else linkMove(s, h, v, dt);
+  // Contact with a flame holds the torch at full; events fire once per contact.
+  const touch = flameTouch(s);
+  if (touch) {
+    if (!s.touching) {
+      s.stats.flames++;
+      s.events.push(s.burn < BURN_S * 0.98 || s.ember > 0 ? 'relight' : 'touch');
+    }
+    s.burn = BURN_S;
+    s.ember = 0;
+  } else if (s.burn > 0) {
+    s.burn -= TICK;
+    if (s.burn <= 0) { s.burn = 0; s.ember = EMBER_S; s.events.push('ember'); }
+  } else {
+    s.ember -= TICK;
+    if (s.ember <= 0) { s.ember = 0; s.state = 'over'; s.events.push('over'); }
+  }
+  s.touching = touch;
+  return s;
+}
+
+/** Animation name and frame for the explorer. */
+function pose(s) {
+  if (s.mode === 'link') {
+    if (s.link < 4) return { anim: 'climb', frame: Math.floor(s.climbed / 8) % 4 };
+    return { anim: 'gallery', frame: Math.floor(s.walked / 7) % 8 };
+  }
+  if (s.moving) return { anim: 'run', frame: Math.floor(s.walked / 6) % 8 };
+  if (s.burn <= 0) return { anim: 'gasp', frame: Math.floor(s.time * 3) % 2 };
+  return { anim: 'idle', frame: Math.floor(s.time * 4) % 4 };
+}
+return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, nodeXY, torchRadius, createSim, canGo, feet, step, pose };
+})();
+
+// src/game/art.mjs
+const __m7 = (() => {
+
+// Palette-indexed art. Each character indexes PALETTE in base 32
+// ('0'-'9', 'a'-'v'); '.' is transparent.
+
+const PALETTE = [
+  '#0d0a14', '#1b1426', '#2c1f3d', '#46304f', // 0-3 violet shadow
+  '#5e3f52', '#3b2a22', '#5a3e2b', '#7d5636', // 4 mauve, 5-7 umber
+  '#a8743f', '#c9984f', '#ddb873', '#efd49c', // 8 ochre, 9-b sandstone
+  '#fff1cf', '#13284a', '#1f3f78', '#3264b0', // c bone, d-f lapis
+  '#0f4f4c', '#1f8a80', '#3fd0c0', '#a6fff0', // g-j turquoise
+  '#6b4a0f', '#b8860b', '#f2c14e', '#8a2a12', // k-m gold, n torch red
+  '#d2561a', '#ff9a2e', '#ffd27a', '#6e5a3a', // o-q torch orange, r khaki dark
+  '#a08a5c', '#c8b483', '#e0a882', '#8e5a44', // s-t khaki, u skin, v leather
+];
+
+const RGB = PALETTE.map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)));
+
+/** Palette index of a character, or -1 for transparent. */
+function idx(ch) {
+  return ch === '.' ? -1 : parseInt(ch, 32);
+}
+
+// Explorer, 16x24, facing right. Frames compose a head (rows 0-9), a torso
+// (rows 10-15) and legs (rows 16-23); `bob` lowers head and torso.
+const HEAD = {
+  side: [
+    '................',
+    '......6666......',
+    '.....677776.....',
+    '.....677776.....',
+    '.....655556.....',
+    '...66677777666..',
+    '......uuuuu.....',
+    '......uuu0u.....',
+    '......uuuuuu....',
+    '.......vuuv.....',
+  ],
+  gasp: [
+    '................',
+    '................',
+    '......6666......',
+    '.....677776.....',
+    '.....655556.....',
+    '...66677777666..',
+    '......uuuuu.....',
+    '......uuu0u.....',
+    '......uuuu0u....',
+    '.......vuuv.....',
+  ],
+  back: [
+    '................',
+    '......6666......',
+    '.....677776.....',
+    '.....677776.....',
+    '.....655556.....',
+    '...6667777766...',
+    '......vvvvv.....',
+    '......vuuuv.....',
+    '.......uuu......',
+    '.......vuv......',
+  ],
+};
+
+const TORSO = {
+  hold: [
+    '.....ssssss.v...',
+    '....sstssstsv...',
+    '....sstssssvu...',
+    '....ssttsss.....',
+    '....ssssss......',
+    '....v555v5......',
+  ],
+  swing: [
+    '.....ssssss.v...',
+    '...ssstssstsv...',
+    '...usstssssvu...',
+    '....ssttsss.....',
+    '....ssssss......',
+    '....v555v5......',
+  ],
+  chest: [
+    '.....ssssss.....',
+    '....sstsssts....',
+    '....sstsuuvs....',
+    '....ssttsss.....',
+    '....ssssss......',
+    '....v555v5......',
+  ],
+  climbA: [
+    '...u.ssssss.....',
+    '...sssstssss....',
+    '....ssttssssu...',
+    '....ssttsss.....',
+    '....ssssss......',
+    '....v555v5......',
+  ],
+  climbB: [
+    '.....ssssss.u...',
+    '....ssssstsss...',
+    '...ussssttss....',
+    '....sssttss.....',
+    '....ssssss......',
+    '....v555v5......',
+  ],
+};
+
+// Near leg in khaki 's', far leg in khaki dark 'r'.
+const LEGS = {
+  stand: [
+    '.....rrssss.....',
+    '.....rr..ss.....',
+    '.....rr..ss.....',
+    '.....rr..ss.....',
+    '.....rr..ss.....',
+    '.....rr..ss.....',
+    '....655..655....',
+    '....5555.5555...',
+  ],
+  run0: [
+    '.....rrssss.....',
+    '....rrr..sss....',
+    '....rr....sss...',
+    '...rr......ss...',
+    '...rr.......ss..',
+    '..rr........ss..',
+    '.655........655.',
+    '.55..........555',
+  ],
+  run1: [
+    '.....rrssss.....',
+    '.....rr.sss.....',
+    '....rr...ss.....',
+    '....rr...sss....',
+    '...rr.....ss....',
+    '...rr.....ss....',
+    '..655.....655...',
+    '..55......5555..',
+  ],
+  run2: [
+    '.....rrssss.....',
+    '.....rrsss......',
+    '.....rrss.......',
+    '.....rss.ss.....',
+    '.....rr..sss....',
+    '.....rr...655...',
+    '....655...55....',
+    '....5555........',
+  ],
+  run3: [
+    '.....ssrrrr.....',
+    '....sss..rr.....',
+    '...ss.....rr....',
+    '...ss.....rr....',
+    '..655......rr...',
+    '..55.......655..',
+    '...........55...',
+    '................',
+  ],
+  run4: [
+    '.....ssrrrr.....',
+    '....sss..rrr....',
+    '....ss....rrr...',
+    '...ss......rr...',
+    '...ss.......rr..',
+    '..ss........rr..',
+    '.655........655.',
+    '.55..........555',
+  ],
+  run5: [
+    '.....ssrrrr.....',
+    '.....ss.rrr.....',
+    '....ss...rr.....',
+    '....ss...rrr....',
+    '...ss.....rr....',
+    '...ss.....rr....',
+    '..655.....655...',
+    '..55......5555..',
+  ],
+  run6: [
+    '.....ssrrrr.....',
+    '.....ssrrr......',
+    '.....ssrr.......',
+    '.....srr.rr.....',
+    '.....ss..rrr....',
+    '.....ss...655...',
+    '....655...55....',
+    '....5555........',
+  ],
+  run7: [
+    '.....rrssss.....',
+    '....rrr..ss.....',
+    '...rr.....ss....',
+    '...rr.....ss....',
+    '..655......ss...',
+    '..55.......655..',
+    '...........55...',
+    '................',
+  ],
+  step0: [
+    '.....rrssss.....',
+    '.....rr..sss....',
+    '.....rr...ss....',
+    '....rr....ss....',
+    '....rr.....ss...',
+    '....rr.....ss...',
+    '...655.....655..',
+    '...55......5555.',
+  ],
+  step1: [
+    '.....rrssss.....',
+    '.....rr.ss......',
+    '.....rr.sss.....',
+    '.....rr..ss.....',
+    '.....rr..ss.....',
+    '.....rr..655....',
+    '....655..55.....',
+    '....5555........',
+  ],
+  step2: [
+    '.....ssrrrr.....',
+    '.....ss..rrr....',
+    '.....ss...rr....',
+    '....ss....rr....',
+    '....ss.....rr...',
+    '....ss.....rr...',
+    '...655.....655..',
+    '...55......5555.',
+  ],
+  step3: [
+    '.....ssrrrr.....',
+    '.....ss.rr......',
+    '.....ss.rrr.....',
+    '.....ss..rr.....',
+    '.....ss..rr.....',
+    '.....ss..655....',
+    '....655..55.....',
+    '....5555........',
+  ],
+  climbA: [
+    '.....rrrrrr.....',
+    '.....rr..rr.....',
+    '.....rr..rr.....',
+    '....rr...rr.....',
+    '....655..rr.....',
+    '....55...rr.....',
+    '.........655....',
+    '.........55.....',
+  ],
+  climbB: [
+    '.....rrrrrr.....',
+    '.....rr..rr.....',
+    '.....rr..rr.....',
+    '.....rr...rr....',
+    '.....rr..655....',
+    '.....rr...55....',
+    '....655.........',
+    '.....55.........',
+  ],
+};
+
+function compose(head, torso, legs, bob = 0) {
+  const top = [...HEAD[head], ...TORSO[torso]];
+  const shifted = bob ? [...Array(bob).fill('.'.repeat(16)), ...top.slice(0, top.length - bob)] : top;
+  return [...shifted, ...LEGS[legs]];
+}
+
+
+const EXPLORER = {
+  idle: [
+    compose('side', 'hold', 'stand'), compose('side', 'hold', 'stand'),
+    compose('side', 'hold', 'stand', 1), compose('side', 'hold', 'stand', 1),
+  ],
+  run: [
+    compose('side', 'swing', 'run0', 1), compose('side', 'hold', 'run1'),
+    compose('side', 'hold', 'run2'), compose('side', 'swing', 'run3'),
+    compose('side', 'swing', 'run4', 1), compose('side', 'hold', 'run5'),
+    compose('side', 'hold', 'run6'), compose('side', 'swing', 'run7'),
+  ],
+  climb: [
+    compose('back', 'climbA', 'climbA'), compose('back', 'climbA', 'climbB', 1),
+    compose('back', 'climbB', 'climbB'), compose('back', 'climbB', 'climbA', 1),
+  ],
+  gallery: [
+    compose('side', 'hold', 'step0'), compose('side', 'hold', 'step1', 1),
+    compose('side', 'hold', 'step1'), compose('side', 'hold', 'step0', 1),
+    compose('side', 'hold', 'step2'), compose('side', 'hold', 'step3', 1),
+    compose('side', 'hold', 'step3'), compose('side', 'hold', 'step2', 1),
+  ],
+  gasp: [compose('gasp', 'chest', 'stand', 1), compose('gasp', 'chest', 'stand', 2)],
+};
+
+/** Torch tip (x, y) within a frame, where the flame is drawn. */
+function torchTip(anim, frame) {
+  let y = 9;
+  if (anim === 'climb') y = frame < 2 ? 11 : 9;
+  else if (anim === 'gasp') y = 12;
+  return [12, y + EXPLORER_BOB[anim][frame]];
+}
+
+const EXPLORER_BOB = {
+  idle: [0, 0, 1, 1], run: [1, 0, 0, 0, 1, 0, 0, 0], climb: [0, 1, 0, 1],
+  gallery: [0, 1, 0, 1, 0, 1, 0, 1], gasp: [1, 2],
+};
+
+// Sandstone blocks in three variants.
+const ROCK = [
+  [
+    '9999999899999998',
+    '9aaaaaa89aaaaaa8',
+    '9aaabaa89aabaaa8',
+    '9aaaaaa89aaaaa98',
+    '9aaaaa989aaaaaa8',
+    '9aaaaaa89aaaaaa8',
+    '9a9aaaa89aaaa9a8',
+    '8888888888888888',
+    '9999899999998999',
+    'aaa89aaaaaaa89aa',
+    'aba89aaabaaa89aa',
+    'aaa89aaaaaaa89ab',
+    'aaa89aa9aaaa89aa',
+    'aaa89aaaaaa989aa',
+    'a9a89aaaaaaa89aa',
+    '8888888888888888',
+  ],
+  [
+    '9999999999998999',
+    '9aaaaaaaaaa89aaa',
+    '9aabaaaaaaa89aba',
+    '9aaaaaa9aaa89aaa',
+    '9aaaaaaaaaa89aaa',
+    '9a9aaaaaaba89aaa',
+    '9aaaaaaaaaa89aa9',
+    '8888888888888888',
+    '9998999999999998',
+    'aa89aaaaaaaaaaa8',
+    'aa89aaabaaaaa9a8',
+    'ab89aaaaaaaaaaa8',
+    'aa89a9aaaaaaaaa8',
+    'aa89aaaaaa9aaaa8',
+    'a989aaaaaaaaaaa8',
+    '8888888888888888',
+  ],
+  [
+    '9999998999999998',
+    '9aaaa989aaaaaaa8',
+    '9aaaaa89aa7aaaa8',
+    '9abaaa89a777aaa8',
+    '9aaaaa89aa7aaaa8',
+    '9aaaaa89aaaaaba8',
+    '9aa9aa89aaaaaaa8',
+    '8888888888888888',
+    '9999999999899999',
+    'aaaaaaa9a89aaaaa',
+    'aabaaaaaa89aaaba',
+    'aaaaaaaaa89aaaaa',
+    'aaaa9aaaa89a9aaa',
+    'aaaaaaaaa89aaaaa',
+    'a9aaaaaaa89aaaaa',
+    '8888888888888888',
+  ],
+];
+
+// Back wall, seen through every passage at half the camera speed:
+// lapis-washed plaster with painted glyph registers.
+const WALL = [
+  [
+    'dddddddddddddddd',
+    'deeeeeeeeeeeeeed',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'de.............e',
+    'deeeeeeeeeeeeeed',
+    'dddddddddddddddd',
+  ],
+];
+
+// 16x16 glyph panels painted over the wall tone ('.' keeps the wall).
+const GLYPHS = [
+  [ // eye of Horus
+    '................',
+    '................',
+    '....lllllll.....',
+    '...l.......l....',
+    '..l..mmmm...l...',
+    '.l..mm00mm...l..',
+    '..l..mmmm...l...',
+    '...lllllllll....',
+    '......l..l......',
+    '.....l....l.....',
+    '....l......ll...',
+    '...l.........l..',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+  [ // ankh
+    '................',
+    '......llll......',
+    '.....l....l.....',
+    '.....l....l.....',
+    '.....l....l.....',
+    '......l..l......',
+    '...llllllllll...',
+    '...llllllllll...',
+    '.......ll.......',
+    '.......ll.......',
+    '.......ll.......',
+    '.......ll.......',
+    '.......ll.......',
+    '.......ll.......',
+    '................',
+    '................',
+  ],
+  [ // reed and water
+    '................',
+    '.......h........',
+    '......hhh.......',
+    '......hhh.......',
+    '.......h........',
+    '.......h........',
+    '.......h........',
+    '.......h........',
+    '................',
+    '..i..i..i..i..i.',
+    '.i.ii.ii.ii.ii.i',
+    '................',
+    '..i..i..i..i..i.',
+    '.i.ii.ii.ii.ii.i',
+    '................',
+    '................',
+  ],
+  [ // bird
+    '................',
+    '................',
+    '.......mm.......',
+    '......m0mm......',
+    '.....mmmmm88....',
+    '......mmmm......',
+    '.....mmmmmm.....',
+    '....mmmmmmmm....',
+    '...mmmmmmmmm....',
+    '.....mmmmmmm....',
+    '.......m..m.....',
+    '......mm.mm.....',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+  [ // sun disc
+    '................',
+    '................',
+    '.....kkkkkk.....',
+    '....kllllllk....',
+    '...kllmmmmllk...',
+    '...klmmmmmmlk...',
+    '...klmmmmmmlk...',
+    '...kllmmmmllk...',
+    '....kllllllk....',
+    '.....kkkkkk.....',
+    '..ffff....ffff..',
+    '.ff..ffffff..ff.',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+  [ // scarab
+    '................',
+    '................',
+    '......hhhh......',
+    '.....hiiiih.....',
+    '..h..hiiiih..h..',
+    '...h.hhhhhh.h...',
+    '....hgggggghh...',
+    '...hhgiggigh....',
+    '....hgigggih....',
+    '...h.hggggh.h...',
+    '..h...hhhh...h..',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+];
+
+// Ladder segment, 16 wide, repeating every 8 rows.
+const LADDER = [
+  '...76......76...',
+  '...76......76...',
+  '...78888888876..',
+  '...76666666676..',
+  '...76......76...',
+  '...76......76...',
+  '...76......76...',
+  '...76......76...',
+];
+
+// Wall sconce: bracket and bowl; the flame is drawn above it.
+const SCONCE = [
+  '..kllk..',
+  '.kmmmmk.',
+  '..kllk..',
+  '...kk...',
+  '...kk...',
+  '..kllk..',
+];
+
+const SCONCE_FLAME = [
+  ['...q....', '..qpq...', '..pop...', '..ono...'],
+  ['....q...', '...pq...', '..pqp...', '..ono...'],
+  ['..q.....', '..qp....', '..pqp...', '..ono...'],
+];
+
+// Brazier for a turquoise flame; 16x10 bowl on a gold stand.
+const BRAZIER = [
+  '.kllllllllllllk.',
+  'kmmmmmmmmmmmmmmk',
+  '.kllmlllllmllk..',
+  '..kllllllllllk..',
+  '....kkllllkk....',
+  '......kllk......',
+  '......kllk......',
+  '.....kllllk.....',
+  '....kkllllkk....',
+  '...kkkkkkkkkk...',
+];
+
+const FLAME = [
+  [
+    '......j.....',
+    '.....jj.....',
+    '.....jij....',
+    '....jiij....',
+    '...jiiiij...',
+    '...jiiiij...',
+    '..jiihhiij..',
+    '..jihhhhij..',
+    '..ihhgghhi..',
+    '..ihggggh...',
+    '...hgggh....',
+    '....ggg.....',
+  ],
+  [
+    '.....j......',
+    '.....jj.....',
+    '....jijj....',
+    '....jiij....',
+    '...jiiiij...',
+    '..jiiiiiij..',
+    '..jiihhiij..',
+    '..jihhhhij..',
+    '..ihhgghhi..',
+    '...hggggh...',
+    '...hgggh....',
+    '....ggg.....',
+  ],
+  [
+    '.......j....',
+    '......jj....',
+    '.....jij....',
+    '....jiij....',
+    '...jiiiij...',
+    '...jiiiiij..',
+    '..jiihhiij..',
+    '..jihhhhij..',
+    '..ihhgghhi..',
+    '...hggggh...',
+    '....hggh....',
+    '....ggg.....',
+  ],
+  [
+    '............',
+    '.....j......',
+    '....jj......',
+    '....jij.....',
+    '...jiiij....',
+    '...jiiiij...',
+    '..jiihhiij..',
+    '..jihhhhij..',
+    '..ihhgghhi..',
+    '...hggggh...',
+    '...hgggh....',
+    '....ggg.....',
+  ],
+];
+
+// Hand torch flame, three flicker frames, anchored at the bottom centre.
+const TORCH = [
+  ['..q..', '.qpq.', '.pop.', '..n..'],
+  ['...q.', '.qpq.', '.pqp.', '..n..'],
+  ['.q...', '.qp..', '.pop.', '..n..'],
+];
+
+// 5x7 pixel font. '#' marks ink.
+const FONT_ROWS = {
+  A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  B: ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
+  C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+  D: ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
+  E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+  F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'],
+  G: ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.####'],
+  H: ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  I: ['.###.', '..#..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  J: ['..###', '...#.', '...#.', '...#.', '...#.', '#..#.', '.##..'],
+  K: ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
+  L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+  M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
+  N: ['#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#'],
+  O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  P: ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+  Q: ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
+  R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+  S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+  T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+  U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  V: ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
+  W: ['#...#', '#...#', '#...#', '#.#.#', '#.#.#', '#.#.#', '.#.#.'],
+  X: ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+  Y: ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+  Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+  0: ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
+  1: ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  2: ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+  3: ['####.', '....#', '....#', '.###.', '....#', '....#', '####.'],
+  4: ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+  5: ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
+  6: ['.###.', '#....', '#....', '####.', '#...#', '#...#', '.###.'],
+  7: ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
+  8: ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+  9: ['.###.', '#...#', '#...#', '.####', '....#', '....#', '.###.'],
+  '-': ['.....', '.....', '.....', '.###.', '.....', '.....', '.....'],
+  ':': ['.....', '..#..', '..#..', '.....', '..#..', '..#..', '.....'],
+  '.': ['.....', '.....', '.....', '.....', '.....', '..#..', '..#..'],
+  '/': ['....#', '....#', '...#.', '..#..', '.#...', '#....', '#....'],
+  '?': ['.###.', '#...#', '....#', '...#.', '..#..', '.....', '..#..'],
+  '!': ['..#..', '..#..', '..#..', '..#..', '..#..', '.....', '..#..'],
+  '_': ['.....', '.....', '.....', '.....', '.....', '.....', '#####'],
+  ' ': ['.....', '.....', '.....', '.....', '.....', '.....', '.....'],
+};
+
+const FONT = FONT_ROWS;
+const FONT_W = 5;
+const FONT_H = 7;
+
+/** Every art string set, for width checks. */
+function artSets() {
+  return {
+    explorer: Object.values(EXPLORER).flat(),
+    rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
+    sconceFlame: SCONCE_FLAME, brazier: [BRAZIER], flame: FLAME, torch: TORCH,
+    font: Object.values(FONT_ROWS),
+  };
+}
+return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H, artSets };
+})();
+
+// src/game/mask.mjs
+const __m8 = (() => {
+const { BW, NCELL } = __m2;
+// Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
+// opening joins exactly the cells of one tree link or door:
+// - room: cell-local [8,40) x [8,40); corridor: the 16 px wall between rooms;
+// - ladder: a 16 px shaft through the slab above the lower room's centre;
+// - gallery: a 45-degree tunnel from the lower room's centre to the upper
+//   room's centre. Its air stays under the lower room's ceiling, stops a
+//   pixel short of any corridor above, and a 3 px solid stair stringer
+//   divides it from any corridor below, so it meets other passages only in
+//   the zone (room plus floor slab) of a cell it links.
+
+
+const MASK_W = 576;
+const MASK_H = 336;
+const CELL_PX = 48;
+
+function boardMask(bd) {
+  const W = MASK_W, H = MASK_H;
+  const mask = new Uint8Array(W * H).fill(1);
+  const set = (x0, y0, x1, y1, v) => {
+    for (let y = Math.max(0, y0); y < Math.min(H, y1); y++) {
+      const row = (H - 1 - y) * W;
+      for (let x = Math.max(0, x0); x < Math.min(W, x1); x++) mask[row + x] = v;
+    }
+  };
+  if (!bd || !bd.links) return mask;
+  const stringers = [];
+  for (let c = 0; c < NCELL; c++) {
+    const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
+    const m = bd.links[c], doors = bd.doorMask[c];
+    set(X + 8, Y + 8, X + 40, Y + 40, 0);
+    if (m & 1) set(X + 40, Y + 8, X + 56, Y + 40, 0);
+    if (m & 2) set(X + 16, Y + 40, X + 32, Y + 56, 0);
+    if (doors & 1) set(X + 40, Y + 8, X + 48, Y + 40, 0);
+    if (doors & 4) set(X, Y + 8, X + 8, Y + 40, 0);
+    if (doors & 2) set(X + 16, Y + 40, X + 32, Y + 48, 0);
+    if (doors & 8) set(X + 16, Y, X + 32, Y + 8, 0);
+  }
+  for (let c = 0; c < NCELL; c++) {
+    const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
+    const m = bd.links[c];
+    for (const ne of [true, false]) {
+      if (!(m & (ne ? 16 : 32))) continue;
+      for (let i = 0; i <= 48; i++) {
+        // NE columns run right from local x 24; NW mirrors them about 23.5.
+        const lx = ne ? 24 + i : 23 - i;
+        const x = X + lx, f = Y + 8 + i;
+        const inRoom = ne ? lx < 40 : lx >= 8;
+        const inWall = ne ? lx >= 40 && lx < 56 : lx >= -8 && lx < 8;
+        let top = f + 25;
+        if (inRoom) top = Math.min(top, Y + 40);
+        else if (inWall) top = Math.min(top, Y + 55);
+        set(x, f + 1, x + 1, top, 0);
+        if (inWall) stringers.push(x, f);
+      }
+    }
+  }
+  for (let k = 0; k < stringers.length; k += 2) {
+    const x = stringers[k], f = stringers[k + 1];
+    set(x, f - 2, x + 1, f + 1, 1);
+  }
+  return mask;
+}
+
+/** True when pixel (x, y), y measured up from the board's floor, is rock. */
+function rockAt(mask, x, y) {
+  return mask[(MASK_H - 1 - y) * MASK_W + x] === 1;
+}
+return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
+})();
+
+// src/game/render.mjs
+const __m9 = (() => {
+const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H } = __m7;
+const { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m6;
+const { BW, NCELL } = __m2;
+const { boardOfPos } = __m4;
+const { boardMask } = __m8;
+// Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
+// sprites, a quarter-resolution light map multiplied over the scene, dust.
+
+
+
+
+
+
+const VIEW_W = 320;
+const VIEW_H = 180;
+const LIGHT_W = VIEW_W / 4;
+const LIGHT_H = VIEW_H / 4;
+const FLAME_R = 80;
+const AMBIENT = [12, 9, 22];
+
+/** CSS colour of palette character `ch`. */
+function pal(ch) {
+  return PALETTE[idx(ch)];
+}
+
+/** Palette colour 0 (deepest violet) at opacity `alpha`. */
+function shade(alpha) {
+  return `rgba(${RGB[0].join(',')},${alpha})`;
+}
+
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return c;
+}
+
+/** Canvas of a palette-indexed sprite; `map` swaps characters. */
+function spriteCanvas(rows, flip = false, map = null) {
+  const h = rows.length, w = rows[0].length;
+  const c = makeCanvas(w, h);
+  const g = c.getContext('2d');
+  const img = g.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let ch = rows[y][flip ? w - 1 - x : x];
+      if (map && map[ch]) ch = map[ch];
+      const k = idx(ch);
+      if (k < 0) continue;
+      const o = (y * w + x) * 4;
+      img.data[o] = RGB[k][0]; img.data[o + 1] = RGB[k][1]; img.data[o + 2] = RGB[k][2]; img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+function hash3(a, b, c) {
+  let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+function createRenderer(canvas, world) {
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const sprites = {};
+  for (const [name, frames] of Object.entries(EXPLORER)) {
+    sprites[name] = frames.map((f) => [spriteCanvas(f), spriteCanvas(f, true)]);
+  }
+  const ladder = spriteCanvas(LADDER);
+  const sconce = spriteCanvas(SCONCE);
+  const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
+  const brazier = spriteCanvas(BRAZIER);
+  const flames = FLAME.map((f) => spriteCanvas(f));
+  const torches = TORCH.map((f) => spriteCanvas(f));
+  const ember = spriteCanvas(['.n.', 'nop', '.n.']);
+  const background = buildBackground();
+  const rockCanvas = buildBoardCanvas(null);
+  const boards = new Map();
+  const light = makeCanvas(LIGHT_W, LIGHT_H);
+  const lightCtx = light.getContext('2d');
+  const lightImg = lightCtx.createImageData(LIGHT_W, LIGHT_H);
+  const acc = new Float32Array(LIGHT_W * LIGHT_H * 3);
+  const glyphCache = new Map();
+  const dust = [];
+
+  function buildBackground() {
+    const size = 128;
+    const c = makeCanvas(size, size);
+    const g = c.getContext('2d');
+    const plaster = spriteCanvas(WALL[0]);
+    const glyphs = GLYPHS.map((rows) => spriteCanvas(rows));
+    for (let ty = 0; ty < size / 16; ty++) {
+      for (let tx = 0; tx < size / 16; tx++) {
+        g.drawImage(plaster, tx * 16, ty * 16);
+        g.fillStyle = pal('d');
+        g.fillRect(tx * 16 + 2, ty * 16 + 2, 12, 12);
+        if (ty % 4 === 3) {
+          g.fillStyle = pal('7');
+          g.fillRect(tx * 16, ty * 16 + 12, 16, 2);
+          g.fillStyle = pal('l');
+          g.fillRect(tx * 16, ty * 16 + 13, 16, 1);
+        } else if (hash3(tx, ty, 7) % 3 !== 0) {
+          g.drawImage(glyphs[hash3(tx, ty, 11) % glyphs.length], tx * 16, ty * 16);
+        }
+      }
+    }
+    // The back wall renders at half brightness.
+    g.fillStyle = shade(0.5);
+    g.fillRect(0, 0, size, size);
+    return c;
+  }
+
+  /** Ladders, stairs, sconces and braziers of board `bd`, in board pixels. */
+  function boardFixtures(bd) {
+    const stairs = [], ladders = [], sconces = [], braziers = [];
+    if (!bd) return { stairs, ladders, sconces, braziers };
+    for (let c = 0; c < NCELL; c++) {
+      const X = (c % BW) * CELL, Y = ((c / BW) | 0) * CELL;
+      const m = bd.links[c], doors = bd.doorMask[c];
+      if (m & 2) ladders.push([X + 16, Y + 8, Y + 64]);
+      if (doors & 2) ladders.push([X + 16, Y + 8, Y + 48]);
+      if (doors & 8) ladders.push([X + 16, Y, Y + 14]);
+      if (m & 16) stairs.push([X + 24, Y + 8, 1]);
+      if (m & 32) stairs.push([X + 24, Y + 8, -1]);
+      if (doors) sconces.push([doors & 4 ? X + 13 : doors & 1 ? X + 35 : X + 36, Y + 26]);
+    }
+    for (const cell of world.flamesAt(bd.x, bd.y)) braziers.push(nodeXY({ x: 0, y: 0 }, cell));
+    return { stairs, ladders, sconces, braziers };
+  }
+
+  /**
+   * Rock and shadow pixels from the mask alone, so every opening drawn is a
+   * tree link or a door. `p` picks the rock tile variants.
+   */
+  function shadeMask(g, mask, p) {
+    const W = BOARD_W, H = BOARD_H;
+    const img = g.createImageData(W, H);
+    const d = img.data;
+    const solid = (x, y) => mask[Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))];
+    const [ar, ag, ab] = RGB[0];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const o = (y * W + x) * 4;
+        if (mask[y * W + x]) {
+          const tile = ROCK[hash3(x >> 4, y >> 4, p) % ROCK.length];
+          let ch = tile[y & 15][x & 15];
+          if (!solid(x, y - 1)) ch = 'b';
+          else if (!solid(x, y - 2)) ch = 'a';
+          else if (!solid(x, y + 1)) ch = '6';
+          else if (!solid(x, y + 2)) ch = '7';
+          else if (!solid(x - 1, y) || !solid(x + 1, y)) ch = '8';
+          const k = idx(ch);
+          d[o] = RGB[k][0]; d[o + 1] = RGB[k][1]; d[o + 2] = RGB[k][2]; d[o + 3] = 255;
+        } else {
+          let a = 0;
+          if (solid(x, y - 1)) a = 150; else if (solid(x, y - 2)) a = 95; else if (solid(x, y - 3)) a = 50;
+          if (solid(x - 1, y) || solid(x + 1, y)) a = Math.max(a, 80);
+          else if (solid(x - 2, y) || solid(x + 2, y)) a = Math.max(a, 40);
+          d[o] = ar; d[o + 1] = ag; d[o + 2] = ab; d[o + 3] = a;
+        }
+      }
+    }
+    g.putImageData(img, 0, 0);
+  }
+
+  function drawFixtures(g, fx) {
+    const toY = (y) => BOARD_H - y;
+    for (const [x, y0, y1] of fx.ladders) {
+      for (let y = y0; y < y1; y += 8) {
+        const h = Math.min(8, y1 - y);
+        g.drawImage(ladder, 0, 0, 16, h, x, toY(y + h), 16, h);
+      }
+    }
+    for (const [x0, y0, dir] of fx.stairs) {
+      for (let i = 0; i < 48; i += 4) {
+        const x = dir > 0 ? x0 + i : x0 - i - 4;
+        const top = toY(y0 + i + 2);
+        g.fillStyle = pal('b'); g.fillRect(x, top, 4, 1);
+        g.fillStyle = pal('a'); g.fillRect(x, top + 1, 4, 2);
+        g.fillStyle = pal('8'); g.fillRect(x, top + 3, 4, 2);
+        g.fillStyle = pal('6'); g.fillRect(x, top + 5, 4, 1);
+      }
+    }
+    for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
+  }
+
+  function buildBoardCanvas(bd) {
+    const c = makeCanvas(BOARD_W, BOARD_H);
+    const g = c.getContext('2d');
+    const fx = boardFixtures(bd);
+    shadeMask(g, boardMask(bd), bd ? bd.p : 0);
+    drawFixtures(g, fx);
+    return { canvas: c, sconces: fx.sconces, braziers: fx.braziers };
+  }
+
+  function boardArt(bx, by) {
+    if (bx < 0 || bx >= 6) return null;
+    const bd = world.board(bx, by);
+    if (!bd.links) return null;
+    let art = boards.get(bd.p);
+    if (!art) { art = buildBoardCanvas(bd); boards.set(bd.p, art); }
+    return art;
+  }
+
+  /** Builds boards within one board of the view; drops distant ones. */
+  function prepare(cam, budget = 1) {
+    const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - 1, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + 1;
+    const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - 1, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + 1;
+    for (let by = by0; by <= by1 && budget > 0; by++) {
+      for (let bx = Math.max(0, bx0); bx <= Math.min(5, bx1) && budget > 0; bx++) {
+        const bd = world.board(bx, by);
+        if (bd.links && !boards.has(bd.p)) { boardArt(bx, by); budget--; }
+      }
+    }
+    if (boards.size > 48) {
+      for (const p of boards.keys()) {
+        const { x, y } = boardOfPos(p);
+        if (Math.abs(x * BOARD_W - cam.x) > 3 * BOARD_W || Math.abs(y * BOARD_H - cam.y) > 3 * BOARD_H) boards.delete(p);
+      }
+    }
+  }
+
+  function addLight(sx, sy, r, col, gain) {
+    const lx0 = Math.max(0, Math.floor((sx - r) / 4)), lx1 = Math.min(LIGHT_W - 1, Math.floor((sx + r) / 4));
+    const ly0 = Math.max(0, Math.floor((sy - r) / 4)), ly1 = Math.min(LIGHT_H - 1, Math.floor((sy + r) / 4));
+    const r2 = r * r;
+    for (let ly = ly0; ly <= ly1; ly++) {
+      for (let lx = lx0; lx <= lx1; lx++) {
+        const dx = lx * 4 + 2 - sx, dy = ly * 4 + 2 - sy;
+        const q = 1 - (dx * dx + dy * dy) / r2;
+        if (q <= 0) continue;
+        const k = q * q * gain, o = (ly * LIGHT_W + lx) * 3;
+        acc[o] += col[0] * k; acc[o + 1] += col[1] * k; acc[o + 2] += col[2] * k;
+      }
+    }
+  }
+
+  function glyph(ch, color) {
+    const key = ch + color;
+    let c = glyphCache.get(key);
+    if (!c) {
+      const rows = FONT[ch] || FONT['?'];
+      c = spriteCanvas(rows, false, { '#': color });
+      glyphCache.set(key, c);
+    }
+    return c;
+  }
+
+  /** Pixel-font text; align is 'left', 'center' or 'right'. */
+  function text(str, x, y, color = 'c', { align = 'left', scale = 1, shadow = '0' } = {}) {
+    str = String(str).toUpperCase();
+    const w = (str.length * (FONT_W + 1) - 1) * scale;
+    let x0 = align === 'center' ? Math.round(x - w / 2) : align === 'right' ? x - w : x;
+    for (const ch of str) {
+      if (shadow) ctx.drawImage(glyph(ch, shadow), x0 + scale, y + scale, FONT_W * scale, FONT_H * scale);
+      ctx.drawImage(glyph(ch, color), x0, y, FONT_W * scale, FONT_H * scale);
+      x0 += (FONT_W + 1) * scale;
+    }
+  }
+
+  function panel(x, y, w, h) {
+    ctx.fillStyle = shade(0.82);
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = pal('l');
+    ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y + h - 1, w, 1);
+    ctx.fillRect(x, y, 1, h); ctx.fillRect(x + w - 1, y, 1, h);
+    ctx.fillStyle = pal('k');
+    ctx.fillRect(x + 2, y + 2, w - 4, 1); ctx.fillRect(x + 2, y + h - 3, w - 4, 1);
+  }
+
+  // Back wall offset is half the camera position, wrapped to its 128 px pattern.
+  function drawBackground(cx, cy) {
+    const bgx = -(((Math.floor(cx / 2) % 128) + 128) % 128), bgy = ((Math.floor(cy / 2) % 128) + 128) % 128 - 128;
+    for (let y = bgy; y < VIEW_H; y += 128) for (let x = bgx; x < VIEW_W; x += 128) ctx.drawImage(background, x, y);
+  }
+
+  /** Draws every board in view, rock outside the band tree; returns the lit boards. */
+  function drawBoards(cx, cy, sx, sy) {
+    const bx0 = Math.floor((cx - VIEW_W / 2) / BOARD_W), bx1 = Math.floor((cx + VIEW_W / 2) / BOARD_W);
+    const by0 = Math.floor((cy - VIEW_H / 2) / BOARD_H), by1 = Math.floor((cy + VIEW_H / 2) / BOARD_H);
+    const lit = [];
+    for (let by = by0; by <= by1; by++) {
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const art = boardArt(bx, by);
+        ctx.drawImage(art ? art.canvas : rockCanvas.canvas, sx(bx * BOARD_W), sy((by + 1) * BOARD_H));
+        if (art) lit.push([bx, by, art]);
+      }
+    }
+    return lit;
+  }
+
+  function drawFlames(lit, sx, sy, t) {
+    for (const [bx, by, art] of lit) {
+      const wx = bx * BOARD_W, wy = by * BOARD_H;
+      for (const [x, y] of art.sconces) {
+        const f = sconceFlames[Math.floor(t * 8 + x) % 3];
+        ctx.drawImage(f, Math.round(sx(wx + x)) - 4, Math.round(sy(wy + y + 4)));
+        const fl = 1 + 0.06 * Math.sin(t * 13 + x);
+        addLight(sx(wx + x), sy(wy + y + 2), SCONCE_R * fl, [255, 168, 92], 0.95);
+      }
+      for (const [x, y] of art.braziers) {
+        ctx.drawImage(brazier, Math.round(sx(wx + x)) - 8, Math.round(sy(wy + y + 10)));
+        ctx.drawImage(flames[Math.floor(t * 9 + x) % 4], Math.round(sx(wx + x)) - 6, Math.round(sy(wy + y + 21)));
+        const fl = 1 + 0.08 * Math.sin(t * 9 + y) + 0.04 * Math.sin(t * 23 + x);
+        addLight(sx(wx + x), sy(wy + y + 14), FLAME_R * fl, [70, 255, 225], 1.1);
+      }
+    }
+  }
+
+  /** Draws the explorer and adds the torch light; returns the torch tip on screen. */
+  function drawExplorer(sim, sx, sy, t) {
+    const [fx, fy] = feet(sim);
+    const { anim, frame } = pose(sim);
+    const flip = sim.facing < 0;
+    const px = Math.round(sx(fx)) - 8, py = Math.round(sy(fy)) - 24;
+    const [tx, ty] = torchTip(anim, frame);
+    const tip = [px + (flip ? 15 - tx : tx), py + ty];
+    ctx.drawImage(sprites[anim][frame][flip ? 1 : 0], px, py);
+    if (sim.burn > 0) {
+      ctx.drawImage(torches[Math.floor(t * 12) % 3], tip[0] - 2, tip[1] - 4);
+      // Flicker amplitude grows as the burn falls.
+      const amp = 1.5 + 7 * (1 - sim.burn / BURN_S);
+      const flick = amp * (0.6 * Math.sin(t * 17.3) + 0.4 * Math.sin(t * 41.9 + 1.7));
+      addLight(tip[0], tip[1], Math.max(4, torchRadius(sim.burn) + flick), [255, 196, 128], 1.25);
+    } else {
+      ctx.drawImage(ember, tip[0] - 1, tip[1] - 1);
+      addLight(tip[0], tip[1], 8 + Math.sin(t * 20), [255, 110, 50], 1.2);
+    }
+    return tip;
+  }
+
+  // The light map multiplies the scene; only this upscale is smoothed.
+  function applyLight() {
+    const d = lightImg.data;
+    for (let i = 0, o = 0; i < acc.length; i += 3, o += 4) {
+      d[o] = AMBIENT[0] + acc[i]; d[o + 1] = AMBIENT[1] + acc[i + 1]; d[o + 2] = AMBIENT[2] + acc[i + 2]; d[o + 3] = 255;
+    }
+    lightCtx.putImageData(lightImg, 0, 0);
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(light, 0, 0, VIEW_W, VIEW_H);
+    ctx.restore();
+    ctx.imageSmoothingEnabled = false;
+  }
+
+  /**
+   * Draws the world around `cam` with the explorer `sim` (or none).
+   * `t` is seconds of wall time, used for flicker and animation.
+   */
+  function scene(sim, cam, t) {
+    const cx = Math.round(cam.x), cy = Math.round(cam.y);
+    const sx = (wx) => wx - cx + VIEW_W / 2;
+    const sy = (wy) => cy - wy + VIEW_H / 2;
+    prepare(cam);
+    acc.fill(0);
+    drawBackground(cx, cy);
+    const lit = drawBoards(cx, cy, sx, sy);
+    drawFlames(lit, sx, sy, t);
+    const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
+    applyLight();
+    if (tip) drawDust(sim, tip, t);
+    return tip;
+  }
+
+  // Motes show only inside the torch radius.
+  function drawDust(sim, tip, t) {
+    if (dust.length === 0) {
+      for (let i = 0; i < 48; i++) dust.push({ x: (hash3(i, 1, 2) % 200) - 100, y: (hash3(i, 3, 4) % 120) - 60, v: 2 + (hash3(i, 5, 6) % 7), ph: hash3(i, 7, 8) % 628 });
+    }
+    const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
+    for (const m of dust) {
+      const x = tip[0] + ((m.x + Math.sin(t * 0.7 + m.ph / 100) * 6 + 200) % 200) - 100;
+      const y = tip[1] + ((m.y + t * m.v + 120) % 120) - 60;
+      const dist = Math.hypot(x - tip[0], y - tip[1]);
+      const a = 1 - dist / (r * 0.9);
+      if (a <= 0) continue;
+      ctx.fillStyle = `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
+      ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+    }
+  }
+
+  function hud(sim) {
+    const frac = sim.burn / BURN_S;
+    ctx.fillStyle = pal('0');
+    ctx.fillRect(5, 5, 62, 7);
+    ctx.fillStyle = pal('k');
+    ctx.fillRect(6, 6, 60, 5);
+    ctx.fillStyle = pal('1');
+    ctx.fillRect(7, 7, 58, 3);
+    if (sim.burn > 0) {
+      const w = Math.max(1, Math.round(58 * frac));
+      ctx.fillStyle = pal(frac > 0.3 ? 'p' : frac > 0.1 ? 'o' : 'n');
+      ctx.fillRect(7, 7, w, 3);
+      ctx.fillStyle = pal('q');
+      ctx.fillRect(7, 7, w, 1);
+    } else if (Math.floor(sim.time * 4) % 2 === 0) {
+      text('EMBER', 70, 5, 'o');
+    }
+    text(`BAND ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
+  }
+
+  return { ctx, scene, hud, text, panel, prepare };
+}
+return { VIEW_W, VIEW_H, shade, spriteCanvas, createRenderer };
+})();
+
+// src/game/audio.mjs
+const __m10 = (() => {
+
+// WebAudio music and sound, synthesized; starts on the first key press.
+// Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
+// drum at 110 BPM. As the torch dims, layers enter and the tempo rises to
+// 128 BPM; a relight drops both back. A low-pass, a light bit-crush and tape
+// wobble (a slow LFO on every oscillator's detune) make it lo-fi.
+
+const E2 = 41.2034;
+const hz = (semi) => E2 * Math.pow(2, semi / 12);
+// Hijaz degrees as semitones above E.
+const H = [0, 1, 4, 5, 7, 8, 10];
+const deg = (d, oct = 0) => H[((d % 7) + 7) % 7] + 12 * (oct + Math.floor(d / 7));
+
+// Bass, one entry per 8th note over two bars, as Hijaz degrees.
+const BASS = [0, 0, 4, 0, 1, 0, 2, 0, 0, 0, 4, 0, 3, 2, 1, 0];
+// Maqsum on 8ths: D = doum, T = tek.
+const DRUM = 'DT.TD.T.DT.TD.TT';
+// Melody phrases over two bars: [16th step, degree, length in 16ths].
+const PHRASES = [
+  [[0, 7, 4], [4, 8, 2], [6, 9, 2], [8, 10, 6], [14, 9, 2], [16, 8, 4], [20, 7, 10]],
+  [[0, 11, 3], [3, 12, 1], [4, 11, 4], [8, 10, 2], [10, 9, 2], [12, 8, 4], [16, 9, 4], [20, 8, 2], [22, 7, 8]],
+  [[0, 14, 6], [6, 13, 2], [8, 12, 4], [12, 11, 4], [16, 10, 2], [18, 9, 2], [20, 8, 4], [24, 7, 8]],
+  [[0, 7, 2], [2, 8, 2], [4, 9, 4], [8, 8, 2], [10, 9, 2], [12, 10, 4], [16, 11, 8], [24, 10, 2], [26, 9, 2], [28, 8, 4]],
+];
+const ARP = [0, 2, 4, 6, 7, 6, 4, 2];
+
+function createAudio() {
+  let ac = null, master, music, sfx, wobble, noise, timer = 0;
+  let muted = false, intensity = 0, eased = 0, nextTime = 0, step = 0, phrase = 0;
+
+  function crushCurve(levels) {
+    const n = 2048, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      c[i] = Math.round(x * levels) / levels;
+    }
+    return c;
+  }
+
+  function start() {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!AC) return;
+    ac = new AC();
+    master = ac.createGain();
+    master.gain.value = muted ? 0 : 0.9;
+    master.connect(ac.destination);
+    music = ac.createGain();
+    music.gain.value = 0.42;
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 3400;
+    lp.Q.value = 0.6;
+    const crush = ac.createWaveShaper();
+    crush.curve = crushCurve(24);
+    const dry = ac.createGain(), wet = ac.createGain();
+    dry.gain.value = 0.7;
+    wet.gain.value = 0.3;
+    music.connect(lp);
+    lp.connect(dry).connect(master);
+    lp.connect(crush).connect(wet).connect(master);
+    sfx = ac.createGain();
+    sfx.gain.value = 0.55;
+    sfx.connect(master);
+    const lfo = ac.createOscillator();
+    lfo.frequency.value = 0.31;
+    wobble = ac.createGain();
+    wobble.gain.value = 11;
+    lfo.connect(wobble);
+    lfo.start();
+    noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    nextTime = ac.currentTime + 0.08;
+    timer = setInterval(schedule, 25);
+  }
+
+  // Every oscillator takes the tape wobble on its detune until it ends.
+  function osc(type, f, t, out) {
+    const o = ac.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(f, t);
+    wobble.connect(o.detune);
+    o.onended = () => wobble.disconnect(o.detune);
+    o.connect(out);
+    return o;
+  }
+
+  function env(t, peak, attack, release) {
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + attack + release);
+    return g;
+  }
+
+  function noiseHit(t, type, f, q, peak, dur, out) {
+    const src = ac.createBufferSource();
+    src.buffer = noise;
+    const flt = ac.createBiquadFilter();
+    flt.type = type;
+    flt.frequency.setValueAtTime(f, t);
+    flt.Q.value = q;
+    const g = env(t, peak, 0.003, dur);
+    src.connect(flt).connect(g).connect(out);
+    src.start(t, Math.random() * 0.5);
+    src.stop(t + dur + 0.05);
+    return flt;
+  }
+
+  function bass(t, semi, dur, oct2) {
+    const g = env(t, 0.3, 0.006, dur * 0.9);
+    const flt = ac.createBiquadFilter();
+    flt.type = 'lowpass';
+    flt.frequency.setValueAtTime(900, t);
+    flt.frequency.exponentialRampToValueAtTime(260, t + dur);
+    g.connect(flt).connect(music);
+    for (const [type, mul, lvl] of [['sawtooth', 1, 0.6], ['triangle', 0.5, 1]]) {
+      const lg = ac.createGain();
+      lg.gain.value = lvl;
+      lg.connect(g);
+      const o = osc(type, hz(semi) * mul * 2, t, lg);
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    }
+    if (oct2) {
+      const g2 = env(t, 0.06, 0.004, dur * 0.6);
+      g2.connect(music);
+      const o = osc('square', hz(semi + 24), t, g2);
+      o.start(t);
+      o.stop(t + dur);
+    }
+  }
+
+  function doum(t) {
+    const g = env(t, 0.9, 0.004, 0.32);
+    g.connect(music);
+    const o = osc('sine', 110, t, g);
+    o.frequency.exponentialRampToValueAtTime(48, t + 0.2);
+    o.start(t);
+    o.stop(t + 0.4);
+    noiseHit(t, 'lowpass', 500, 0.7, 0.25, 0.08, music);
+  }
+
+  function tek(t, peak) {
+    noiseHit(t, 'bandpass', 2600, 1.4, peak, 0.05, music);
+  }
+
+  function ney(t, semi, dur, peak) {
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.06);
+    g.gain.setValueAtTime(peak, t + Math.max(0.07, dur - 0.08));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.12);
+    const flt = ac.createBiquadFilter();
+    flt.type = 'lowpass';
+    flt.frequency.value = 2200;
+    g.connect(flt).connect(music);
+    const vib = ac.createOscillator();
+    vib.frequency.value = 5.2;
+    const vg = ac.createGain();
+    vg.gain.setValueAtTime(0, t);
+    vg.gain.linearRampToValueAtTime(14, t + Math.min(0.4, dur));
+    vib.connect(vg);
+    for (const [type, mul, lvl] of [['triangle', 1, 1], ['sine', 2, 0.25]]) {
+      const lg = ac.createGain();
+      lg.gain.value = lvl;
+      lg.connect(g);
+      const o = osc(type, hz(semi) * mul, t, lg);
+      vg.connect(o.detune);
+      o.start(t);
+      o.stop(t + dur + 0.2);
+    }
+    vib.start(t);
+    vib.stop(t + dur + 0.2);
+    noiseHit(t, 'bandpass', hz(semi) * 2, 3, peak * 0.15, Math.min(0.2, dur), music);
+  }
+
+  function drone(t, dur) {
+    for (const semi of [12, 19]) {
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.05, t + dur * 0.3);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      const flt = ac.createBiquadFilter();
+      flt.type = 'lowpass';
+      flt.frequency.value = 700;
+      g.connect(flt).connect(music);
+      const o = osc('sawtooth', hz(semi), t, g);
+      o.detune.value = semi === 12 ? -6 : 6;
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    }
+  }
+
+  function pluck(t, semi) {
+    const g = env(t, 0.07, 0.003, 0.14);
+    g.connect(music);
+    const o = osc('square', hz(semi), t, g);
+    o.start(t);
+    o.stop(t + 0.2);
+  }
+
+  function schedule() {
+    if (!ac) return;
+    eased += (intensity - eased) * 0.08;
+    const bpm = 110 + 18 * eased;
+    const s16 = 60 / bpm / 4;
+    while (nextTime < ac.currentTime + 0.12) {
+      const t = nextTime, i = step % 32;
+      if (i % 2 === 0) {
+        const e = i / 2;
+        bass(t, deg(BASS[e]), s16 * 1.8, eased > 0.75);
+        const hit = DRUM[e];
+        if (hit === 'D') doum(t);
+        else if (hit === 'T') tek(t, 0.22);
+      } else if (eased > 0.5) {
+        tek(t, 0.07 + 0.06 * eased);
+      }
+      if (i === 0) {
+        if (eased > 0.25) drone(t, s16 * 32);
+        if (step % 64 === 0) phrase = (phrase + 1) % PHRASES.length;
+      }
+      for (const [at, d, len] of PHRASES[phrase]) {
+        if (at === i) ney(t, deg(d, 1), len * s16, 0.16);
+      }
+      if (eased > 0.75 && i % 2 === 1) pluck(t, deg(ARP[(i >> 1) % 8], 3));
+      nextTime += s16;
+      step++;
+    }
+  }
+
+  function stepSound(t) {
+    noiseHit(t, 'bandpass', 380 + Math.random() * 120, 1.2, 0.35, 0.05, sfx);
+    const g = env(t, 0.25, 0.002, 0.06);
+    g.connect(sfx);
+    const o = osc('sine', 120, t, g);
+    o.frequency.exponentialRampToValueAtTime(60, t + 0.06);
+    o.start(t); o.stop(t + 0.08);
+  }
+
+  function creakSound(t) {
+    const flt = ac.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.value = 700;
+    flt.Q.value = 9;
+    const g = env(t, 0.12, 0.02, 0.16);
+    flt.connect(g).connect(sfx);
+    const o = osc('sawtooth', 210 + Math.random() * 30, t, flt);
+    o.frequency.exponentialRampToValueAtTime(140, t + 0.18);
+    o.start(t); o.stop(t + 0.22);
+  }
+
+  function relightSound(t) {
+    const f = noiseHit(t, 'bandpass', 300, 0.9, 0.5, 0.55, sfx);
+    f.frequency.exponentialRampToValueAtTime(3800, t + 0.45);
+    for (const [semi, lag] of [[deg(7, 2), 0.08], [deg(11, 2), 0.16], [deg(14, 2), 0.24]]) {
+      const g = env(t + lag, 0.1, 0.005, 1.1);
+      g.connect(sfx);
+      const o = osc('sine', hz(semi), t + lag, g);
+      o.start(t + lag); o.stop(t + lag + 1.2);
+    }
+  }
+
+  function sputterSound(t) {
+    for (let k = 0; k < 3; k++) noiseHit(t + k * 0.03 * Math.random(), 'highpass', 1800, 0.8, 0.12 * Math.random() + 0.04, 0.02, sfx);
+  }
+
+  function emberSound(t) {
+    const g = env(t, 0.3, 0.01, 0.9);
+    g.connect(sfx);
+    const o = osc('triangle', 220, t, g);
+    o.frequency.exponentialRampToValueAtTime(55, t + 0.9);
+    o.start(t); o.stop(t + 1);
+  }
+
+  function overSound(t) {
+    for (const [k, semi] of [[0, deg(7, 1)], [1, deg(5, 1)], [2, deg(2, 1)], [3, deg(0, 1)]]) ney(t + k * 0.35, semi, 0.5, 0.2);
+  }
+
+  function bandSound(t) {
+    for (const [k, semi] of [[0, deg(7, 2)], [1, deg(9, 2)], [2, deg(11, 2)]]) pluck(t + k * 0.09, semi);
+  }
+
+  const SOUNDS = {
+    step: stepSound, creak: creakSound, relight: relightSound, sputter: sputterSound,
+    ember: emberSound, over: overSound, band: bandSound,
+  };
+
+  function play(name) {
+    if (!ac || muted || !SOUNDS[name]) return;
+    SOUNDS[name](ac.currentTime + 0.005);
+  }
+
+  return {
+    start,
+    play,
+    /** Sets music intensity from the torch: 0 full, 1 at ember. */
+    setIntensity(v) { intensity = Math.max(0, Math.min(1, v)); },
+    relight() { intensity = 0; eased = Math.min(eased, 0.15); },
+    toggleMute() {
+      muted = !muted;
+      if (master) master.gain.setTargetAtTime(muted ? 0 : 0.9, ac.currentTime, 0.02);
+      return muted;
+    },
+    get muted() { return muted; },
+    stop() { if (timer) clearInterval(timer); timer = 0; },
+  };
+}
+return { createAudio };
+})();
+
+// src/game/autopilot.mjs
+const __m11 = (() => {
+const { DX, DY } = __m2;
+const { createSim, step } = __m6;
+// Scripted input for the self-test: walks the explorer up band 0's chain of
+// route flames by feeding the same arrow input a player would.
+
+
+
+const SELFTEST_CODE = '00000000';
+const SELFTEST_TICKS = 3600;
+
+/** Link directions of the cell path from (bd, cell) to (goal, goalCell). */
+function pathTo(world, bd, cell, goal, goalCell) {
+  const lo = Math.min(bd.band, goal.band) - 1, hi = Math.max(bd.band, goal.band) + 1;
+  const key = (b, c) => b.p * 128 + c;
+  const target = key(goal, goalCell);
+  const prev = new Map([[key(bd, cell), null]]);
+  const queue = [[bd, cell]];
+  for (let h = 0; h < queue.length && !prev.has(target); h++) {
+    const [b, c] = queue[h];
+    for (let d = 0; d < 8; d++) {
+      const t = world.step(b, c, d);
+      if (!t || t.board.band < lo || t.board.band > hi) continue;
+      const k = key(t.board, t.cell);
+      if (prev.has(k)) continue;
+      prev.set(k, [key(b, c), d]);
+      queue.push([t.board, t.cell]);
+    }
+  }
+  if (!prev.has(target)) return null;
+  const dirs = [];
+  for (let k = target; prev.get(k); k = prev.get(k)[0]) dirs.push(prev.get(k)[1]);
+  return dirs.reverse();
+}
+
+/** Input source steering toward each goal cell in turn. */
+function createAutopilot(world, goals) {
+  let gi = 0, path = null, at = -1;
+  return function input(s) {
+    if (s.mode === 'link') return [DX[s.link], DY[s.link]];
+    while (gi < goals.length) {
+      const g = goals[gi];
+      const gb = world.board(g.x, g.y);
+      if (s.bd !== gb || s.cell !== g.cell) break;
+      if (Math.abs(s.off) > 1) return [-Math.sign(s.off), 0];
+      gi++;
+      path = null;
+    }
+    if (gi >= goals.length) return [0, 0];
+    const k = s.bd.p * 128 + s.cell;
+    if (!path || at !== k) {
+      const g = goals[gi];
+      path = pathTo(world, s.bd, s.cell, world.board(g.x, g.y), g.cell);
+      at = k;
+    }
+    if (!path || !path.length) return [0, 0];
+    return [DX[path[0]], DY[path[0]]];
+  };
+}
+
+/**
+ * Runs the self-test script: band 0's entry, then up its flame chain, for
+ * `ticks` steps. Returns the sim and the first unmet requirement, if any.
+ */
+function runScript(world, ticks = SELFTEST_TICKS) {
+  const t = world.tree(0);
+  const sim = createSim(world, world.resumePoint(t.entryX, 0));
+  const drive = createAutopilot(world, world.bandFlames(0).chain);
+  for (let i = 0; i < ticks; i++) {
+    const [h, v] = drive(sim);
+    step(sim, h, v);
+  }
+  const st = sim.stats;
+  let reason = null;
+  if (st.corridor < 1) reason = 'no corridor run';
+  else if (st.ladderUp < 1) reason = 'no ladder climbed';
+  else if (st.seams < 1) reason = 'no board seam crossed';
+  else if (st.flames < 1) reason = 'no flame touched';
+  else if (sim.state !== 'play') reason = `run ended: ${sim.state}`;
+  return { sim, reason };
+}
+return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
+})();
+
+// src/game/main.mjs
+const __m12 = (() => {
+const { createWorld, boardOfPos } = __m4;
+const { parseCode, formatCode, codeFromBytes } = __m1;
+const { encodeSave, decodeSave } = __m5;
+const { createSim, step, TICK, BURN_S, feet, pose } = __m6;
+const { createRenderer, VIEW_W, VIEW_H, shade } = __m9;
+const { createAudio } = __m10;
+const { runScript, SELFTEST_CODE } = __m11;
+// Boot, input, the fixed 60 Hz loop and the title, play, pause and end
+// screens. `#selftest` in the URL runs the self-test instead.
+
+
+
+
+
+
+
+
+const KEY_SAVE = 'infinite-maze.save';
+const KEY_BEST = 'infinite-maze.best';
+
+// Every storage access is guarded; the game runs without storage.
+function load(key) {
+  try { return globalThis.localStorage.getItem(key); } catch { return null; }
+}
+function store(key, value) {
+  try { globalThis.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
+}
+
+const display = document.getElementById('screen');
+const dctx = display.getContext('2d');
+const view = document.createElement('canvas');
+view.width = VIEW_W;
+view.height = VIEW_H;
+
+function fit() {
+  const k = Math.max(1, Math.floor(Math.min(innerWidth / VIEW_W, innerHeight / VIEW_H)));
+  display.width = VIEW_W * k;
+  display.height = VIEW_H * k;
+}
+
+function present() {
+  dctx.imageSmoothingEnabled = false;
+  dctx.drawImage(view, 0, 0, display.width, display.height);
+}
+
+function rollCode() {
+  const b = new Uint8Array(5);
+  globalThis.crypto.getRandomValues(b);
+  return codeFromBytes(b);
+}
+
+function snapCam(cam, sim) {
+  const [x, y] = feet(sim);
+  cam.x = x;
+  cam.y = y + 18;
+}
+
+// Lerp toward a target held inside a deadzone around the view centre.
+function followCam(cam, sim) {
+  const [x, y] = feet(sim);
+  const tx = x, ty = y + 18;
+  let gx = cam.x, gy = cam.y;
+  if (tx - cam.x > 20) gx = tx - 20; else if (cam.x - tx > 20) gx = tx + 20;
+  if (ty - cam.y > 12) gy = ty - 12; else if (cam.y - ty > 12) gy = ty + 12;
+  cam.x += (gx - cam.x) * 0.16;
+  cam.y += (gy - cam.y) * 0.16;
+}
+
+function clock(s) {
+  const m = Math.floor(s / 60), r = Math.floor(s % 60);
+  return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+function selftest() {
+  const errors = [];
+  window.onerror = (msg) => { errors.push(String(msg)); };
+  window.addEventListener('unhandledrejection', (e) => { errors.push(`rejection: ${e.reason}`); });
+  const finish = (verdict) => { document.body.dataset.selftest = verdict; };
+  try {
+    const world = createWorld(SELFTEST_CODE);
+    const { sim, reason } = runScript(world);
+    if (reason) { finish(`fail: ${reason}`); return; }
+    fit();
+    const r = createRenderer(view, world);
+    const cam = { x: 0, y: 0 };
+    snapCam(cam, sim);
+    r.scene(sim, cam, 0);
+    r.hud(sim);
+    present();
+    const px = view.getContext('2d').getImageData(0, 0, VIEW_W, VIEW_H).data;
+    const colours = new Set();
+    for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
+    if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
+    // The verdict waits one task, so queued error and rejection events count.
+    setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
+  } catch (e) {
+    finish(`fail: ${e && e.message ? e.message : e}`);
+  }
+}
+
+const DIRS = {
+  ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
+};
+
+function readBest(code) {
+  try { return JSON.parse(load(KEY_BEST) || '{}')[code] ?? null; } catch { return null; }
+}
+
+function writeBest(code, band) {
+  let all = {};
+  try { all = JSON.parse(load(KEY_BEST) || '{}'); } catch { all = {}; }
+  if (all[code] === undefined || band > all[code]) { all[code] = band; store(KEY_BEST, JSON.stringify(all)); }
+}
+
+/** State shared by input, tick and draw. */
+function createGame() {
+  return {
+    audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
+    code: parseCode((decodeSave(load(KEY_SAVE) || '') || {}).code || '') || rollCode(),
+    world: null, renderer: null, sim: null, preview: null,
+    screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
+  };
+}
+
+// Title camera: the explorer stands 118 px left of the view centre, clear of the menu panel.
+function titleCam(g) {
+  snapCam(g.cam, g.preview);
+  g.cam.x += 118;
+}
+
+function useCode(g, code) {
+  g.code = code;
+  g.world = createWorld(code);
+  g.renderer = createRenderer(view, g.world);
+  g.preview = createSim(g.world, g.world.resumePoint(g.world.tree(0).entryX, 0));
+  titleCam(g);
+}
+
+/** Starts a run at save position p, or at band 0's entry when p is null. */
+function begin(g, p = null, carry = null) {
+  const at = p === null ? { x: g.world.tree(0).entryX, y: 0 } : boardOfPos(p);
+  g.sim = createSim(g.world, g.world.resumePoint(at.x, at.y), carry);
+  snapCam(g.cam, g.sim);
+  g.screen = 'play';
+  g.note = '';
+}
+
+function hereCode(g) {
+  return encodeSave(g.code, g.sim.bd.x, g.sim.bd.y);
+}
+
+function entryCode(g) {
+  const { x, y } = boardOfPos(g.sim.lastEntry);
+  return encodeSave(g.code, x, y);
+}
+
+function submitTyped(g) {
+  const save = decodeSave(g.typing);
+  if (save) {
+    if (save.code !== g.code) useCode(g, save.code);
+    g.typing = null;
+    begin(g, save.p);
+    return;
+  }
+  const c = parseCode(g.typing);
+  if (c) { useCode(g, c); g.typing = null; g.note = ''; return; }
+  g.note = 'NOT A SEED OR SAVE CODE';
+}
+
+function typingKey(g, e) {
+  if (e.key === 'Enter') submitTyped(g);
+  else if (e.key === 'Escape') { g.typing = null; g.note = ''; }
+  else if (e.key === 'Backspace') g.typing = g.typing.slice(0, -1);
+  else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < 22) g.typing += e.key.toUpperCase();
+}
+
+function titleKey(g, e) {
+  if (g.typing !== null) { typingKey(g, e); return; }
+  if (e.key === 'Enter' || e.code === 'Space') begin(g);
+  else if (e.code === 'KeyR') useCode(g, rollCode());
+  else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
+  else if (e.code === 'KeyC') {
+    const s = decodeSave(load(KEY_SAVE) || '');
+    if (s) { if (s.code !== g.code) useCode(g, s.code); begin(g, s.p); }
+  }
+}
+
+function playKey(g, e) {
+  if (e.key === 'Escape') { g.screen = 'pause'; store(KEY_SAVE, hereCode(g)); return; }
+  if (DIRS[e.code]) g.keys.add(DIRS[e.code]);
+}
+
+function pauseKey(g, e) {
+  if (e.key === 'Escape') g.screen = 'play';
+  else if (e.code === 'KeyQ') { g.screen = 'title'; titleCam(g); }
+}
+
+function overKey(g, e) {
+  const s = g.sim;
+  if (e.key === 'Enter' || e.code === 'Space') {
+    begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
+  } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; titleCam(g); }
+}
+
+const SCREEN_KEYS = { title: titleKey, play: playKey, pause: pauseKey, over: overKey };
+
+function onKeyDown(g, e) {
+  g.audio.start();
+  if (DIRS[e.code] || e.code === 'Space') e.preventDefault();
+  if (e.code === 'KeyM' && g.typing === null) { g.audio.toggleMute(); return; }
+  SCREEN_KEYS[g.screen](g, e);
+}
+
+function stepSim(g) {
+  const h = (g.keys.has('r') ? 1 : 0) - (g.keys.has('l') ? 1 : 0);
+  const v = (g.keys.has('u') ? 1 : 0) - (g.keys.has('d') ? 1 : 0);
+  step(g.sim, h, v);
+}
+
+function handleEvents(g) {
+  const s = g.sim;
+  for (const ev of s.events) {
+    if (ev === 'relight') { g.audio.play('relight'); g.audio.relight(); }
+    else if (ev === 'ember' || ev === 'over' || ev === 'band') g.audio.play(ev);
+    if (ev === 'band') writeBest(g.code, s.maxBand);
+    if (ev === 'entry') store(KEY_SAVE, entryCode(g));
+    if (ev === 'seam') g.world.retain(s.bd.band - 1, s.bd.band + 1);
+  }
+}
+
+/** Footsteps, ladder creaks, low-burn sputter and music intensity. */
+function soundCues(g) {
+  const s = g.sim;
+  const { anim, frame } = pose(s);
+  const walking = anim === 'run' || anim === 'gallery';
+  if (walking && frame % 4 === 0 && frame !== g.footFrame) g.audio.play('step');
+  g.footFrame = walking ? frame : -1;
+  if (anim === 'climb' && frame % 2 === 0 && frame !== g.climbFrame) g.audio.play('creak');
+  g.climbFrame = anim === 'climb' ? frame : -1;
+  const frac = s.burn / BURN_S;
+  if (s.burn > 0 && frac < 0.2 && Math.random() < 0.015 + 0.12 * (0.2 - frac)) g.audio.play('sputter');
+  g.audio.setIntensity(s.burn > 0 ? 1 - frac : 1);
+}
+
+function endRun(g) {
+  g.screen = 'over';
+  writeBest(g.code, g.sim.maxBand);
+  store(KEY_SAVE, entryCode(g));
+}
+
+function tick(g) {
+  if (g.screen !== 'play') return;
+  stepSim(g);
+  handleEvents(g);
+  soundCues(g);
+  followCam(g.cam, g.sim);
+  if (g.sim.state === 'over') endRun(g);
+}
+
+function drawTitle(g, t) {
+  const r = g.renderer;
+  r.scene(g.preview, g.cam, t);
+  const saved = decodeSave(load(KEY_SAVE) || '');
+  const best = readBest(g.code);
+  r.ctx.fillStyle = shade(0.45);
+  r.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  r.text('INFINITE MAZE', VIEW_W / 2, 18, 'm', { align: 'center', scale: 2 });
+  r.text('A TOMB WITHOUT END', VIEW_W / 2, 38, 'a', { align: 'center' });
+  r.panel(62, 54, 196, saved ? 92 : 82);
+  r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 62, 'i', { align: 'center' });
+  if (g.typing !== null) {
+    r.text(`CODE  ${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 80, 'c');
+    r.text('ENTER  ACCEPT', 72, 96, 'b');
+    r.text('ESC    CANCEL', 72, 108, 'b');
+    r.text('SEED  XXXX-XXXX', 72, 124, '9');
+    r.text('SAVE  XXXX-XXXX:P', 72, 134, '9');
+  } else {
+    r.text('ENTER  BEGIN', 72, 80, 'c');
+    r.text('R      NEW ROLL', 72, 92, 'b');
+    r.text('T      TYPE A CODE', 72, 104, 'b');
+    if (saved) r.text(`C      ${formatCode(saved.code)}:${saved.p}`, 72, 116, 'b');
+    r.text(best === null ? 'NO BAND REACHED YET' : `BEST BAND  ${best}`, VIEW_W / 2, saved ? 132 : 120, 'p', { align: 'center' });
+  }
+  if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
+  r.text('ARROWS OR WASD MOVE  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+}
+
+function drawPause(g) {
+  const r = g.renderer;
+  r.panel(50, 44, 220, 92);
+  r.text('PAUSED', VIEW_W / 2, 54, 'm', { align: 'center', scale: 2 });
+  r.text('SAVE CODE', VIEW_W / 2, 78, 'a', { align: 'center' });
+  r.text(hereCode(g), VIEW_W / 2, 90, 'i', { align: 'center' });
+  r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 104, '9', { align: 'center' });
+  r.text('ESC RESUME  M MUTE  Q TITLE', VIEW_W / 2, 120, 'b', { align: 'center' });
+}
+
+function drawOver(g) {
+  const r = g.renderer, s = g.sim;
+  r.panel(40, 34, 240, 112);
+  r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
+  r.text(`BANDS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
+  r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
+  r.text('SAVE CODE', VIEW_W / 2, 96, 'a', { align: 'center' });
+  r.text(entryCode(g), VIEW_W / 2, 108, 'i', { align: 'center' });
+  r.text('ENTER CONTINUE  Q TITLE', VIEW_W / 2, 126, 'b', { align: 'center' });
+}
+
+function draw(g, t) {
+  if (g.screen === 'title') {
+    drawTitle(g, t);
+  } else {
+    g.renderer.scene(g.sim, g.cam, t);
+    g.renderer.hud(g.sim);
+    if (g.screen === 'pause') drawPause(g);
+    else if (g.screen === 'over') drawOver(g);
+  }
+  present();
+}
+
+/** Fixed 60 Hz ticks, rendering once per animation frame. */
+function runLoop(g) {
+  let last = performance.now(), acc = 0;
+  function frame(now) {
+    acc += Math.min(0.25, (now - last) / 1000);
+    last = now;
+    while (acc >= TICK) { tick(g); acc -= TICK; }
+    draw(g, now / 1000);
+    requestAnimationFrame(frame);
+  }
+  draw(g, 0);
+  requestAnimationFrame(frame);
+}
+
+function boot() {
+  const g = createGame();
+  window.addEventListener('keydown', (e) => onKeyDown(g, e));
+  window.addEventListener('keyup', (e) => { if (DIRS[e.code]) g.keys.delete(DIRS[e.code]); });
+  window.addEventListener('blur', () => g.keys.clear());
+  window.addEventListener('resize', fit);
+  fit();
+  useCode(g, g.code);
+  runLoop(g);
+}
+
+if (location.hash === '#selftest') selftest();
+else boot();
+return {  };
+})();
+})();
+</script>
+</body>
+</html>
