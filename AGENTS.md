@@ -43,6 +43,8 @@ and does not search it.
 
 ## Rules
 
-- No npm dependencies and no network access, at build or run time.
+- No npm dependencies and no network access, at build or run time. The one
+  exception is `cdk/`, the infrastructure for maze.2ad.com: its dependencies
+  are in `package.json` and never reach the game build or `infinite-maze.html`.
 - Changing generation changes the pinned digest of bands 0..99 in
   `test/world.test.mjs` and `tools/acceptance.mjs`; update both on purpose.

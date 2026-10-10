@@ -62,3 +62,22 @@ node tools/acceptance.mjs
 percentile flame gaps and its run time. `infinite-maze.html#selftest` boots
 seed `0000-0000` and drives 3600 ticks of scripted input. It then sets
 `data-selftest` on `<body>`.
+
+## Deploy
+
+The game is served at https://maze.2ad.com from a private S3 bucket behind
+CloudFront. `cdk/` defines the bucket, certificate, distribution and DNS
+records in the shared `2ad.com` zone, which the stack imports read-only.
+
+```sh
+export AWS_PROFILE=awsapproach
+bun install --frozen-lockfile
+bun run test
+bun run cdk:deploy -- StackMaze2adCom --require-approval never
+aws s3 cp infinite-maze.html s3://maze-us-east-1-504242000181/index.html \
+  --cache-control "no-cache, no-store, must-revalidate" \
+  --content-type "text/html; charset=utf-8"
+aws cloudfront create-invalidation --paths "/*" \
+  --distribution-id "$(aws cloudformation describe-stacks --stack-name StackMaze2adCom \
+    --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)"
+```
