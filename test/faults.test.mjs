@@ -14,11 +14,12 @@ const I0 = -2, I1 = 2;
 const world = createWorld('00000000');
 const key = (a, b) => `${a},${b}`;
 
-/** A view of `world` with some boards and band flames (keyed `u,v`) replaced. */
-function broken(base, { boards = new Map(), flames = new Map() } = {}) {
+/** A view of `world` with some boards, band trees and band flames (keyed `u,v`) replaced. */
+function broken(base, { boards = new Map(), trees = new Map(), flames = new Map() } = {}) {
   return {
     ...base,
     board: (x, y) => boards.get(key(x, y)) ?? base.board(x, y),
+    tree: (u, v) => trees.get(key(u, v)) ?? base.tree(u, v),
     bandFlames: (u, v) => flames.get(key(u, v)) ?? base.bandFlames(u, v),
     flamesAt: (x, y) => {
       let cells = base.flamesAt(x, y);
@@ -463,7 +464,42 @@ test('saves rejects a resumed board that differs from the board in sequence', ()
 test('simple route rejects a block path that visits a child twice', () => {
   const w = createWorld('00000000', { revisitLevel: 2 });
   const errors = checkSimpleRoute(w, -30, 30).errors;
-  assert.ok(errors.some((e) => e.includes('cannot leave') || e.includes('visited again')), errors.join('\n'));
+  assert.ok(errors.some((e) => e.includes('cannot leave through exactly one other boundary door')), errors.join('\n'));
+});
+
+test('simple route rejects a walk that returns to a band it visited', () => {
+  // Seed K7Q2-M9XA: route band 3, (-1, 0), leaves through a new door into band
+  // (0, 0), which now enters from (-1, 0), so the walk meets (0, 0) again.
+  const sound = createWorld('K7Q2M9XA');
+  const third = routeBands(sound, 3, 3)[0];
+  assert.deepEqual([third.u, third.v], [-1, 0]);
+  assert.deepEqual(checkSimpleRoute(sound, -3, 6).errors, []);
+  const copies = new Map();
+  const copy = (bd) => { if (!copies.has(key(bd.x, bd.y))) copies.set(key(bd.x, bd.y), copyBoard(bd)); return copies.get(key(bd.x, bd.y)); };
+  // Drops the door pair through wall `wall` of board i of band (u, v).
+  const dropPair = (u, v, i, wall) => {
+    const { x, y } = boardCoords(u, v, i), d = WALL_DIR[wall];
+    dropDoor(copy(sound.board(x, y)), d);
+    dropDoor(copy(sound.board(x + DX[d], y + DY[d])), d ^ 2);
+  };
+  const t3 = sound.tree(-1, 0), t0 = sound.tree(0, 0);
+  dropPair(-1, 0, t3.exit, t3.exitWall);
+  dropPair(0, 0, t0.entry, t0.entryWall);
+  // A door pair across band (0, 0)'s left wall, on the first row of tree boards on both sides.
+  let row = -1;
+  for (let y = 0; y < 4 && row < 0; y++) {
+    const inner = sound.board(0, y), outer = sound.board(-1, y);
+    if (!inner.links || !outer.links) continue;
+    const cell = doorCell(sound.H, 0, y, 2);
+    addDoor(copy(inner), 2, cell);
+    addDoor(copy(outer), 0, acrossDoor(cell, 2));
+    row = y;
+  }
+  assert.ok(row >= 0, 'no row holds tree boards on both sides of the wall');
+  const w = broken(sound, { trees: new Map([[key(0, 0), { ...t0, entryWall: 0 }]]) });
+  for (const bd of copies.values()) w._set(bd.x, bd.y, bd);
+  const errors = checkSimpleRoute(w, -3, 6).errors;
+  assert.ok(errors.includes('route band 4, band (0,0): visited again, first as route band 0'), errors.join('\n'));
 });
 
 test('continuity rejects a door offset that differs on the two sides of one block wall', () => {
@@ -489,7 +525,8 @@ test('continuity rejects a door offset that differs on the two sides of one bloc
 
 test('start chain rejects a start block placed off centre', () => {
   const errors = checkStartChain(createWorld('00000000', { offCentre: true })).errors;
-  assert.ok(errors.some((e) => e.includes('centre child') || e.includes('no wall pair')), errors.join('\n'));
+  const centre = /^level 2: the centre child is not entered across wall [LRDU] and left across wall [LRDU]$/;
+  assert.ok(errors.some((e) => centre.test(e)), errors.join('\n'));
 });
 
 test('walls rejects a band whose two boundary doors share a wall', () => {
@@ -522,6 +559,8 @@ test('walls rejects a band whose two boundary doors share a wall', () => {
 test('locate rejects a world whose location gives one band a wrong exit', () => {
   const { u, v } = routeBand(3);
   const w = createWorld('00000000', { wrongExit: { u, v } });
+  // The fault bends only the location; the doors keep the true route.
+  assert.deepEqual(checkSimpleRoute(w, -5, 5).errors, []);
   const errors = checkLocate(w, -5, 5).errors;
-  assert.ok(errors.some((e) => e.startsWith(`band (${u},${v}): locates its exit`)), errors.join('\n'));
+  assert.ok(errors.some((e) => e.startsWith(`band (${u},${v}): locates its exit at wall `) && e.includes('; the route follows wall ')), errors.join('\n'));
 });

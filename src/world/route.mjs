@@ -126,10 +126,9 @@ function withLoop(path) {
  * rule each, for the acceptance harness's fault tests:
  * - `revisitLevel`: section 4 block paths at that level repeat a child;
  * - `skewWall` { k, i, j, w }: block (k, i, j) reads wall w one band off;
- * - `offCentre`: the start chain takes the bottom-middle child as centre;
- * - `wrongExit` { u, v }: band (u, v) locates with a wrong exit wall.
+ * - `offCentre`: the start chain takes the bottom-middle child as centre.
  */
-export function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = false, wrongExit = null } = {}) {
+export function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = false } = {}) {
   const blocks = new Map();
   const chain = [];
 
@@ -229,8 +228,7 @@ export function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = 
     if (i === 0 && j === 0) return startRoute(k);
     const last = t === p.length - 1;
     const E = t === 0 ? parent.E : wallTo(c, p[t - 1]);
-    let X = last ? parent.X : wallTo(c, p[t + 1]);
-    if (k === 1 && wrongExit && wrongExit.u === i && wrongExit.v === j) X = [0, 1, 2, 3].find((w) => w !== E && w !== X);
+    const X = last ? parent.X : wallTo(c, p[t + 1]);
     const r = {
       k, i, j, E, X,
       // The first and last child inherit the parent's crossing; the others cross a level-k wall.
@@ -270,5 +268,5 @@ export function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = 
     return Math.max(0, chain.length - 1);
   }
 
-  return { startChain, startRoute, childRoute, blockRoute, locate, crossing, childOf, startLevel };
+  return { startChain, startRoute, childRoute, blockRoute, locate, startLevel };
 }

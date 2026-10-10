@@ -773,9 +773,8 @@ const MAX_DEPTH = 2;
 const BDX = [1, 0, -1, 0];
 const BDY = [0, 1, 0, -1];
 
-// Route walls L R D U as board directions, and back.
+// Route walls L R D U as board directions.
 const WALL_DIR = [2, 0, 3, 1];
-const DIR_WALL = [1, 3, 0, 2];
 
 function boardNeighbor(i, d) {
   const x = (i % BANDW) + BDX[d], y = ((i / BANDW) | 0) + BDY[d];
@@ -876,7 +875,7 @@ function rockBand(u, v) {
     route: [], routeIndex: none, depth: none, parent: none,
   };
 }
-return { BANDW, BANDH, NBOARD, MIN_ROUTE, MAX_DEPTH, BDX, BDY, WALL_DIR, DIR_WALL, boardNeighbor, wallBoard, buildBandTree, rockBand };
+return { BANDW, BANDH, NBOARD, MIN_ROUTE, MAX_DEPTH, BDX, BDY, WALL_DIR, boardNeighbor, wallBoard, buildBandTree, rockBand };
 })();
 
 // src/world/route.mjs
@@ -1010,10 +1009,9 @@ function withLoop(path) {
  * rule each, for the acceptance harness's fault tests:
  * - `revisitLevel`: section 4 block paths at that level repeat a child;
  * - `skewWall` { k, i, j, w }: block (k, i, j) reads wall w one band off;
- * - `offCentre`: the start chain takes the bottom-middle child as centre;
- * - `wrongExit` { u, v }: band (u, v) locates with a wrong exit wall.
+ * - `offCentre`: the start chain takes the bottom-middle child as centre.
  */
-function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = false, wrongExit = null } = {}) {
+function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = false } = {}) {
   const blocks = new Map();
   const chain = [];
 
@@ -1113,8 +1111,7 @@ function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = false, 
     if (i === 0 && j === 0) return startRoute(k);
     const last = t === p.length - 1;
     const E = t === 0 ? parent.E : wallTo(c, p[t - 1]);
-    let X = last ? parent.X : wallTo(c, p[t + 1]);
-    if (k === 1 && wrongExit && wrongExit.u === i && wrongExit.v === j) X = [0, 1, 2, 3].find((w) => w !== E && w !== X);
+    const X = last ? parent.X : wallTo(c, p[t + 1]);
     const r = {
       k, i, j, E, X,
       // The first and last child inherit the parent's crossing; the others cross a level-k wall.
@@ -1154,7 +1151,7 @@ function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = false, 
     return Math.max(0, chain.length - 1);
   }
 
-  return { startChain, startRoute, childRoute, blockRoute, locate, crossing, childOf, startLevel };
+  return { startChain, startRoute, childRoute, blockRoute, locate, startLevel };
 }
 return { MAX_LEVEL, WX, WY, floorDiv, blockSize, blockOrigin, blockOf, createRoute };
 })();
@@ -1328,10 +1325,12 @@ function cellPath(links, from, to) {
 /**
  * `gapLimitMs` bounds the walking time between consecutive route flames;
  * spec section 3 sets 150 s. `carveCells` sets the cells each board keeps;
- * NCELL keeps them all. The route's fault options pass to createRoute.
+ * NCELL keeps them all. The route's fault options pass to createRoute. The
+ * `wrongExit` { u, v } fault gives band (u, v) a wrong exit wall in the
+ * location `locate` returns, while its band tree keeps the true route.
  */
 function createWorld(code, options = {}) {
-  const { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = options;
+  const { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS, wrongExit = null } = options;
   const H = makeHasher(worldKey(code));
   const route = createRoute(H, options);
   const trees = new Map();
@@ -1388,6 +1387,13 @@ function createWorld(code, options = {}) {
   function prev(u, v) {
     const loc = route.locate(u, v);
     return loc ? { u: u + WX[loc.E], v: v + WY[loc.E] } : null;
+  }
+
+  /** Section 6 location of band (u, v): { E, X } walls, or null for rock. */
+  function locate(u, v) {
+    const loc = route.locate(u, v);
+    if (!loc || !wrongExit || wrongExit.u !== u || wrongExit.v !== v) return loc;
+    return { E: loc.E, X: [0, 1, 2, 3].find((w) => w !== loc.E && w !== loc.X) };
   }
 
   /** Entry board of band (u, v), or null for a rock band. */
@@ -1541,7 +1547,7 @@ function createWorld(code, options = {}) {
   }
 
   return {
-    code, options, H, tree, board, entryBoard, next, prev, locate: route.locate, startChain: route.startChain,
+    code, options, H, tree, board, entryBoard, next, prev, locate, startChain: route.startChain,
     startLevel: route.startLevel, startPoint, bandFlames, flamesAt, step, resumePoint, retain,
   };
 }

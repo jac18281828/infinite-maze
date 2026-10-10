@@ -13,9 +13,8 @@ export const MAX_DEPTH = 2;
 export const BDX = [1, 0, -1, 0];
 export const BDY = [0, 1, 0, -1];
 
-// Route walls L R D U as board directions, and back.
+// Route walls L R D U as board directions.
 export const WALL_DIR = [2, 0, 3, 1];
-export const DIR_WALL = [1, 3, 0, 2];
 
 export function boardNeighbor(i, d) {
   const x = (i % BANDW) + BDX[d], y = ((i / BANDW) | 0) + BDY[d];

@@ -160,10 +160,12 @@ export function cellPath(links, from, to) {
 /**
  * `gapLimitMs` bounds the walking time between consecutive route flames;
  * spec section 3 sets 150 s. `carveCells` sets the cells each board keeps;
- * NCELL keeps them all. The route's fault options pass to createRoute.
+ * NCELL keeps them all. The route's fault options pass to createRoute. The
+ * `wrongExit` { u, v } fault gives band (u, v) a wrong exit wall in the
+ * location `locate` returns, while its band tree keeps the true route.
  */
 export function createWorld(code, options = {}) {
-  const { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = options;
+  const { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS, wrongExit = null } = options;
   const H = makeHasher(worldKey(code));
   const route = createRoute(H, options);
   const trees = new Map();
@@ -220,6 +222,13 @@ export function createWorld(code, options = {}) {
   function prev(u, v) {
     const loc = route.locate(u, v);
     return loc ? { u: u + WX[loc.E], v: v + WY[loc.E] } : null;
+  }
+
+  /** Section 6 location of band (u, v): { E, X } walls, or null for rock. */
+  function locate(u, v) {
+    const loc = route.locate(u, v);
+    if (!loc || !wrongExit || wrongExit.u !== u || wrongExit.v !== v) return loc;
+    return { E: loc.E, X: [0, 1, 2, 3].find((w) => w !== loc.E && w !== loc.X) };
   }
 
   /** Entry board of band (u, v), or null for a rock band. */
@@ -373,7 +382,7 @@ export function createWorld(code, options = {}) {
   }
 
   return {
-    code, options, H, tree, board, entryBoard, next, prev, locate: route.locate, startChain: route.startChain,
+    code, options, H, tree, board, entryBoard, next, prev, locate, startChain: route.startChain,
     startLevel: route.startLevel, startPoint, bandFlames, flamesAt, step, resumePoint, retain,
   };
 }
