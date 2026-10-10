@@ -4,6 +4,7 @@
 // door. A let-go drops from a ladder over its lower cell. Runs on a fixed
 // 60 Hz tick; no DOM.
 import { DX, DY, BW } from '../world/board.mjs';
+import { ringOf } from '../world/world.mjs';
 
 export const TICK = 1 / 60;
 export const CELL = 48;
@@ -60,16 +61,20 @@ export function inputEdges(h0, v0, h1, v1) {
   return { press: b & ~a, release: a & ~b };
 }
 
-/** A run from `start` = { board, cell }, standing on the door's cell. */
+/**
+ * A run from `start` = { board, cell }, standing on the door's cell.
+ * `carry` = { time, maxRing, lastEntry } continues an ended run.
+ */
 export function createSim(world, start, carry = null) {
+  const ring = ringOf(start.board.u, start.board.v);
   const s = {
     world, bd: start.board, cell: start.cell,
     mode: 'floor', off: 0, alt: 0, vy: 0, link: -1, to: null, prog: 0, len: 0,
     facing: 1, moving: false, burn: BURN_S, ember: 0,
     tap: 0, buffer: 0, bufferTicks: 0, queued: 0, dismount: 0, noAirGrab: false,
     state: 'play', time: carry ? carry.time : 0,
-    startBand: carry ? carry.startBand : start.board.band,
-    maxBand: carry ? Math.max(carry.maxBand, start.board.band) : start.board.band,
+    // The score: the farthest ring, max(|u|, |v|), of any band reached.
+    maxRing: carry ? Math.max(carry.maxRing, ring) : ring,
     lastEntry: start.board.routeIndex === 0 ? start.board.p : (carry ? carry.lastEntry : start.board.p),
     touching: false, walked: 0, climbed: 0, carry: 0,
     stats: {
@@ -134,7 +139,8 @@ function enterBoard(s, bd) {
   if (bd === s.bd) return;
   s.stats.seams++;
   s.events.push('seam');
-  if (bd.band > s.maxBand) { s.maxBand = bd.band; s.events.push('band'); }
+  const ring = ringOf(bd.u, bd.v);
+  if (ring > s.maxRing) { s.maxRing = ring; s.events.push('band'); }
   if (bd.routeIndex === 0 && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
 }
 

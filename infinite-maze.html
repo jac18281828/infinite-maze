@@ -758,8 +758,9 @@ return { BW, BH, NCELL, MAX_REROLL, MAX_SWAPS, MAX_BLOCKS, BLOCK_DRAWS, CARVE_CE
 // src/world/band.mjs
 const __m3 = (() => {
 const { sfc32, u32 } = __m1;
-// Band maze (spec section 3): a randomized DFS route through the 6x4 boards,
-// then dead-end branches at most two boards deep. Board index i = 6 * row + x.
+// Band maze (spec section 3, docs/ROUTE.md section 4): a randomized DFS route
+// through the 6x4 boards from the entry board to the exit board, then
+// dead-end branches at most two boards deep. Board index i = 6 * row + x.
 
 
 const BANDW = 6;
@@ -772,15 +773,28 @@ const MAX_DEPTH = 2;
 const BDX = [1, 0, -1, 0];
 const BDY = [0, 1, 0, -1];
 
+// Route walls L R D U as board directions, and back.
+const WALL_DIR = [2, 0, 3, 1];
+const DIR_WALL = [1, 3, 0, 2];
+
 function boardNeighbor(i, d) {
   const x = (i % BANDW) + BDX[d], y = ((i / BANDW) | 0) + BDY[d];
   if (x < 0 || x >= BANDW || y < 0 || y >= BANDH) return -1;
   return y * BANDW + x;
 }
 
-/** Column e_b of the door between bands b-1 and b. */
-function edgeColumn(H, b) {
-  return u32(H('edge', b)) % BANDW;
+/**
+ * Index of the board of band (u, v) behind its crossing on wall w (L R D U).
+ * Both bands on a wall read the same key: `bandv` for a side wall, `bandh`
+ * for a floor or ceiling.
+ */
+function wallBoard(H, u, v, w) {
+  switch (w) {
+    case 0: return (u32(H('bandv', u - 1, v)) % BANDH) * BANDW;
+    case 1: return (u32(H('bandv', u, v)) % BANDH) * BANDW + BANDW - 1;
+    case 2: return u32(H('bandh', u, v - 1)) % BANDW;
+    default: return (BANDH - 1) * BANDW + u32(H('bandh', u, v)) % BANDW;
+  }
 }
 
 function dfsRoute(rng, entry, exit) {
@@ -832,65 +846,384 @@ function attachDeadEnds(rng, depth, parent) {
 }
 
 /**
- * The band tree of band b. `routeIndex[i]` is the route position or -1;
+ * The band tree of route band (u, v), entered through wall E and left
+ * through wall X (L R D U). `routeIndex[i]` is the route position or -1;
  * `depth[i]` is 0 on the route, 1..2 on a dead end, -1 for rock;
- * `parent[i]` is the board a dead end hangs from, else -1.
+ * `parent[i]` is the board a dead end hangs from, else -1. A corner board
+ * holding both the entry and the exit is the whole route, exempt from
+ * MIN_ROUTE.
  */
-function buildBandTree(H, b) {
-  const entryX = edgeColumn(H, b);
-  const exitX = edgeColumn(H, b + 1);
-  const entry = entryX, exit = (BANDH - 1) * BANDW + exitX;
+function buildBandTree(H, u, v, E, X) {
+  const entry = wallBoard(H, u, v, E), exit = wallBoard(H, u, v, X);
   for (let k = 0; ; k++) {
-    const rng = sfc32(H('band', b, k));
+    const rng = sfc32(H('band', u, v, k));
     const route = dfsRoute(rng, entry, exit);
-    if (route.length < MIN_ROUTE) continue;
+    if (route.length < MIN_ROUTE && entry !== exit) continue;
     const routeIndex = new Int8Array(NBOARD).fill(-1);
     const depth = new Int8Array(NBOARD).fill(-1);
     const parent = new Int8Array(NBOARD).fill(-1);
     route.forEach((i, r) => { routeIndex[i] = r; depth[i] = 0; });
     attachDeadEnds(rng, depth, parent);
-    return { b, k, entryX, exitX, route, routeIndex, depth, parent };
+    return { u, v, rock: false, k, entryWall: E, exitWall: X, entry, exit, route, routeIndex, depth, parent };
   }
 }
-return { BANDW, BANDH, NBOARD, MIN_ROUTE, MAX_DEPTH, BDX, BDY, boardNeighbor, edgeColumn, buildBandTree };
+
+/** A band off the route: every board is rock. */
+function rockBand(u, v) {
+  const none = new Int8Array(NBOARD).fill(-1);
+  return {
+    u, v, rock: true, k: -1, entryWall: -1, exitWall: -1, entry: -1, exit: -1,
+    route: [], routeIndex: none, depth: none, parent: none,
+  };
+}
+return { BANDW, BANDH, NBOARD, MIN_ROUTE, MAX_DEPTH, BDX, BDY, WALL_DIR, DIR_WALL, boardNeighbor, wallBoard, buildBandTree, rockBand };
+})();
+
+// src/world/route.mjs
+const __m4 = (() => {
+const { sfc32, u32 } = __m1;
+// Nested-block route (docs/ROUTE.md). A level-k block is a 3x3 grid of level
+// k-1 blocks, a level-1 block is one band, and the route crosses each block
+// once along a path through its children. Location descends from the start
+// chain, so a band's entry and exit derive from H and its coordinates alone.
+// Integer arithmetic only.
+
+
+const MAX_LEVEL = 20;
+
+// Walls and steps, indexed L R D U.
+const WX = [-1, 1, 0, 0];
+const WY = [0, 0, -1, 1];
+
+// Children are numbered 3 * row + column, row 0 at the bottom.
+const CENTRE = 4;
+// The child the off-centre fault takes as the start block: bottom middle.
+const OFF_CENTRE = 1;
+
+/** floor(a / b) for integers, exact where a / b rounds. */
+function floorDiv(a, b) {
+  let q = Math.floor(a / b);
+  if (q * b > a) q--;
+  else if ((q + 1) * b <= a) q++;
+  return q;
+}
+
+/** S_k = 3^(k-1), bands per side of a level-k block. */
+function blockSize(k) {
+  let s = 1;
+  for (let i = 1; i < k; i++) s *= 3;
+  return s;
+}
+
+/** o_k = -(S_k - 1) / 2, the origin offset of the level-k grid. */
+function blockOrigin(k) {
+  return -(blockSize(k) - 1) / 2;
+}
+
+/** Index along one axis of the level-k block holding band coordinate n. */
+function blockOf(k, n) {
+  return floorDiv(n - blockOrigin(k), blockSize(k));
+}
+
+/** The child beside child c across wall w, or -1 off the grid. */
+function childStep(c, w) {
+  const x = (c % 3) + WX[w], y = ((c / 3) | 0) + WY[w];
+  return x < 0 || x > 2 || y < 0 || y > 2 ? -1 : 3 * y + x;
+}
+
+/** The wall of child c that faces its neighbour n. */
+function wallTo(c, n) {
+  for (let w = 0; w < 4; w++) if (childStep(c, w) === n) return w;
+  throw new Error(`children ${c} and ${n} are not adjacent`);
+}
+
+/**
+ * Simple paths from child a to child b over the 3x3 grid, avoiding the
+ * children in `blocked` (a bit mask), in depth-first order with neighbours
+ * tried L, R, D, U.
+ */
+function childPaths(a, b, blocked = 0) {
+  const out = [];
+  if (blocked & (1 << a)) return out;
+  const path = [a];
+  let seen = blocked | (1 << a);
+  function dfs(c) {
+    if (c === b) { out.push(path.slice()); return; }
+    for (let w = 0; w < 4; w++) {
+      const n = childStep(c, w);
+      if (n < 0 || seen & (1 << n)) continue;
+      seen |= 1 << n;
+      path.push(n);
+      dfs(n);
+      path.pop();
+      seen &= ~(1 << n);
+    }
+  }
+  dfs(a);
+  return out;
+}
+
+/** Paths of at least min(5, longest) children. */
+function longEnough(paths) {
+  let longest = 0;
+  for (const p of paths) if (p.length > longest) longest = p.length;
+  const min = Math.min(5, longest);
+  return paths.filter((p) => p.length >= min);
+}
+
+// Kept section 4 paths per (entry child, exit child); geometry alone.
+const KEPT = new Map();
+
+function keptPaths(a, b) {
+  const key = 9 * a + b;
+  let list = KEPT.get(key);
+  if (!list) { list = longEnough(childPaths(a, b)); KEPT.set(key, list); }
+  return list;
+}
+
+/** The 12 ordered wall pairs (p outer, q inner, p != q), shuffled Fisher-Yates from index 11 down. */
+function shuffledPairs(rng) {
+  const pairs = [];
+  for (let p = 0; p < 4; p++) for (let q = 0; q < 4; q++) if (p !== q) pairs.push([p, q]);
+  for (let i = pairs.length - 1; i > 0; i--) {
+    const j = rng() % (i + 1);
+    const t = pairs[i];
+    pairs[i] = pairs[j];
+    pairs[j] = t;
+  }
+  return pairs;
+}
+
+/** `path` with a loop round a 2x2 square at its first step, so its first two children repeat. */
+function withLoop(path) {
+  const [a, b] = path;
+  for (let w = 0; w < 4; w++) {
+    const q1 = childStep(b, w), q2 = childStep(a, w);
+    if (q1 < 0 || q2 < 0 || q1 === a || q2 === b) continue;
+    return [a, b, q1, q2, ...path];
+  }
+  return path;
+}
+
+/**
+ * The route over the nested blocks of one world. Fault options break one
+ * rule each, for the acceptance harness's fault tests:
+ * - `revisitLevel`: section 4 block paths at that level repeat a child;
+ * - `skewWall` { k, i, j, w }: block (k, i, j) reads wall w one band off;
+ * - `offCentre`: the start chain takes the bottom-middle child as centre;
+ * - `wrongExit` { u, v }: band (u, v) locates with a wrong exit wall.
+ */
+function createRoute(H, { revisitLevel = 0, skewWall = null, offCentre = false, wrongExit = null } = {}) {
+  const blocks = new Map();
+  const chain = [];
+
+  function refuse(k) {
+    if (k > MAX_LEVEL) throw new Error(`route level ${k} is above ${MAX_LEVEL}`);
+  }
+
+  /** Crossing offset t on wall w of block (k, i, j), read from that block's side. */
+  function offset(k, i, j, w) {
+    const S = blockSize(k);
+    if (S === 1) return 0;
+    const d = w === 0 ? H('vwall', k, i - 1, j) : w === 1 ? H('vwall', k, i, j)
+      : w === 2 ? H('hwall', k, i, j - 1) : H('hwall', k, i, j);
+    const t = u32(d) % S;
+    const skew = skewWall && skewWall.k === k && skewWall.i === i && skewWall.j === j && skewWall.w === w;
+    return skew ? (t + 1) % S : t;
+  }
+
+  /** The band [u, v] inside block (k, i, j) where the route crosses its wall w. */
+  function crossing(k, i, j, w) {
+    const S = blockSize(k), o = blockOrigin(k), t = offset(k, i, j, w);
+    const u0 = i * S + o, v0 = j * S + o;
+    if (w === 0) return [u0, v0 + t];
+    if (w === 1) return [u0 + S - 1, v0 + t];
+    if (w === 2) return [u0 + t, v0];
+    return [u0 + t, v0 + S - 1];
+  }
+
+  /** The child of block (k, i, j) holding band [u, v]. */
+  function childOf(k, i, j, [u, v]) {
+    const S = blockSize(k), s = blockSize(k - 1), o = blockOrigin(k);
+    return 3 * floorDiv(v - (j * S + o), s) + floorDiv(u - (i * S + o), s);
+  }
+
+  /**
+   * Start chain level k: entry wall E, exit wall X and, from level 2, the
+   * block path P1 + centre + P2. Null when no wall pair finds a path, which
+   * only a fault allows.
+   */
+  function startChain(k) {
+    refuse(k);
+    if (chain[k] !== undefined) return chain[k];
+    const d = H('start', k);
+    let found = null;
+    if (k === 1) {
+      const E = u32(d) % 4;
+      const rest = [0, 1, 2, 3].filter((w) => w !== E);
+      found = { k, E, X: rest[u32(d, 4) % 3], path: null };
+    } else {
+      const below = startChain(k - 1);
+      const centre = offCentre ? OFF_CENTRE : CENTRE;
+      const nIn = below ? childStep(centre, below.E) : -1, nOut = below ? childStep(centre, below.X) : -1;
+      if (nIn >= 0 && nOut >= 0) {
+        for (const [E, X] of shuffledPairs(sfc32(d))) {
+          const a = childOf(k, 0, 0, crossing(k, 0, 0, E)), b = childOf(k, 0, 0, crossing(k, 0, 0, X));
+          const paths = [];
+          for (const p1 of childPaths(a, nIn, 1 << centre)) {
+            let mask = 1 << centre;
+            for (const c of p1) mask |= 1 << c;
+            for (const p2 of childPaths(nOut, b, mask)) paths.push([...p1, centre, ...p2]);
+          }
+          if (!paths.length) continue;
+          const kept = longEnough(paths);
+          found = { k, E, X, path: kept[u32(d, 4) % kept.length] };
+          break;
+        }
+      }
+    }
+    chain[k] = found;
+    return found;
+  }
+
+  /** Section 4 path of a non-start block from its entry child to its exit child. */
+  function blockPath(r) {
+    const a = childOf(r.k, r.i, r.j, r.entry), b = childOf(r.k, r.i, r.j, r.exit);
+    if (a === b) return [a];
+    const kept = keptPaths(a, b);
+    const path = kept[u32(H('route', r.k, r.i, r.j)) % kept.length];
+    return revisitLevel === r.k ? withLoop(path) : path;
+  }
+
+  /** Route of the start block (k, 0, 0). */
+  function startRoute(k) {
+    const c = startChain(k);
+    if (!c) throw new Error(`start chain level ${k} finds no path`);
+    return { k, i: 0, j: 0, E: c.E, X: c.X, entry: crossing(k, 0, 0, c.E), exit: crossing(k, 0, 0, c.X), path: c.path };
+  }
+
+  /**
+   * Route of the child at index t of `parent`'s path: entry wall E and exit
+   * wall X, the bands `entry` and `exit` just inside them and, above level
+   * 1, the child path.
+   */
+  function childRoute(parent, t) {
+    const p = parent.path, c = p[t], k = parent.k - 1;
+    const i = 3 * parent.i - 1 + (c % 3), j = 3 * parent.j - 1 + ((c / 3) | 0);
+    if (i === 0 && j === 0) return startRoute(k);
+    const last = t === p.length - 1;
+    const E = t === 0 ? parent.E : wallTo(c, p[t - 1]);
+    let X = last ? parent.X : wallTo(c, p[t + 1]);
+    if (k === 1 && wrongExit && wrongExit.u === i && wrongExit.v === j) X = [0, 1, 2, 3].find((w) => w !== E && w !== X);
+    const r = {
+      k, i, j, E, X,
+      // The first and last child inherit the parent's crossing; the others cross a level-k wall.
+      entry: t === 0 ? parent.entry : crossing(k, i, j, E),
+      exit: last ? parent.exit : crossing(k, i, j, X),
+      path: null,
+    };
+    if (k > 1) r.path = blockPath(r);
+    return r;
+  }
+
+  /** Route of block (k, i, j), cached; null for a block off its parent's path, which is rock. */
+  function blockRoute(k, i, j) {
+    refuse(k);
+    const key = `${k},${i},${j}`;
+    if (blocks.has(key)) return blocks.get(key);
+    let r;
+    if (i === 0 && j === 0) r = startRoute(k);
+    else {
+      const parent = blockRoute(k + 1, floorDiv(i + 1, 3), floorDiv(j + 1, 3));
+      const c = 3 * (j - 3 * floorDiv(j + 1, 3) + 1) + (i - 3 * floorDiv(i + 1, 3) + 1);
+      const t = parent ? parent.path.indexOf(c) : -1;
+      r = t >= 0 ? childRoute(parent, t) : null;
+    }
+    blocks.set(key, r);
+    return r;
+  }
+
+  /** Section 6 location of band (u, v): its entry and exit walls, or null for rock. */
+  function locate(u, v) {
+    const r = blockRoute(1, u, v);
+    return r ? { E: r.E, X: r.X } : null;
+  }
+
+  /** Highest start chain level built so far, 0 before any. */
+  function startLevel() {
+    return Math.max(0, chain.length - 1);
+  }
+
+  return { startChain, startRoute, childRoute, blockRoute, locate, crossing, childOf, startLevel };
+}
+return { MAX_LEVEL, WX, WY, floorDiv, blockSize, blockOrigin, blockOf, createRoute };
 })();
 
 // src/world/world.mjs
-const __m4 = (() => {
+const __m5 = (() => {
 const { makeHasher, worldKey, u32, toHex, writeInt64BE } = __m1;
 const { sha3_256 } = __m0;
 const { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } = __m2;
-const { BANDW, BANDH, NBOARD, BDX, BDY, buildBandTree } = __m3;
-// The world: band trees, boards with doors, flames and the cell graph across
-// seams. Everything derives from H; caches only memoize.
+const { BANDW, BANDH, NBOARD, BDX, BDY, WALL_DIR, buildBandTree, rockBand } = __m3;
+const { createRoute, WX, WY } = __m4;
+// The world: band trees placed by the nested route, boards with doors, flames
+// and the cell graph across seams. Bands tile the plane. Everything derives
+// from H; caches only memoize.
+
 
 
 
 
 
 const GAP_LIMIT_MS = 150000;
+// Saves hold |x| and |y| below 2^25, where p stays an exact integer.
+const SAVE_LIMIT = 33554432;
 
-function bandOf(y) {
-  return Math.floor(y / BANDH);
+/** Band (u, v) holding board (x, y). */
+function bandOf(x, y) {
+  return { u: Math.floor(x / BANDW), v: Math.floor(y / BANDH) };
 }
 
+/** Ring of band (u, v), max(|u|, |v|): the score. */
+function ringOf(u, v) {
+  return Math.max(Math.abs(u), Math.abs(v));
+}
+
+const zig = (n) => (n >= 0 ? 2 * n : -2 * n - 1);
+const unzig = (z) => (z % 2 === 0 ? z / 2 : -(z + 1) / 2);
+
+/** Save position of board (x, y), the docs/ROUTE.md section 8 pairing of z(x) and z(y). */
 function posOf(x, y) {
-  return BANDW * y + x;
+  const a = zig(x), b = zig(y);
+  return a >= b ? a * a + a + b : a + b * b;
 }
 
+/** Largest s with s * s <= n, for 0 <= n < 2^53. */
+function isqrt(n) {
+  let lo = 0, hi = 94906265;
+  while (lo < hi) {
+    const m = lo + Math.floor((hi - lo + 1) / 2);
+    if (m * m <= n) lo = m;
+    else hi = m - 1;
+  }
+  return lo;
+}
+
+/** Board (x, y) of save position p; inverts posOf. */
 function boardOfPos(p) {
-  const y = Math.floor(p / BANDW);
-  return { x: p - BANDW * y, y };
+  const s = isqrt(p), r = p - s * s;
+  return r < s ? { x: unzig(r), y: unzig(s) } : { x: unzig(s), y: unzig(r - s) };
 }
 
-/** Board (x, y) at index i = 6 * row + x within band b. */
-function boardCoords(b, i) {
-  return { x: i % BANDW, y: BANDH * b + ((i / BANDW) | 0) };
+/** Board (x, y) at index i = 6 * row + column within band (u, v). */
+function boardCoords(u, v, i) {
+  return { x: BANDW * u + (i % BANDW), y: BANDH * v + ((i / BANDW) | 0) };
 }
 
 /** Index of board (x, y) within its band. */
 function boardIndex(x, y) {
-  return (y - BANDH * bandOf(y)) * BANDW + x;
+  const { u, v } = bandOf(x, y);
+  return (y - BANDH * v) * BANDW + (x - BANDW * u);
 }
 
 /** Door cell on wall d (E N W S) of board (x, y); both sides read one key. */
@@ -928,14 +1261,16 @@ function midpointIndex(cum, total) {
 
 /**
  * Door directions of board i in band tree t: `aDir` leads back toward the
- * band entry, `bDir` up the route (-1 off the route), `dirs` holds all.
+ * band entry, `bDir` along the route toward the exit (-1 off the route),
+ * `dirs` holds all. The first and last route boards open onto the band's
+ * entry and exit walls.
  */
 function boardLinks(t, i) {
   const r = t.routeIndex[i], L = t.route.length;
   let aDir, bDir = -1;
   if (r >= 0) {
-    aDir = r > 0 ? dirBetween(i, t.route[r - 1]) : 3;
-    bDir = r < L - 1 ? dirBetween(i, t.route[r + 1]) : 1;
+    aDir = r > 0 ? dirBetween(i, t.route[r - 1]) : WALL_DIR[t.entryWall];
+    bDir = r < L - 1 ? dirBetween(i, t.route[r + 1]) : WALL_DIR[t.exitWall];
   } else {
     aDir = dirBetween(i, t.parent[i]);
   }
@@ -993,33 +1328,41 @@ function cellPath(links, from, to) {
 /**
  * `gapLimitMs` bounds the walking time between consecutive route flames;
  * spec section 3 sets 150 s. `carveCells` sets the cells each board keeps;
- * NCELL keeps them all.
+ * NCELL keeps them all. The route's fault options pass to createRoute.
  */
-function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = {}) {
+function createWorld(code, options = {}) {
+  const { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = options;
   const H = makeHasher(worldKey(code));
+  const route = createRoute(H, options);
   const trees = new Map();
   const boards = new Map();
   const flameSets = new Map();
   const flameCells = new Map();
+  const key = (a, b) => `${a},${b}`;
 
-  function tree(b) {
-    let t = trees.get(b);
-    if (!t) { t = buildBandTree(H, b); trees.set(b, t); }
+  function tree(u, v) {
+    const k = key(u, v);
+    let t = trees.get(k);
+    if (!t) {
+      const loc = route.locate(u, v);
+      t = loc ? buildBandTree(H, u, v, loc.E, loc.X) : rockBand(u, v);
+      trees.set(k, t);
+    }
     return t;
   }
 
   function board(x, y) {
-    const p = posOf(x, y);
-    let bd = boards.get(p);
-    if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); }
+    const k = key(x, y);
+    let bd = boards.get(k);
+    if (!bd) { bd = buildBoard(x, y); boards.set(k, bd); }
     return bd;
   }
 
-  function buildBoard(x, y, p) {
-    const band = bandOf(y);
-    const t = tree(band);
-    const i = boardIndex(x, y);
-    const base = { x, y, p, band, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i] };
+  function buildBoard(x, y) {
+    const { u, v } = bandOf(x, y);
+    const t = tree(u, v);
+    const i = (y - BANDH * v) * BANDW + (x - BANDW * u);
+    const base = { x, y, p: posOf(x, y), u, v, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i] };
     if (t.depth[i] < 0) return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
     const { aDir, bDir, dirs } = boardLinks(t, i);
     const doors = dirs.map((d) => ({ dir: d, cell: doorCell(H, x, y, d) }));
@@ -1035,11 +1378,34 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
     };
   }
 
-  /** Board at route position pos of band b; pos = route length is band b+1's entry. */
-  function routeBoard(b, pos) {
-    const t = tree(b);
-    if (pos === t.route.length) return board(tree(b + 1).entryX, BANDH * (b + 1));
-    const { x, y } = boardCoords(b, t.route[pos]);
+  /** The route band after (u, v), through its exit wall; null for rock. */
+  function next(u, v) {
+    const loc = route.locate(u, v);
+    return loc ? { u: u + WX[loc.X], v: v + WY[loc.X] } : null;
+  }
+
+  /** The route band before (u, v), through its entry wall; null for rock. */
+  function prev(u, v) {
+    const loc = route.locate(u, v);
+    return loc ? { u: u + WX[loc.E], v: v + WY[loc.E] } : null;
+  }
+
+  /** Entry board of band (u, v), or null for a rock band. */
+  function entryBoard(u, v) {
+    const t = tree(u, v);
+    if (t.rock) return null;
+    const { x, y } = boardCoords(u, v, t.entry);
+    return board(x, y);
+  }
+
+  /** Board at route position pos of band (u, v); pos = route length is the next band's entry. */
+  function routeBoard(u, v, pos) {
+    const t = tree(u, v);
+    if (pos === t.route.length) {
+      const n = next(u, v);
+      return entryBoard(n.u, n.v);
+    }
+    const { x, y } = boardCoords(u, v, t.route[pos]);
     return board(x, y);
   }
 
@@ -1047,22 +1413,22 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
     return { x: bd.x, y: bd.y, cell: flameCell(H, bd.x, bd.y), kind: 'route', pos };
   }
 
-  /** Flames on every third route board from the entry, then band b+1's entry flame. */
-  function routeChain(b) {
-    const L = tree(b).route.length;
+  /** Flames on every third route board from the entry, then the next band's entry flame. */
+  function routeChain(u, v) {
+    const L = tree(u, v).route.length;
     const chain = [];
-    for (let pos = 0; pos < L; pos += 3) chain.push(routeFlame(routeBoard(b, pos), pos));
-    chain.push(routeFlame(routeBoard(b, L), L));
+    for (let pos = 0; pos < L; pos += 3) chain.push(routeFlame(routeBoard(u, v, pos), pos));
+    chain.push(routeFlame(routeBoard(u, v, L), L));
     return chain;
   }
 
   /** Dead-end boards with flame byte 0 below 128 burn at their deepest cell. */
-  function deadEndFlames(b) {
-    const t = tree(b);
+  function deadEndFlames(u, v) {
+    const t = tree(u, v);
     const out = [];
     for (let i = 0; i < NBOARD; i++) {
       if (t.depth[i] <= 0) continue;
-      const { x, y } = boardCoords(b, i);
+      const { x, y } = boardCoords(u, v, i);
       if (H('flame', x, y)[0] < 128) out.push({ x, y, cell: board(x, y).b, kind: 'dead', pos: -1 });
     }
     return out;
@@ -1072,8 +1438,8 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
    * Inserts a flame at the midpoint cell of each chain gap over the limit
    * until none remains; returns the inserted flames and the final gaps.
    */
-  function splitGaps(b, chain) {
-    const at = (pos) => routeBoard(b, pos);
+  function splitGaps(u, v, chain) {
+    const at = (pos) => routeBoard(u, v, pos);
     const added = [], gaps = [];
     for (let i = 0; i + 1 < chain.length;) {
       const path = routePath(at, chain[i], chain[i + 1]);
@@ -1092,37 +1458,43 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
   }
 
   /**
-   * Flames of band b and its chain of route flames, ordered up the route and
-   * ending at band b+1's entry flame.
+   * Flames of band (u, v) and its chain of route flames, ordered along the
+   * route and ending at the next route band's entry flame. A rock band has none.
    */
-  function bandFlames(b) {
-    let fs = flameSets.get(b);
+  function bandFlames(u, v) {
+    const k = key(u, v);
+    let fs = flameSets.get(k);
     if (fs) return fs;
-    const chain = routeChain(b);
-    const route = chain.slice(0, -1);
-    const dead = deadEndFlames(b);
-    const { added, gaps } = splitGaps(b, chain);
-    fs = { b, flames: [...route, ...dead, ...added], chain, gaps };
-    flameSets.set(b, fs);
+    if (tree(u, v).rock) fs = { u, v, flames: [], chain: [], gaps: [] };
+    else {
+      const chain = routeChain(u, v);
+      const routeFlames = chain.slice(0, -1);
+      const dead = deadEndFlames(u, v);
+      const { added, gaps } = splitGaps(u, v, chain);
+      fs = { u, v, flames: [...routeFlames, ...dead, ...added], chain, gaps };
+    }
+    flameSets.set(k, fs);
     return fs;
   }
 
-  /** Flame cells on board (x, y), ascending; band b-1 may light b's entry. */
+  /** Flame cells on board (x, y), ascending; the previous route band may light a band's entry. */
   function flamesAt(x, y) {
-    const p = posOf(x, y);
-    let cells = flameCells.get(p);
+    const k = key(x, y);
+    let cells = flameCells.get(k);
     if (cells) return cells;
-    const b = bandOf(y);
-    const t = tree(b);
+    const { u, v } = bandOf(x, y);
+    const t = tree(u, v);
+    const i = (y - BANDH * v) * BANDW + (x - BANDW * u);
     const set = new Set();
-    if (t.depth[boardIndex(x, y)] >= 0) {
-      for (const f of bandFlames(b).flames) if (f.x === x && f.y === y) set.add(f.cell);
-      if (y === BANDH * b && x === t.entryX) {
-        for (const f of bandFlames(b - 1).flames) if (f.x === x && f.y === y) set.add(f.cell);
+    if (t.depth[i] >= 0) {
+      for (const f of bandFlames(u, v).flames) if (f.x === x && f.y === y) set.add(f.cell);
+      if (t.routeIndex[i] === 0) {
+        const p = prev(u, v);
+        for (const f of bandFlames(p.u, p.v).flames) if (f.x === x && f.y === y) set.add(f.cell);
       }
     }
-    cells = [...set].sort((u, v) => u - v);
-    flameCells.set(p, cells);
+    cells = [...set].sort((a, b) => a - b);
+    flameCells.set(k, cells);
     return cells;
   }
 
@@ -1138,31 +1510,55 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
     return null;
   }
 
-  /**
-   * Where a resumed run starts on board (x, y): the door leading back toward
-   * the band entry. A rock board resumes at its band's entry instead.
-   */
-  function resumePoint(x, y) {
-    let bd = board(x, y);
-    if (bd.kind === 'rock') {
-      const b = bandOf(y);
-      bd = board(tree(b).entryX, BANDH * b);
-    }
+  /** The start band's entry: band (0, 0)'s entry board at its entry door. */
+  function startPoint() {
+    const bd = entryBoard(0, 0);
     return { board: bd, cell: bd.a };
   }
 
-  /** Drops cached bands outside [lo, hi] and their boards. */
-  function retain(lo, hi) {
-    for (const b of trees.keys()) if (b < lo || b > hi) trees.delete(b);
-    for (const b of flameSets.keys()) if (b < lo || b > hi) flameSets.delete(b);
-    for (const [p, bd] of boards) if (bd.band < lo || bd.band > hi) boards.delete(p);
-    for (const p of flameCells.keys()) {
-      const b = bandOf(boardOfPos(p).y);
-      if (b < lo || b > hi) flameCells.delete(p);
+  /**
+   * Where a resumed run starts on board (x, y): the door leading back toward
+   * the band entry. A rock board of a route band resumes at that band's
+   * entry, and a board of a rock band at the start band's entry.
+   */
+  function resumePoint(x, y) {
+    let bd = board(x, y);
+    if (bd.kind === 'rock') bd = tree(bd.u, bd.v).rock ? entryBoard(0, 0) : entryBoard(bd.u, bd.v);
+    return { board: bd, cell: bd.a };
+  }
+
+  /** Drops cached bands, flames and boards more than one band from band (u, v). */
+  function retain(u, v) {
+    const far = (bu, bv) => Math.abs(bu - u) > 1 || Math.abs(bv - v) > 1;
+    for (const [k, t] of trees) if (far(t.u, t.v)) trees.delete(k);
+    for (const [k, fs] of flameSets) if (far(fs.u, fs.v)) flameSets.delete(k);
+    for (const [k, bd] of boards) if (far(bd.u, bd.v)) boards.delete(k);
+    for (const k of flameCells.keys()) {
+      const [x, y] = k.split(',').map(Number);
+      const b = bandOf(x, y);
+      if (far(b.u, b.v)) flameCells.delete(k);
     }
   }
 
-  return { code, H, tree, board, bandFlames, flamesAt, step, resumePoint, retain };
+  return {
+    code, options, H, tree, board, entryBoard, next, prev, locate: route.locate, startChain: route.startChain,
+    startLevel: route.startLevel, startPoint, bandFlames, flamesAt, step, resumePoint, retain,
+  };
+}
+
+/**
+ * Route bands i0..i1 in route order, each { u, v, index }, walked from band
+ * (0, 0) by the generator: exits count up, entries count down.
+ */
+function routeBands(world, i0, i1) {
+  let b = { u: 0, v: 0, index: 0 };
+  const fwd = [b], back = [];
+  for (let i = 1; i <= i1; i++) fwd.push(b = { ...world.next(b.u, b.v), index: i });
+  b = fwd[0];
+  for (let i = -1; i >= i0; i--) back.push(b = { ...world.prev(b.u, b.v), index: i });
+  const out = [];
+  for (let i = i0; i <= i1; i++) out.push(i < 0 ? back[-i - 1] : fwd[i]);
+  return out;
 }
 
 class Bytes {
@@ -1196,20 +1592,20 @@ function serializeBoard(world, x, y) {
   return w.done();
 }
 
-/** SHA3-256 hex digest over every board and flame chain of bands b0..b1. */
-function digestBands(world, b0, b1) {
+/** SHA3-256 hex digest over every board and flame chain of route bands i0..i1. */
+function digestBands(world, i0, i1) {
   const parts = [];
-  for (let b = b0; b <= b1; b++) {
-    const t = world.tree(b);
+  for (const { u, v } of routeBands(world, i0, i1)) {
+    const t = world.tree(u, v);
     const w = new Bytes();
-    w.i64(b); w.u8(t.k); w.u8(t.entryX); w.u8(t.exitX);
+    w.i64(u); w.i64(v); w.u8(t.k); w.u8(t.entryWall); w.u8(t.exitWall);
     w.u8(t.route.length); w.bytes(t.route);
-    const fs = world.bandFlames(b);
+    const fs = world.bandFlames(u, v);
     w.u8(fs.chain.length);
     for (const f of fs.chain) { w.i64(f.x); w.i64(f.y); w.u8(f.cell); }
     parts.push(w.done());
     for (let i = 0; i < NBOARD; i++) {
-      const { x, y } = boardCoords(b, i);
+      const { x, y } = boardCoords(u, v, i);
       parts.push(serializeBoard(world, x, y));
     }
   }
@@ -1220,14 +1616,15 @@ function digestBands(world, b0, b1) {
   for (const p of parts) { all.set(p, o); o += p.length; }
   return toHex(sha3_256(all));
 }
-return { GAP_LIMIT_MS, bandOf, posOf, boardOfPos, boardCoords, boardIndex, doorCell, acrossDoor, midpointIndex, cellPath, createWorld, serializeBoard, digestBands };
+return { GAP_LIMIT_MS, SAVE_LIMIT, bandOf, ringOf, posOf, boardOfPos, boardCoords, boardIndex, doorCell, acrossDoor, midpointIndex, cellPath, createWorld, routeBands, serializeBoard, digestBands };
 })();
 
 // src/world/save.mjs
-const __m5 = (() => {
+const __m6 = (() => {
 const { parseCode, formatCode } = __m1;
-const { boardOfPos, posOf } = __m4;
-// Save strings: `CODE4-CODE4:p` with p = 6y + x, p possibly negative.
+const { boardOfPos, posOf, SAVE_LIMIT } = __m5;
+// Save strings: `CODE4-CODE4:p`, p the docs/ROUTE.md section 8 pairing of the
+// board's (x, y), with |x| and |y| below 2^25.
 
 
 
@@ -1235,26 +1632,30 @@ function encodeSave(code, x, y) {
   return formatCode(code) + ':' + posOf(x, y);
 }
 
-/** `{ code, p, x, y }` from a save string, or null when malformed. */
+/** `{ code, p, x, y }` from a save string, or null when malformed or out of range. */
 function decodeSave(text) {
-  const m = /^\s*([^:]+):\s*(-?\d+)\s*$/.exec(String(text));
+  const m = /^\s*([^:]+):\s*(\d+)\s*$/.exec(String(text));
   if (!m) return null;
   const code = parseCode(m[1]);
   const p = Number(m[2]);
   if (!code || !Number.isSafeInteger(p)) return null;
-  return { code, p, ...boardOfPos(p) };
+  const { x, y } = boardOfPos(p);
+  if (Math.abs(x) >= SAVE_LIMIT || Math.abs(y) >= SAVE_LIMIT) return null;
+  return { code, p, x, y };
 }
 return { encodeSave, decodeSave };
 })();
 
 // src/game/sim.mjs
-const __m6 = (() => {
+const __m7 = (() => {
 const { DX, DY, BW } = __m2;
+const { ringOf } = __m5;
 // Simulation: the explorer moves along the cell graph, so motion admits
 // exactly the tree's links. A jump is an air state of the current cell: on
 // the ground or in the air, the explorer leaves a cell only along a link or
 // door. A let-go drops from a ladder over its lower cell. Runs on a fixed
 // 60 Hz tick; no DOM.
+
 
 
 const TICK = 1 / 60;
@@ -1312,16 +1713,20 @@ function inputEdges(h0, v0, h1, v1) {
   return { press: b & ~a, release: a & ~b };
 }
 
-/** A run from `start` = { board, cell }, standing on the door's cell. */
+/**
+ * A run from `start` = { board, cell }, standing on the door's cell.
+ * `carry` = { time, maxRing, lastEntry } continues an ended run.
+ */
 function createSim(world, start, carry = null) {
+  const ring = ringOf(start.board.u, start.board.v);
   const s = {
     world, bd: start.board, cell: start.cell,
     mode: 'floor', off: 0, alt: 0, vy: 0, link: -1, to: null, prog: 0, len: 0,
     facing: 1, moving: false, burn: BURN_S, ember: 0,
     tap: 0, buffer: 0, bufferTicks: 0, queued: 0, dismount: 0, noAirGrab: false,
     state: 'play', time: carry ? carry.time : 0,
-    startBand: carry ? carry.startBand : start.board.band,
-    maxBand: carry ? Math.max(carry.maxBand, start.board.band) : start.board.band,
+    // The score: the farthest ring, max(|u|, |v|), of any band reached.
+    maxRing: carry ? Math.max(carry.maxRing, ring) : ring,
     lastEntry: start.board.routeIndex === 0 ? start.board.p : (carry ? carry.lastEntry : start.board.p),
     touching: false, walked: 0, climbed: 0, carry: 0,
     stats: {
@@ -1386,7 +1791,8 @@ function enterBoard(s, bd) {
   if (bd === s.bd) return;
   s.stats.seams++;
   s.events.push('seam');
-  if (bd.band > s.maxBand) { s.maxBand = bd.band; s.events.push('band'); }
+  const ring = ringOf(bd.u, bd.v);
+  if (ring > s.maxRing) { s.maxRing = ring; s.events.push('band'); }
   if (bd.routeIndex === 0 && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
 }
 
@@ -1665,7 +2071,7 @@ return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, B
 })();
 
 // src/game/art.mjs
-const __m7 = (() => {
+const __m8 = (() => {
 
 // Palette-indexed art. Each character indexes PALETTE in base 32
 // ('0'-'9', 'a'-'v'); '.' is transparent.
@@ -2384,7 +2790,7 @@ return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCON
 })();
 
 // src/game/mask.mjs
-const __m8 = (() => {
+const __m9 = (() => {
 const { BW, NCELL } = __m2;
 // Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
 // opening joins exactly the cells of one tree link or door:
@@ -2449,12 +2855,12 @@ return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 })();
 
 // src/game/render.mjs
-const __m9 = (() => {
-const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H } = __m7;
-const { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m6;
+const __m10 = (() => {
+const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H } = __m8;
+const { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m7;
 const { BW, NCELL } = __m2;
-const { boardOfPos } = __m4;
-const { boardMask } = __m8;
+const { boardOfPos } = __m5;
+const { boardMask } = __m9;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 
@@ -2648,7 +3054,6 @@ function createRenderer(canvas, world) {
   }
 
   function boardArt(bx, by) {
-    if (bx < 0 || bx >= 6) return null;
     const bd = world.board(bx, by);
     if (!bd.links) return null;
     let art = boards.get(bd.p);
@@ -2661,7 +3066,7 @@ function createRenderer(canvas, world) {
     const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - 1, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + 1;
     const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - 1, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + 1;
     for (let by = by0; by <= by1 && budget > 0; by++) {
-      for (let bx = Math.max(0, bx0); bx <= Math.min(5, bx1) && budget > 0; bx++) {
+      for (let bx = bx0; bx <= bx1 && budget > 0; bx++) {
         const bd = world.board(bx, by);
         if (bd.links && !boards.has(bd.p)) { boardArt(bx, by); budget--; }
       }
@@ -2851,7 +3256,8 @@ function createRenderer(canvas, world) {
     } else if (Math.floor(sim.time * 4) % 2 === 0) {
       text('EMBER', 70, 5, 'o');
     }
-    text(`TOMB ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
+    // The score: the farthest ring reached, max(|u|, |v|).
+    text(`TOMB ${sim.maxRing}`, VIEW_W - 5, 5, 'm', { align: 'right' });
   }
 
   return { ctx, scene, hud, text, panel, prepare };
@@ -2860,7 +3266,7 @@ return { VIEW_W, VIEW_H, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs
-const __m10 = (() => {
+const __m11 = (() => {
 
 // WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
@@ -3174,20 +3580,26 @@ return { createAudio };
 })();
 
 // src/game/autopilot.mjs
-const __m11 = (() => {
+const __m12 = (() => {
 const { DX, DY } = __m2;
-const { createSim, step, inputEdges } = __m6;
-// Scripted input for the self-test: walks the explorer up band 0's chain of
-// route flames by feeding the same arrow and jump input a player would.
+const { createSim, step, inputEdges } = __m7;
+// Scripted input for the self-test: walks the explorer along the start band's
+// chain of route flames by feeding the same arrow and jump input a player would.
 
 
 
 const SELFTEST_CODE = '00000000';
 const SELFTEST_TICKS = 3600;
 
-/** Link directions of the cell path from (bd, cell) to (goal, goalCell). */
+/**
+ * Link directions of the cell path from (bd, cell) to (goal, goalCell),
+ * searched within the bands one band around both ends.
+ */
 function pathTo(world, bd, cell, goal, goalCell) {
-  const lo = Math.min(bd.band, goal.band) - 1, hi = Math.max(bd.band, goal.band) + 1;
+  const u0 = Math.min(bd.u, goal.u) - 1, u1 = Math.max(bd.u, goal.u) + 1;
+  const v0 = Math.min(bd.v, goal.v) - 1, v1 = Math.max(bd.v, goal.v) + 1;
+  const near = (b) => b.u >= u0 && b.u <= u1 && b.v >= v0 && b.v <= v1;
+  // Boards near the start keep p below 2^46, so the key stays exact.
   const key = (b, c) => b.p * 128 + c;
   const target = key(goal, goalCell);
   const prev = new Map([[key(bd, cell), null]]);
@@ -3196,7 +3608,7 @@ function pathTo(world, bd, cell, goal, goalCell) {
     const [b, c] = queue[h];
     for (let d = 0; d < 8; d++) {
       const t = world.step(b, c, d);
-      if (!t || t.board.band < lo || t.board.band > hi) continue;
+      if (!t || !near(t.board)) continue;
       const k = key(t.board, t.cell);
       if (prev.has(k)) continue;
       prev.set(k, [key(b, c), d]);
@@ -3245,14 +3657,13 @@ function createAutopilot(world, goals, { jumps = true, grabs = true } = {}) {
 }
 
 /**
- * Runs the self-test script: band 0's entry, then up its flame chain, for
- * `ticks` steps. Returns the sim and the first unmet requirement, if any.
- * `options` pass to createAutopilot.
+ * Runs the self-test script: the start band's entry, then along its flame
+ * chain, for `ticks` steps. Returns the sim and the first unmet
+ * requirement, if any. `options` pass to createAutopilot.
  */
 function runScript(world, ticks = SELFTEST_TICKS, options = {}) {
-  const t = world.tree(0);
-  const sim = createSim(world, world.resumePoint(t.entryX, 0));
-  const drive = createAutopilot(world, world.bandFlames(0).chain, options);
+  const sim = createSim(world, world.startPoint());
+  const drive = createAutopilot(world, world.bandFlames(0, 0).chain, options);
   let ph = 0, pv = 0;
   for (let i = 0; i < ticks; i++) {
     const [h, v, jump] = drive(sim);
@@ -3275,9 +3686,9 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/touch.mjs
-const __m12 = (() => {
-const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m7;
-const { VIEW_W, VIEW_H } = __m9;
+const __m13 = (() => {
+const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m8;
+const { VIEW_W, VIEW_H } = __m10;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
 // keydown and keyup KeyboardEvents on window, so the key handlers, the held
 // Up, the jump edge and the tap buffer serve touch unchanged.
@@ -3782,7 +4193,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, layout, nextTouchMode, touchAtBoot, padZone,
 })();
 
 // src/game/clipboard.mjs
-const __m13 = (() => {
+const __m14 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -3810,16 +4221,16 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m14 = (() => {
-const { createWorld, boardOfPos } = __m4;
+const __m15 = (() => {
+const { createWorld, boardOfPos, routeBands } = __m5;
 const { parseCode, formatCode, codeFromBytes } = __m1;
-const { encodeSave, decodeSave } = __m5;
-const { createSim, step, TICK, BURN_S, KEY, feet, pose } = __m6;
-const { createRenderer, VIEW_W, VIEW_H, shade } = __m9;
-const { createAudio } = __m10;
-const { runScript, SELFTEST_CODE } = __m11;
-const { createTouch, layout, viewport } = __m12;
-const { copyWithStatus, saveLabel } = __m13;
+const { encodeSave, decodeSave } = __m6;
+const { createSim, step, TICK, BURN_S, KEY, feet, pose, nodeXY } = __m7;
+const { createRenderer, VIEW_W, VIEW_H, shade } = __m10;
+const { createAudio } = __m11;
+const { runScript, SELFTEST_CODE } = __m12;
+const { createTouch, layout, viewport } = __m13;
+const { copyWithStatus, saveLabel } = __m14;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
 
@@ -3832,8 +4243,12 @@ const { copyWithStatus, saveLabel } = __m13;
 
 
 
-const KEY_SAVE = 'infinite-maze.save';
-const KEY_BEST = 'infinite-maze.best';
+// Saves and bests keep keys of their own, so a stacked-world value never
+// reads as a position or a ring.
+const KEY_SAVE = 'infinite-maze.route.save';
+const KEY_BEST = 'infinite-maze.route.best';
+// A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
+const TYPED_MAX = 26;
 
 // Every storage access is guarded; the game runs without storage.
 function load(key) {
@@ -3917,12 +4332,41 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
+    routeLeg(world);
     touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
   } catch (e) {
     finish(`fail: ${e && e.message ? e.message : e}`);
   }
+}
+
+/**
+ * Resumes on the first route band with u != 0, whose boards lie outside
+ * columns 0-5, and throws unless the frame draws the explorer's room as
+ * maze: its pixels must differ from the same frame drawn with the
+ * explorer's board as rock. The explorer stands on its door cell, which the
+ * carve keeps, since a pruned cell draws as rock on any board. Touches no
+ * storage and never boots.
+ */
+function routeLeg(world) {
+  const band = routeBands(world, 0, 60).find((b) => b.u !== 0);
+  if (!band) throw new Error('route leg: no route band off columns 0-5');
+  const at = world.entryBoard(band.u, band.v);
+  const sim = createSim(world, world.resumePoint(at.x, at.y));
+  const cam = { x: 0, y: 0 };
+  snapCam(cam, sim);
+  // The inner 28x28 px of the explorer's 32 px room, in view pixels (y down).
+  const [nx, ny] = nodeXY(sim.bd, sim.cell);
+  const x0 = nx - 14 - Math.round(cam.x) + VIEW_W / 2, y0 = Math.round(cam.y) - (ny + 30) + VIEW_H / 2;
+  const room = (w) => {
+    createRenderer(view, w).scene(sim, cam, 0);
+    return view.getContext('2d').getImageData(x0, y0, 28, 28).data;
+  };
+  const rockBoard = { ...sim.bd, kind: 'rock', links: null, doors: [], doorMask: null };
+  const maze = room(world);
+  const rock = room({ ...world, board: (x, y) => (x === sim.bd.x && y === sim.bd.y ? rockBoard : world.board(x, y)) });
+  if (maze.every((v, i) => v === rock[i])) throw new Error(`route leg: board (${at.x},${at.y}) draws as rock`);
 }
 
 /**
@@ -3974,10 +4418,10 @@ function driveTouch(copied) {
   // Another tree board of the explorer's band, keeping its last entry, so the
   // pause screen's save code and the end screen's entry code differ.
   const offEntry = () => {
-    const s = g.sim, b = s.bd.band;
-    const carry = { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry };
+    const s = g.sim, { u, v } = s.bd;
+    const carry = { time: s.time, maxRing: s.maxRing, lastEntry: s.lastEntry };
     for (let i = 0; i < 24; i++) {
-      const bd = g.world.board(i % 6, 4 * b + Math.floor(i / 6));
+      const bd = g.world.board(6 * u + (i % 6), 4 * v + Math.floor(i / 6));
       if (!bd.links || bd.routeIndex === 0 || bd === s.bd || bd.p === s.lastEntry) continue;
       g.sim = createSim(g.world, g.world.resumePoint(bd.x, bd.y), carry);
       break;
@@ -4128,10 +4572,11 @@ function readBest(code) {
   try { return JSON.parse(load(KEY_BEST) || '{}')[code] ?? null; } catch { return null; }
 }
 
-function writeBest(code, band) {
+/** Keeps the farthest ring per seed. */
+function writeBest(code, ring) {
   let all = {};
   try { all = JSON.parse(load(KEY_BEST) || '{}'); } catch { all = {}; }
-  if (all[code] === undefined || band > all[code]) { all[code] = band; store(KEY_BEST, JSON.stringify(all)); }
+  if (all[code] === undefined || ring > all[code]) { all[code] = ring; store(KEY_BEST, JSON.stringify(all)); }
 }
 
 /** State shared by input, tick and draw. */
@@ -4156,14 +4601,18 @@ function useCode(g, code) {
   g.code = code;
   g.world = createWorld(code);
   g.renderer = createRenderer(view, g.world);
-  g.preview = createSim(g.world, g.world.resumePoint(g.world.tree(0).entryX, 0));
+  g.preview = createSim(g.world, g.world.startPoint());
   titleCam(g);
 }
 
-/** Starts a run at save position p, or at band 0's entry when p is null. */
+/** Starts a run at save position p, or at the start band's entry when p is null. */
 function begin(g, p = null, carry = null) {
-  const at = p === null ? { x: g.world.tree(0).entryX, y: 0 } : boardOfPos(p);
-  g.sim = createSim(g.world, g.world.resumePoint(at.x, at.y), carry);
+  let start = g.world.startPoint();
+  if (p !== null) {
+    const { x, y } = boardOfPos(p);
+    start = g.world.resumePoint(x, y);
+  }
+  g.sim = createSim(g.world, start, carry);
   snapCam(g.cam, g.sim);
   g.screen = 'play';
   g.note = '';
@@ -4198,7 +4647,7 @@ function typingKey(g, e) {
   if (e.key === 'Enter') submitTyped(g);
   else if (e.key === 'Escape') { g.typing = null; g.note = ''; }
   else if (e.key === 'Backspace') g.typing = g.typing.slice(0, -1);
-  else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < 22) g.typing += e.key.toUpperCase();
+  else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < TYPED_MAX) g.typing += e.key.toUpperCase();
 }
 
 function titleKey(g, e) {
@@ -4243,7 +4692,7 @@ function overKey(g, e) {
   const s = g.sim;
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) {
     g.copied = '';
-    begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
+    begin(g, s.lastEntry, { time: s.time, maxRing: s.maxRing, lastEntry: s.lastEntry });
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => {
@@ -4275,9 +4724,9 @@ function handleEvents(g) {
   for (const ev of s.events) {
     if (ev === 'relight') { g.audio.play('relight'); g.audio.relight(); }
     else if (ev === 'ember' || ev === 'over' || ev === 'band') g.audio.play(ev);
-    if (ev === 'band') writeBest(g.code, s.maxBand);
+    if (ev === 'band') writeBest(g.code, s.maxRing);
     if (ev === 'entry') store(KEY_SAVE, entryCode(g));
-    if (ev === 'seam') g.world.retain(s.bd.band - 1, s.bd.band + 1);
+    if (ev === 'seam') g.world.retain(s.bd.u, s.bd.v);
   }
 }
 
@@ -4297,7 +4746,7 @@ function soundCues(g) {
 
 function endRun(g) {
   g.screen = 'over';
-  writeBest(g.code, g.sim.maxBand);
+  writeBest(g.code, g.sim.maxRing);
   store(KEY_SAVE, entryCode(g));
 }
 
@@ -4353,7 +4802,7 @@ function drawOver(g) {
   const r = g.renderer, s = g.sim;
   r.panel(40, 34, 240, 112);
   r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
-  r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
+  r.text(`TOMBS CLIMBED  ${s.maxRing}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
   r.text(saveLabel(g.copied), VIEW_W / 2, 96, 'a', { align: 'center' });
   r.text(entryCode(g), VIEW_W / 2, 108, 'i', { align: 'center' });

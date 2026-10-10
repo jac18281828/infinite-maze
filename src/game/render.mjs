@@ -194,7 +194,6 @@ export function createRenderer(canvas, world) {
   }
 
   function boardArt(bx, by) {
-    if (bx < 0 || bx >= 6) return null;
     const bd = world.board(bx, by);
     if (!bd.links) return null;
     let art = boards.get(bd.p);
@@ -207,7 +206,7 @@ export function createRenderer(canvas, world) {
     const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - 1, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + 1;
     const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - 1, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + 1;
     for (let by = by0; by <= by1 && budget > 0; by++) {
-      for (let bx = Math.max(0, bx0); bx <= Math.min(5, bx1) && budget > 0; bx++) {
+      for (let bx = bx0; bx <= bx1 && budget > 0; bx++) {
         const bd = world.board(bx, by);
         if (bd.links && !boards.has(bd.p)) { boardArt(bx, by); budget--; }
       }
@@ -397,7 +396,8 @@ export function createRenderer(canvas, world) {
     } else if (Math.floor(sim.time * 4) % 2 === 0) {
       text('EMBER', 70, 5, 'o');
     }
-    text(`TOMB ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
+    // The score: the farthest ring reached, max(|u|, |v|).
+    text(`TOMB ${sim.maxRing}`, VIEW_W - 5, 5, 'm', { align: 'right' });
   }
 
   return { ctx, scene, hud, text, panel, prepare };
