@@ -1,6 +1,5 @@
-// Band maze (spec section 3, docs/ROUTE.md section 4): a randomized DFS route
-// through the 6x4 boards from the entry board to the exit board, then
-// dead-end branches at most two boards deep. Board index i = 6 * row + x.
+// Band maze (spec section 3): a randomized DFS route through the 6x4 boards,
+// then dead-end branches at most two boards deep. Board index i = 6 * row + x.
 import { sfc32, u32 } from './hash.mjs';
 
 export const BANDW = 6;
@@ -13,27 +12,15 @@ export const MAX_DEPTH = 2;
 export const BDX = [1, 0, -1, 0];
 export const BDY = [0, 1, 0, -1];
 
-// Route walls L R D U as board directions.
-export const WALL_DIR = [2, 0, 3, 1];
-
 export function boardNeighbor(i, d) {
   const x = (i % BANDW) + BDX[d], y = ((i / BANDW) | 0) + BDY[d];
   if (x < 0 || x >= BANDW || y < 0 || y >= BANDH) return -1;
   return y * BANDW + x;
 }
 
-/**
- * Index of the board of band (u, v) behind its crossing on wall w (L R D U).
- * Both bands on a wall read the same key: `bandv` for a side wall, `bandh`
- * for a floor or ceiling.
- */
-export function wallBoard(H, u, v, w) {
-  switch (w) {
-    case 0: return (u32(H('bandv', u - 1, v)) % BANDH) * BANDW;
-    case 1: return (u32(H('bandv', u, v)) % BANDH) * BANDW + BANDW - 1;
-    case 2: return u32(H('bandh', u, v - 1)) % BANDW;
-    default: return (BANDH - 1) * BANDW + u32(H('bandh', u, v)) % BANDW;
-  }
+/** Column e_b of the door between bands b-1 and b. */
+export function edgeColumn(H, b) {
+  return u32(H('edge', b)) % BANDW;
 }
 
 function dfsRoute(rng, entry, exit) {
@@ -85,33 +72,23 @@ function attachDeadEnds(rng, depth, parent) {
 }
 
 /**
- * The band tree of route band (u, v), entered through wall E and left
- * through wall X (L R D U). `routeIndex[i]` is the route position or -1;
+ * The band tree of band b. `routeIndex[i]` is the route position or -1;
  * `depth[i]` is 0 on the route, 1..2 on a dead end, -1 for rock;
- * `parent[i]` is the board a dead end hangs from, else -1. A corner board
- * holding both the entry and the exit is the whole route, exempt from
- * MIN_ROUTE.
+ * `parent[i]` is the board a dead end hangs from, else -1.
  */
-export function buildBandTree(H, u, v, E, X) {
-  const entry = wallBoard(H, u, v, E), exit = wallBoard(H, u, v, X);
+export function buildBandTree(H, b) {
+  const entryX = edgeColumn(H, b);
+  const exitX = edgeColumn(H, b + 1);
+  const entry = entryX, exit = (BANDH - 1) * BANDW + exitX;
   for (let k = 0; ; k++) {
-    const rng = sfc32(H('band', u, v, k));
+    const rng = sfc32(H('band', b, k));
     const route = dfsRoute(rng, entry, exit);
-    if (route.length < MIN_ROUTE && entry !== exit) continue;
+    if (route.length < MIN_ROUTE) continue;
     const routeIndex = new Int8Array(NBOARD).fill(-1);
     const depth = new Int8Array(NBOARD).fill(-1);
     const parent = new Int8Array(NBOARD).fill(-1);
     route.forEach((i, r) => { routeIndex[i] = r; depth[i] = 0; });
     attachDeadEnds(rng, depth, parent);
-    return { u, v, rock: false, k, entryWall: E, exitWall: X, entry, exit, route, routeIndex, depth, parent };
+    return { b, k, entryX, exitX, route, routeIndex, depth, parent };
   }
-}
-
-/** A band off the route: every board is rock. */
-export function rockBand(u, v) {
-  const none = new Int8Array(NBOARD).fill(-1);
-  return {
-    u, v, rock: true, k: -1, entryWall: -1, exitWall: -1, entry: -1, exit: -1,
-    route: [], routeIndex: none, depth: none, parent: none,
-  };
 }

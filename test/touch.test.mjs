@@ -245,13 +245,3 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     assert.notEqual(zoomable, html);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
   });
-
-// The self-test's route leg resumes on boards outside columns 0-5; boardArt
-// refusing them draws the explorer's board as rock.
-test('the self-test route leg fails when boardArt refuses columns outside 0-5',
-  { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
-    const html = build();
-    const guarded = html.replace('function boardArt(bx, by) {', 'function boardArt(bx, by) {\n    if (bx < 0 || bx >= 6) return null;');
-    assert.notEqual(guarded, html);
-    assert.match(verdict(guarded, '1000,500'), /^fail: route leg: board \(-?\d+,-?\d+\) draws as rock$/);
-  });

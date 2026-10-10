@@ -1,21 +1,17 @@
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
-import { createWorld, boardOfPos, routeBands } from '../world/world.mjs';
+import { createWorld, boardOfPos } from '../world/world.mjs';
 import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
-import { createSim, step, TICK, BURN_S, KEY, feet, pose, nodeXY } from './sim.mjs';
+import { createSim, step, TICK, BURN_S, KEY, feet, pose } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
 import { createTouch, layout, viewport } from './touch.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 
-// Saves and bests keep keys of their own, so a stacked-world value never
-// reads as a position or a ring.
-const KEY_SAVE = 'infinite-maze.route.save';
-const KEY_BEST = 'infinite-maze.route.best';
-// A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
-const TYPED_MAX = 26;
+const KEY_SAVE = 'infinite-maze.save';
+const KEY_BEST = 'infinite-maze.best';
 
 // Every storage access is guarded; the game runs without storage.
 function load(key) {
@@ -99,41 +95,12 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
-    routeLeg(world);
     touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
   } catch (e) {
     finish(`fail: ${e && e.message ? e.message : e}`);
   }
-}
-
-/**
- * Resumes on the first route band with u != 0, whose boards lie outside
- * columns 0-5, and throws unless the frame draws the explorer's room as
- * maze: its pixels must differ from the same frame drawn with the
- * explorer's board as rock. The explorer stands on its door cell, which the
- * carve keeps, since a pruned cell draws as rock on any board. Touches no
- * storage and never boots.
- */
-function routeLeg(world) {
-  const band = routeBands(world, 0, 60).find((b) => b.u !== 0);
-  if (!band) throw new Error('route leg: no route band off columns 0-5');
-  const at = world.entryBoard(band.u, band.v);
-  const sim = createSim(world, world.resumePoint(at.x, at.y));
-  const cam = { x: 0, y: 0 };
-  snapCam(cam, sim);
-  // The inner 28x28 px of the explorer's 32 px room, in view pixels (y down).
-  const [nx, ny] = nodeXY(sim.bd, sim.cell);
-  const x0 = nx - 14 - Math.round(cam.x) + VIEW_W / 2, y0 = Math.round(cam.y) - (ny + 30) + VIEW_H / 2;
-  const room = (w) => {
-    createRenderer(view, w).scene(sim, cam, 0);
-    return view.getContext('2d').getImageData(x0, y0, 28, 28).data;
-  };
-  const rockBoard = { ...sim.bd, kind: 'rock', links: null, doors: [], doorMask: null };
-  const maze = room(world);
-  const rock = room({ ...world, board: (x, y) => (x === sim.bd.x && y === sim.bd.y ? rockBoard : world.board(x, y)) });
-  if (maze.every((v, i) => v === rock[i])) throw new Error(`route leg: board (${at.x},${at.y}) draws as rock`);
 }
 
 /**
@@ -185,10 +152,10 @@ function driveTouch(copied) {
   // Another tree board of the explorer's band, keeping its last entry, so the
   // pause screen's save code and the end screen's entry code differ.
   const offEntry = () => {
-    const s = g.sim, { u, v } = s.bd;
-    const carry = { time: s.time, maxRing: s.maxRing, lastEntry: s.lastEntry };
+    const s = g.sim, b = s.bd.band;
+    const carry = { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry };
     for (let i = 0; i < 24; i++) {
-      const bd = g.world.board(6 * u + (i % 6), 4 * v + Math.floor(i / 6));
+      const bd = g.world.board(i % 6, 4 * b + Math.floor(i / 6));
       if (!bd.links || bd.routeIndex === 0 || bd === s.bd || bd.p === s.lastEntry) continue;
       g.sim = createSim(g.world, g.world.resumePoint(bd.x, bd.y), carry);
       break;
@@ -339,11 +306,10 @@ function readBest(code) {
   try { return JSON.parse(load(KEY_BEST) || '{}')[code] ?? null; } catch { return null; }
 }
 
-/** Keeps the farthest ring per seed. */
-function writeBest(code, ring) {
+function writeBest(code, band) {
   let all = {};
   try { all = JSON.parse(load(KEY_BEST) || '{}'); } catch { all = {}; }
-  if (all[code] === undefined || ring > all[code]) { all[code] = ring; store(KEY_BEST, JSON.stringify(all)); }
+  if (all[code] === undefined || band > all[code]) { all[code] = band; store(KEY_BEST, JSON.stringify(all)); }
 }
 
 /** State shared by input, tick and draw. */
@@ -368,18 +334,14 @@ function useCode(g, code) {
   g.code = code;
   g.world = createWorld(code);
   g.renderer = createRenderer(view, g.world);
-  g.preview = createSim(g.world, g.world.startPoint());
+  g.preview = createSim(g.world, g.world.resumePoint(g.world.tree(0).entryX, 0));
   titleCam(g);
 }
 
-/** Starts a run at save position p, or at the start band's entry when p is null. */
+/** Starts a run at save position p, or at band 0's entry when p is null. */
 function begin(g, p = null, carry = null) {
-  let start = g.world.startPoint();
-  if (p !== null) {
-    const { x, y } = boardOfPos(p);
-    start = g.world.resumePoint(x, y);
-  }
-  g.sim = createSim(g.world, start, carry);
+  const at = p === null ? { x: g.world.tree(0).entryX, y: 0 } : boardOfPos(p);
+  g.sim = createSim(g.world, g.world.resumePoint(at.x, at.y), carry);
   snapCam(g.cam, g.sim);
   g.screen = 'play';
   g.note = '';
@@ -414,7 +376,7 @@ function typingKey(g, e) {
   if (e.key === 'Enter') submitTyped(g);
   else if (e.key === 'Escape') { g.typing = null; g.note = ''; }
   else if (e.key === 'Backspace') g.typing = g.typing.slice(0, -1);
-  else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < TYPED_MAX) g.typing += e.key.toUpperCase();
+  else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < 22) g.typing += e.key.toUpperCase();
 }
 
 function titleKey(g, e) {
@@ -459,7 +421,7 @@ function overKey(g, e) {
   const s = g.sim;
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) {
     g.copied = '';
-    begin(g, s.lastEntry, { time: s.time, maxRing: s.maxRing, lastEntry: s.lastEntry });
+    begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => {
@@ -491,9 +453,9 @@ function handleEvents(g) {
   for (const ev of s.events) {
     if (ev === 'relight') { g.audio.play('relight'); g.audio.relight(); }
     else if (ev === 'ember' || ev === 'over' || ev === 'band') g.audio.play(ev);
-    if (ev === 'band') writeBest(g.code, s.maxRing);
+    if (ev === 'band') writeBest(g.code, s.maxBand);
     if (ev === 'entry') store(KEY_SAVE, entryCode(g));
-    if (ev === 'seam') g.world.retain(s.bd.u, s.bd.v);
+    if (ev === 'seam') g.world.retain(s.bd.band - 1, s.bd.band + 1);
   }
 }
 
@@ -513,7 +475,7 @@ function soundCues(g) {
 
 function endRun(g) {
   g.screen = 'over';
-  writeBest(g.code, g.sim.maxRing);
+  writeBest(g.code, g.sim.maxBand);
   store(KEY_SAVE, entryCode(g));
 }
 
@@ -569,7 +531,7 @@ function drawOver(g) {
   const r = g.renderer, s = g.sim;
   r.panel(40, 34, 240, 112);
   r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
-  r.text(`TOMBS CLIMBED  ${s.maxRing}`, VIEW_W / 2, 68, 'c', { align: 'center' });
+  r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
   r.text(saveLabel(g.copied), VIEW_W / 2, 96, 'a', { align: 'center' });
   r.text(entryCode(g), VIEW_W / 2, 108, 'i', { align: 'center' });

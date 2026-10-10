@@ -2,7 +2,7 @@
 // cuts, each measured by the harness.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, boardCoords, cellPath, routeBands } from '../src/world/world.mjs';
+import { createWorld, boardCoords, cellPath } from '../src/world/world.mjs';
 import { NCELL, BW, CARVE_CELLS, DX, DY } from '../src/world/board.mjs';
 import { makeHasher, worldKey, sfc32, u32 } from '../src/world/hash.mjs';
 import { boardMask, rockAt, CELL_PX } from '../src/game/mask.mjs';
@@ -13,12 +13,12 @@ const H = makeHasher(worldKey(CODE));
 const uncarved = createWorld(CODE, { carveCells: NCELL });
 const carvedWorld = createWorld(CODE);
 
-/** Tree boards of route bands lo..hi. */
+/** Tree boards of bands lo..hi. */
 function boards(world, lo, hi) {
   const out = [];
-  for (const { u, v } of routeBands(world, lo, hi)) {
+  for (let b = lo; b <= hi; b++) {
     for (let i = 0; i < 24; i++) {
-      const { x, y } = boardCoords(u, v, i);
+      const { x, y } = boardCoords(b, i);
       const bd = world.board(x, y);
       if (bd.links) out.push(bd);
     }
@@ -112,15 +112,15 @@ function mismatch(list, rules) {
   return list.find((bd) => !same(reference(bd, rules), carvedWorld.board(bd.x, bd.y).links));
 }
 
-test('the reference carve reproduces the generator on 240 boards of route bands 0..9', () => {
-  assert.equal(tenBands.length, 240);
+test('the reference carve reproduces the generator on 232 boards of bands 0..9', () => {
+  assert.equal(tenBands.length, 232);
   const bad = mismatch(tenBands);
   assert.equal(bad, undefined, bad && `board (${bad.x},${bad.y})`);
 });
 
-test('the reference carve reproduces the generator on every fallback board of route bands 0..59', () => {
-  assert.equal(fallbacks.length, 14);
-  assert.equal(boards(uncarved, 0, 9).filter((bd) => bd.fallback).length, 4);
+test('the reference carve reproduces the generator on every fallback board of bands 0..59', () => {
+  assert.equal(fallbacks.length, 16);
+  assert.equal(boards(uncarved, 0, 9).filter((bd) => bd.fallback).length, 0);
   const bad = mismatch(fallbacks);
   assert.equal(bad, undefined, bad && `board (${bad.x},${bad.y})`);
 });

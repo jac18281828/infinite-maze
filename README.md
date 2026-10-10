@@ -1,14 +1,10 @@
 # Infinite Maze
 
-An endless tomb maze, explored by torchlight. One seed code grows a world of
-bands that tile the plane. Every band is a 6x4 grid of boards and every board
+An endless tomb maze, climbed by torchlight. One seed code grows a world of
+bands stacked without end. Every band is a 6x4 grid of boards and every board
 a 12x7 grid of cells, of which a board carves about 60% and leaves the rest
-rock. The route runs through nested blocks: a block is a 3x3 grid of smaller
-blocks, down to single bands, and the route crosses each block once along a
-random path through its children. It turns up, down, left and right in equal
-measure, never loops and runs on without end both ways; bands off it are rock.
-`docs/SPEC.md` is the full specification, and `docs/ROUTE.md` amends it with
-the nested route.
+rock. The maze has no loops at any scale, and one route always leads up.
+`docs/SPEC.md` is the full specification.
 
 ## Play
 
@@ -35,28 +31,19 @@ and no assets.
 - Every band entry holds a flame, and no stretch of the route runs more than
   150 s between flames.
 
-The title screen shows the seed code. **Enter** begins at the entry of the
-start band, (0, 0). **R** rolls a new world. **T** takes a typed seed or save
-code. **C** continues the last save. **K** copies the save code shown, or the
-seed code. The end screen's **C** copies its save code. The game keeps that
-save and the best score per seed in `localStorage` and runs without them where
-storage is blocked.
-
-The score is the farthest ring reached: band `(u, v)` lies on ring
-`max(|u|, |v|)`. The HUD's TOMB, the title's BEST TOMB and the end screen's
-TOMBS CLIMBED show it.
+The title screen shows the seed code. **Enter** begins at band 0. **R** rolls
+a new world. **T** takes a typed seed or save code. **C** continues the last
+save. **K** copies the save code shown, or the seed code. The end screen's
+**C** copies its save code. The game keeps that save and the best band per
+seed in `localStorage` and runs without them where storage is blocked.
 
 ## Save codes
 
-A save is the seed code and one integer: `K7Q2-M9XA:4813`. The integer pairs
-the coordinates of board `(x, y)`: with `z(n) = 2n` for `n >= 0` and
-`-2n - 1` otherwise, `a = z(x)` and `b = z(y)`, it is `a^2 + a + b` when
-`a >= b` and `a + b^2` otherwise. It is never negative, and a save holds
-`|x|` and `|y|` below 2^25. Resuming regenerates that board from the seed and
-lights the torch to full. The explorer stands at the board's door back toward
-its band entry; a rock board resumes at its band's entry, and a board in a
-rock band at the start band's entry. The end screen offers the code of the
-last band entry reached; Continue resumes there.
+A save is the seed code and one integer: `K7Q2-M9XA:4813`. The integer is
+`p = 6y + x` for board `(x, y)`, and it may be negative below band 0.
+Resuming regenerates that board from the seed and lights the torch to full.
+The explorer stands at the board's door back toward its band entry. The end
+screen offers the code of the last band entry reached; Continue resumes there.
 
 ## Build
 
@@ -78,17 +65,11 @@ node tools/acceptance.mjs
 ! grep -Eiq '(src|href)=["'\'']?https?:|fetch\(|XMLHttpRequest|WebSocket' infinite-maze.html
 ```
 
-`AGENTS.md` defines `WT` and `CHROME`. The acceptance harness walks the route
-from band (0, 0) through its doors and checks route indices -1000 to 1000
-(`--bands N` checks -N to N). It checks the balance of moves over route bands
-0 to 10,000 and start chain levels 1 to 20. It prints the fallback-board
-count, the largest and 99th percentile flame gaps, the balance shares, the
-highest start chain level the route needed and its run time.
-`infinite-maze.html#selftest` boots seed `0000-0000` and drives 3600 ticks of
-scripted input along the start band's flame chain. A second leg resumes on
-the first route band off columns 0 to 5 and fails unless the frame draws the
-explorer's board as maze rather than rock. It then sets `data-selftest` on
-`<body>`.
+`AGENTS.md` defines `WT` and `CHROME`. The acceptance harness checks bands
+-1000 to 1000 and prints the fallback-board count, the largest and 99th
+percentile flame gaps and its run time. `infinite-maze.html#selftest` boots
+seed `0000-0000` and drives 3600 ticks of scripted input. It then sets
+`data-selftest` on `<body>`.
 
 ## Deploy
 

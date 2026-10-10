@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, routeBands, boardCoords } from '../src/world/world.mjs';
+import { createWorld } from '../src/world/world.mjs';
 import { BW, NCELL, cellNeighbor, DX, DY } from '../src/world/board.mjs';
 import { boardMask, rockAt, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import {
@@ -14,23 +14,14 @@ const world = createWorld('00000000');
 const UP = [1, 4, 5];
 const has = (bd, c, d) => !!world.step(bd, c, d);
 
-/** Tree boards of route bands lo..hi. */
-function routeBoards(lo, hi) {
-  const out = [];
-  for (const { u, v } of routeBands(world, lo, hi)) {
-    for (let i = 0; i < 24; i++) {
-      const { x, y } = boardCoords(u, v, i);
-      const bd = world.board(x, y);
-      if (bd.links) out.push(bd);
-    }
-  }
-  return out;
-}
-
-/** First cell over route bands -3..3 where pred(bd, cell) holds. */
+/** First cell over bands -3..3 where pred(bd, cell) holds. */
 function findCell(pred) {
-  for (const bd of routeBoards(-3, 3)) {
-    for (let c = 0; c < NCELL; c++) if (pred(bd, c)) return { bd, cell: c };
+  for (let b = -3; b <= 3; b++) {
+    for (let i = 0; i < 24; i++) {
+      const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+      if (!bd.links) continue;
+      for (let c = 0; c < NCELL; c++) if (pred(bd, c)) return { bd, cell: c };
+    }
   }
   throw new Error('no cell matches');
 }
@@ -54,7 +45,14 @@ function driver(s) {
 }
 
 function sampleBoards() {
-  return routeBoards(-1, 1);
+  const out = [];
+  for (let b = -1; b <= 1; b++) {
+    for (let i = 0; i < 24; i++) {
+      const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+      if (bd.links) out.push(bd);
+    }
+  }
+  return out;
 }
 
 // Zone of a cell: its room plus the floor slab beneath it, in y-up pixels.
@@ -292,7 +290,7 @@ const noGallery = (bd, c) => [4, 5, 6, 7].every((d) => !has(bd, c, d));
 // west neighbour that has no link toward d.
 function ladderCell(d) {
   const toward = DY[d] > 0 ? UP : [3, 6, 7];
-  return findCell((bd, c) => bd.links[c] & (1 << d) && bd.links[c] & 4 && noGallery(bd, c)
+  return findCell((bd, c) => has(bd, c, d) && bd.links[c] & 4 && noGallery(bd, c)
     && toward.every((e) => !has(bd, c - 1, e)) && noGallery(bd, world.step(bd, c, d).cell));
 }
 
@@ -306,6 +304,7 @@ function boxRock(w, s, masks) {
     const by = Math.floor(y / BOARD_H);
     for (let x = X - 5; x < X + 5; x++) {
       const bx = Math.floor(x / BOARD_W);
+      if (bx < 0 || bx > 5) { n++; continue; }
       const bd = w.board(bx, by);
       if (!masks.has(bd)) masks.set(bd, boardMask(bd));
       if (rockAt(masks.get(bd), x - bx * BOARD_W, y - by * BOARD_H)) n++;
@@ -787,16 +786,15 @@ test('an engaged link spends a buffered tap in its direction', () => {
 });
 
 test('the explorer never leaves a cell except along a link or door, nor enters rock', () => {
-  // Random arrows and jumps from the entries of 9 route bands in each of 4 seeds.
+  // Random arrows and jumps from the entries of 7 bands in each of 4 seeds.
   let seed = 7;
   const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed >>> 16; };
   let moves = 0, jumps = 0, air = 0, bands = 0, dismounts = 0, letGos = 0, overStair = 0, boxes = 0;
   for (const code of ['00000000', '000001C3', 'K7Q2M9XA', 'ZZZZZZZZ']) {
     const w = createWorld(code);
-    for (const band of routeBands(w, -4, 4)) {
+    for (let b = -3; b <= 3; b++) {
       bands++;
-      const e = w.entryBoard(band.u, band.v);
-      const s = createSim(w, w.resumePoint(e.x, e.y));
+      const s = createSim(w, w.resumePoint(w.tree(b).entryX, 4 * b));
       const masks = new Map();
       let h = 0, v = 0, ph = 0, pv = 0, prev = [s.bd, s.cell];
       for (let i = 0; i < 3000; i++) {
@@ -861,7 +859,7 @@ test('a torch burns 300 s, gutters to a 10 s ember, then ends the run', () => {
 });
 
 test('standing in a flame keeps the torch full and the run alive', () => {
-  const f = world.bandFlames(0, 0).chain[0];
+  const f = world.bandFlames(0).chain[0];
   const s = createSim(world, { board: world.board(f.x, f.y), cell: f.cell });
   run(s, Math.round(330 / TICK), 0, 0);
   assert.equal(s.burn, BURN_S);
