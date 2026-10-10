@@ -12,10 +12,14 @@ import {
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
 
 export const SEED = '00000000';
-export const DIGEST_0_99 = '74358b58f8fec1cb409240291c6ce7ee2d289f46ee0d7983f4c3925a1236ccc0';
+export const DIGEST_0_99 = 'a4cdd32a1e141af34b729c22d50d8ee4c6d1260717c52863b75ad239c4589b42';
 export const GAP_LIMIT_MS = 150000;
 export const GALLERIES_MIN = 4;
 export const GALLERIES_MAX = 10;
+// A run of CEILING_MIN_BOARDS or more boards fails above CEILING_PERCENT
+// percent on fallback; shorter runs swing too far to enforce it.
+export const CEILING_PERCENT = 2;
+export const CEILING_MIN_BOARDS = 2000;
 
 const BW = 12, BH = 7, NCELL = 84, BANDW = 6, BANDH = 4;
 const DX = [1, 0, -1, 0, 1, -1, -1, 1];
@@ -269,8 +273,11 @@ function primaryPair(s, i, bd) {
   return [a, c];
 }
 
-/** Dead ends reach at most 2 boards; boards meet section 4 or flag fallback. */
-export function checkBounds(world, b0, b1) {
+/**
+ * Dead ends reach at most 2 boards; boards meet section 4 or flag fallback;
+ * a run of `minBoards` boards or more keeps fallbacks at or under 2%.
+ */
+export function checkBounds(world, b0, b1, minBoards = CEILING_MIN_BOARDS) {
   const errors = [];
   let boards = 0, fallbacks = 0;
   for (let b = b0; b <= b1; b++) {
@@ -289,6 +296,9 @@ export function checkBounds(world, b0, b1) {
         errors.push(`board (${bd.x},${bd.y}): misses targets (path ${m.pathLen}, junctions ${m.junctions}, short ${m.shortBranches}) without fallback`);
       }
     });
+  }
+  if (boards >= minBoards && 100 * fallbacks > CEILING_PERCENT * boards) {
+    errors.push(`${fallbacks} of ${boards} boards (${(100 * fallbacks / boards).toFixed(1)}%) fall back, over the ${CEILING_PERCENT}% ceiling`);
   }
   return { errors, boards, fallbacks };
 }

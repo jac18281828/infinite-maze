@@ -170,20 +170,51 @@ test('bounds rejects a dead-end branch 3 boards deep', () => {
   assert.deepEqual(checkTree(w, B0, B1).errors, []);
 });
 
-test('galleries rejects a corridor inside a gallery block of a valid tree', () => {
+/** A view of `world` with the first `n` tree boards flagged as fallbacks. */
+function withFallbacks(n) {
   const w = broken(world);
-  const bd = treeBoards().find((b) => b.fallback && b.links.some((m) => m & 16));
-  assert.ok(bd, 'no fallback board with a north-east gallery');
-  const c = bd.links.findIndex((m) => m & 16);
-  const g = new Set([c, c + 13]);
-  const tangled = copyBoard(bd);
-  // The corridor from the gallery's foot east closes a cycle through the tree
-  // path back; dropping a path link other than the gallery leaves a tree.
-  setLink(tangled, c, 0);
-  const { cells, dirs } = cellPath(bd.links, c, c + 1);
-  const k = dirs.findIndex((_, j) => !(g.has(cells[j]) && g.has(cells[j + 1])));
-  clearLink(tangled, cells[k], dirs[k]);
-  w._set(bd.x, bd.y, tangled);
+  for (const bd of treeBoards().slice(0, n)) w._set(bd.x, bd.y, { ...copyBoard(bd), fallback: true });
+  return w;
+}
+
+test('bounds rejects a run over the fallback ceiling and passes the sound world', () => {
+  const boards = treeBoards().length;
+  const w = withFallbacks(Math.ceil(boards / 20));
+  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  // Lowering the 2,000-board threshold below this world's size enforces the ceiling.
+  const errors = checkBounds(w, B0, B1, boards).errors;
+  assert.ok(errors.some((e) => e.includes('ceiling') && /\(\d+\.\d%\)/.test(e)), errors.join('\n'));
+  assert.deepEqual(checkBounds(world, B0, B1, boards).errors, []);
+});
+
+test('bounds reports a fallback rate over the ceiling on a run under 2,000 boards', () => {
+  const w = withFallbacks(Math.ceil(treeBoards().length / 20));
+  const r = checkBounds(w, B0, B1);
+  assert.ok(r.boards < 2000);
+  assert.ok(100 * r.fallbacks > 2 * r.boards);
+  assert.deepEqual(r.errors, []);
+});
+
+test('galleries rejects a corridor inside a gallery block of a valid tree', () => {
+  // The corridor from a north-east gallery's foot east closes a cycle through
+  // the tree path back; dropping a path link other than the gallery leaves a
+  // tree. The first board whose tangle still meets the targets serves.
+  let found = null;
+  for (const bd of treeBoards()) {
+    const c = bd.links.findIndex((m) => m & 16);
+    if (c < 0) continue;
+    const g = new Set([c, c + 13]);
+    const tangled = copyBoard(bd);
+    setLink(tangled, c, 0);
+    const { cells, dirs } = cellPath(bd.links, c, c + 1);
+    const k = dirs.findIndex((_, j) => !(g.has(cells[j]) && g.has(cells[j + 1])));
+    clearLink(tangled, cells[k], dirs[k]);
+    const w = broken(world);
+    w._set(bd.x, bd.y, tangled);
+    if (checkBounds(w, B0, B1).errors.length === 0) { found = { bd, c, w }; break; }
+  }
+  assert.ok(found, 'no board with a north-east gallery survives the tangle');
+  const { bd, c, w } = found;
   const errors = checkGalleries(w, B0, B1).errors;
   assert.ok(errors.some((e) => e.startsWith(`board (${bd.x},${bd.y}): gallery ${c}`) && e.includes('shares its block')), errors.join('\n'));
   // The board stays a valid tree, so only the galleries check catches it.
@@ -210,12 +241,12 @@ test('galleries rejects a world averaging under 4 galleries per board', () => {
 });
 
 test('flames rejects a removed flame that opens a gap over 150 s', () => {
-  // In seed 0000-01C3, band 1, dropping chain flame 4 leaves a 153.3 s walk.
-  const base = createWorld('000001C3');
-  const b = 1;
+  // In seed 0000-0013, band 2, dropping chain flame 2 leaves a 152.9 s walk.
+  const base = createWorld('00000013');
+  const b = 2;
   assert.deepEqual(checkFlames(base, b, b).errors, []);
   const fs = base.bandFlames(b);
-  const gone = fs.chain[4];
+  const gone = fs.chain[2];
   assert.equal(gone.kind, 'route');
   const w = broken(base, {
     flames: new Map([[b, { ...fs, chain: fs.chain.filter((f) => f !== gone), flames: fs.flames.filter((f) => f !== gone) }]]),

@@ -115,16 +115,30 @@ links no longer join is dropped, so those links connect the grid and the tree
 always spans every cell. Boards average 4–10 galleries.
 
 The board's primary door pair is its route entry and route exit, or, on a
-dead-end board, its single door and its deepest cell. Reroll `k` until both
-targets hold:
+dead-end board, its single door and its deepest cell. Each attempt must meet
+two targets:
 
 - The primary path covers at least 22 cells, with at least 6 junctions on it.
 - Every branch leaving the primary path runs at least 3 cells, so its end
   sits outside torchlight at the junction.
 
-After 64 rerolls, the board takes the attempt that best meets the targets.
-The cap bounds generation time, and the band and board seeds stay fixed, so
-the chosen attempt is deterministic too.
+The deficit of a tree is its shortfall in path cells, plus its shortfall in
+junctions, plus, for each branch under 3 cells, the cells it lacks. A branch
+holding a door is exempt. An attempt meets the targets at deficit 0.
+
+After growing its tree, an attempt repairs it by edge swaps. A swap adds a
+link between two cells that the attempt's reserved blocks leave open and
+removes one link on the cycle the new link closes, so the tree keeps spanning
+and every gallery keeps its block. The new link starts at a cell of a short
+branch, or at any cell when no short branch is left. A swap stays when it
+lowers the deficit, tried in cell, direction and cycle order. The repair stops
+at deficit 0, when no swap lowers the deficit, or after 24 swaps.
+
+Reroll `k` from 0 until an attempt meets the targets. After 32 rerolls the
+board takes the attempt with the lowest deficit, the earliest on a tie. The
+cap bounds generation time, and the band and board seeds stay fixed, so the
+chosen attempt is deterministic too. Over bands −1000 to 1000 of seed
+`0000-0000`, under 1% of boards take that fallback.
 
 Generation is lazy. The game holds the current band and its neighbours, and
 builds a board when it first comes within one board of the camera.
@@ -268,9 +282,10 @@ torch sputtering at low burn.
 ## 9. Runtime
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
-`requestAnimationFrame`. Building a board takes under 1 ms, and a band under
-0.1 ms. Audio starts on the first key press or touch, as browser autoplay
-policy requires.
+`requestAnimationFrame`. Building a board takes 0.7 ms on average and 18 ms
+at most, and a band under 0.1 ms, measured on node 26.7.0 and an Apple M3 Max.
+Audio starts on the first key press or touch, as browser autoplay policy
+requires.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
 mute and Esc to pause and show the save code. The title and end screens
@@ -315,7 +330,9 @@ same source the game uses:
   connected and has edges = nodes − 1 for each band. Exactly one door joins
   consecutive bands.
 - **Bounds:** every dead-end branch is at most 2 boards deep, and every board
-  meets the targets in §4 or records its best-attempt fallback.
+  meets the targets in §4 or records its best-attempt fallback. A run of at
+  least 2,000 boards fails when more than 2% of them fall back; a shorter run
+  reports the rate.
 - **Galleries:** every gallery owns its 2×2 block, no two blocks share a
   cell, and galleries average 4–10 per board. The harness reports the mean
   and the block conflicts.

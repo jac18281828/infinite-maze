@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld, digestBands, serializeBoard, posOf, bandOf, midpointIndex } from '../src/world/world.mjs';
-import { COST } from '../src/world/board.mjs';
-import { parseCode, formatCode, codeFromBytes } from '../src/world/hash.mjs';
+import { COST, DX, DY, NCELL, growTree, repairTree, analyze } from '../src/world/board.mjs';
+import { parseCode, formatCode, codeFromBytes, makeHasher, worldKey, sfc32 } from '../src/world/hash.mjs';
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
 import { MIN_ROUTE, MAX_DEPTH } from '../src/world/band.mjs';
-import { checkFlames, checkDeterminism, bandShape, walkMs } from '../tools/acceptance.mjs';
+import { checkFlames, checkDeterminism, bandShape, walkMs, measureTargets } from '../tools/acceptance.mjs';
 
 // Pinned digest of bands 0..99 for seed code 0000-0000.
-const DIGEST = '74358b58f8fec1cb409240291c6ce7ee2d289f46ee0d7983f4c3925a1236ccc0';
+const DIGEST = 'a4cdd32a1e141af34b729c22d50d8ee4c6d1260717c52863b75ad239c4589b42';
 
 test('seed 0000-0000 yields the pinned digest over bands 0..99', () => {
   assert.equal(digestBands(createWorld('00000000'), 0, 99), DIGEST);
@@ -139,4 +139,57 @@ test('a split gap gets its flame at the first path cell at or past half the walk
     checked++;
   });
   assert.ok(checked >= 1);
+});
+
+/** The growTree tree of attempt k of board (x, y) in band 0, with its primary pair. */
+function attempt(x, y, k) {
+  const bd = createWorld('00000000').board(x, y);
+  const H = makeHasher(worldKey('00000000'));
+  const cell = (dir) => bd.doors.find((d) => d.dir === dir).cell;
+  const isDoor = new Uint8Array(NCELL);
+  for (const d of bd.doors) isDoor[d.cell] = 1;
+  const links = growTree(sfc32(H('board', x, y, k)), new Uint8Array(NCELL));
+  return { bd, links, isDoor, a: cell(bd.aDir), b: bd.bDir >= 0 ? cell(bd.bDir) : -1 };
+}
+
+test('the repair brings a tree that misses the targets to a spanning tree that meets them', () => {
+  for (const [x, y] of [[0, 1], [2, 1]]) {
+    const { bd, links, isDoor, a, b } = attempt(x, y, 0);
+    const doorCells = bd.doors.map((d) => d.cell);
+    assert.ok(!measureTargets(links, a, b, doorCells).ok, `(${x},${y}) attempt 0 meets the targets before the repair`);
+    const r = repairTree(links, a, b, isDoor);
+    assert.equal(r.deficit, 0);
+    assert.equal(analyze(links, a, b, isDoor).deficit, 0);
+    assert.ok(measureTargets(links, a, b, doorCells).ok, `(${x},${y}) repaired tree misses the targets`);
+    // Spanning: every link has its mirror, 83 links join all 84 cells.
+    let ends = 0;
+    const seen = new Set([a]), queue = [a];
+    for (let h = 0; h < queue.length; h++) {
+      for (let d = 0; d < 8; d++) {
+        if (!(links[queue[h]] & (1 << d))) continue;
+        const t = queue[h] + DY[d] * 12 + DX[d];
+        assert.ok(links[t] & (1 << (d ^ 2)), `one-sided link ${queue[h]}->${t}`);
+        if (!seen.has(t)) { seen.add(t); queue.push(t); }
+        ends++;
+      }
+    }
+    assert.equal(seen.size, NCELL);
+    assert.equal(ends, 2 * (NCELL - 1));
+    // Each gallery's block holds no other link and no cell joins two blocks.
+    const owner = new Map();
+    for (let c = 0; c < NCELL; c++) {
+      for (const d of [4, 5]) {
+        if (!(links[c] & (1 << d))) continue;
+        const a0 = c - (d === 5 ? 1 : 0), block = [a0, a0 + 1, a0 + 12, a0 + 13];
+        let inBlock = 0;
+        for (const u of block) {
+          for (let e = 0; e < 8; e++) if (links[u] & (1 << e) && block.includes(u + DY[e] * 12 + DX[e])) inBlock++;
+          assert.ok(!owner.has(u), `cell ${u} lies in two blocks`);
+          owner.set(u, c);
+        }
+        assert.equal(inBlock, 2, `gallery ${c} shares its block`);
+      }
+    }
+    assert.ok(owner.size > 0);
+  }
 });

@@ -253,16 +253,19 @@ return { CROCKFORD, parseCode, formatCode, codeFromBytes, worldKey, makeHasher, 
 // src/world/board.mjs
 const __m2 = (() => {
 const { sfc32 } = __m1;
-// Board cell maze: a growing-tree spanning tree over the 12x7 cell grid,
-// rerolled until the primary path meets the spec section 4 targets. Each
-// gallery owns a 2x2 block that holds no other link, and blocks never
-// overlap, so a cell has at most one gallery.
+// Board cell maze: a growing-tree spanning tree over the 12x7 cell grid. Each
+// attempt repairs the tree by edge swaps, and attempts reroll until the
+// primary path meets the spec section 4 targets. Each gallery owns a 2x2
+// block that holds no other link, and blocks never overlap, so a cell has at
+// most one gallery.
 
 
 const BW = 12;
 const BH = 7;
 const NCELL = BW * BH;
-const MAX_REROLL = 64;
+const MAX_REROLL = 32;
+// Each attempt makes at most MAX_SWAPS edge swaps.
+const MAX_SWAPS = 24;
 // Each attempt keeps up to MAX_BLOCKS gallery blocks from BLOCK_DRAWS draws.
 const MAX_BLOCKS = 8;
 const BLOCK_DRAWS = 32;
@@ -411,12 +414,16 @@ const onPath = new Uint8Array(NCELL);
 const subMax = new Int16Array(NCELL);
 const subDoor = new Uint8Array(NCELL);
 
+// Figures of the last `measure`.
+const fig = { b: 0, pathLen: 0, junctions: 0, shortBranches: 0, deficit: 0 };
+
 /**
- * Measures a tree against the targets. `a` is the first primary cell; `b` is
- * the second, or -1 for the deepest cell from `a` (ties to the lowest index).
- * Branches holding a cell flagged in `isDoor` are exempt from the length rule.
+ * Measures a tree against the targets into `fig`. `a` is the first primary
+ * cell; `b` is the second, or -1 for the deepest cell from `a` (ties to the
+ * lowest index). Branches holding a cell flagged in `isDoor` are exempt from
+ * the length rule. Returns the deficit.
  */
-function analyze(links, a, b, isDoor) {
+function measure(links, a, b, isDoor) {
   dist.fill(-1);
   parent.fill(-1);
   onPath.fill(0);
@@ -466,14 +473,132 @@ function analyze(links, a, b, isDoor) {
   }
   const deficit = Math.max(0, TARGET_PATH - pathLen)
     + Math.max(0, TARGET_JUNCTIONS - junctions) + shortfall;
+  fig.b = b;
+  fig.pathLen = pathLen;
+  fig.junctions = junctions;
+  fig.shortBranches = shortBranches;
+  return fig.deficit = deficit;
+}
+
+/** The figures of the last `measure`, with the primary pair (a, b) resolved. */
+function figures(a) {
+  const { b, pathLen, junctions, shortBranches, deficit } = fig;
   return { a, b, pathLen, junctions, shortBranches, deficit };
+}
+
+function analyze(links, a, b, isDoor) {
+  measure(links, a, b, isDoor);
+  return figures(a);
+}
+
+const baseParent = new Int16Array(NCELL);
+const baseDist = new Int16Array(NCELL);
+const inShort = new Uint8Array(NCELL);
+const upCell = new Int16Array(NCELL);
+const upDir = new Uint8Array(NCELL);
+const cycCell = new Int16Array(2 * NCELL);
+const cycDir = new Uint8Array(2 * NCELL);
+
+/**
+ * Flags in `inShort` every cell of a short branch, and snapshots the tree
+ * shape of the last `measure` into `baseParent` and `baseDist`. Branches
+ * come off the primary path, so the BFS order meets a parent first.
+ */
+function markShort() {
+  baseParent.set(parent);
+  baseDist.set(dist);
+  inShort.fill(0);
+  for (let i = 1; i < NCELL; i++) {
+    const c = order[i];
+    if (onPath[c]) continue;
+    const p = parent[c];
+    inShort[c] = onPath[p]
+      ? (!subDoor[c] && subMax[c] - dist[p] < TARGET_BRANCH ? 1 : 0)
+      : inShort[p];
+  }
+}
+
+/** Direction from cell c to its neighbour t, or -1 when they are not adjacent. */
+function dirTo(c, t) {
+  for (let d = 0; d < 8; d++) if (NB[8 * c + d] === t) return d;
+  return -1;
+}
+
+/**
+ * Lists the tree links on the cycle that the link u-v would close, into
+ * cycCell and cycDir (a cell and the direction of its link), u's side
+ * first. Returns the count.
+ */
+function cycleLinks(u, v) {
+  let n = 0, nu = 0;
+  while (u !== v) {
+    if (baseDist[u] >= baseDist[v]) {
+      upCell[nu] = u; upDir[nu++] = dirTo(u, baseParent[u]);
+      u = baseParent[u];
+    } else {
+      cycCell[NCELL + n] = v; cycDir[NCELL + n++] = dirTo(v, baseParent[v]);
+      v = baseParent[v];
+    }
+  }
+  for (let i = 0; i < nu; i++) { cycCell[i] = upCell[i]; cycDir[i] = upDir[i]; }
+  for (let i = 0; i < n; i++) { cycCell[nu + i] = cycCell[NCELL + i]; cycDir[nu + i] = cycDir[NCELL + i]; }
+  return nu + n;
+}
+
+function addLink(links, c, d) {
+  links[c] |= 1 << d;
+  links[NB[8 * c + d]] |= 1 << (d ^ 2);
+}
+
+function dropLink(links, c, d) {
+  links[c] &= ~(1 << d);
+  links[NB[8 * c + d]] &= ~(1 << (d ^ 2));
+}
+
+/**
+ * Repairs a tree by edge swaps. A swap adds a link (u, v) from the `open`
+ * graph that the last `growTree` left, and drops a link on the cycle it
+ * closes, so the tree keeps spanning and every gallery keeps its block. The
+ * source u runs over the cells of short branches in cell order, or over every
+ * cell once no short branch is left; the first swap that lowers the deficit
+ * stays. The repair stops at deficit 0, when no swap lowers it or after
+ * MAX_SWAPS swaps. Returns the analysis of the repaired tree.
+ */
+function repairTree(links, a, b, isDoor) {
+  let deficit = measure(links, a, b, isDoor);
+  let fresh = true;
+  for (let swaps = 0; swaps < MAX_SWAPS && deficit > 0; swaps++) {
+    markShort();
+    const anyCell = fig.shortBranches === 0;
+    let lowered = false;
+    for (let u = 0; u < NCELL && !lowered; u++) {
+      if (!anyCell && !inShort[u]) continue;
+      for (let d = 0; d < 8 && !lowered; d++) {
+        if (!(open[u] & (1 << d)) || links[u] & (1 << d)) continue;
+        const v = NB[8 * u + d];
+        const n = cycleLinks(u, v);
+        addLink(links, u, d);
+        for (let i = 0; i < n; i++) {
+          dropLink(links, cycCell[i], cycDir[i]);
+          const t = measure(links, a, b, isDoor);
+          if (t < deficit) { deficit = t; lowered = true; break; }
+          addLink(links, cycCell[i], cycDir[i]);
+        }
+        if (!lowered) dropLink(links, u, d);
+      }
+    }
+    if (!lowered) { fresh = false; break; }
+  }
+  // A failed trial leaves `fig` on a trial tree.
+  return fresh ? figures(a) : analyze(links, a, b, isDoor);
 }
 
 /**
  * Builds the cell maze of board (x, y). `doorCells` lists every door cell;
  * the primary pair is (a, b), with b = -1 on a dead-end board. Attempts run
- * k = 0..64; the first to meet every target wins, else the lowest deficit
- * (earliest k on ties) is kept as the best-attempt fallback.
+ * k = 0..MAX_REROLL, each repaired by edge swaps; the first to meet every
+ * target wins, else the lowest deficit (earliest k on ties) is kept as the
+ * best-attempt fallback.
  */
 function buildBoardMaze(H, x, y, doorCells, a, b) {
   const isDoor = new Uint8Array(NCELL);
@@ -482,7 +607,7 @@ function buildBoardMaze(H, x, y, doorCells, a, b) {
   let best = null, bestLinks = null;
   for (let k = 0; k <= MAX_REROLL; k++) {
     growTree(sfc32(H('board', x, y, k)), links);
-    const r = analyze(links, a, b, isDoor);
+    const r = repairTree(links, a, b, isDoor);
     if (r.deficit === 0) {
       return { links, k, fallback: false, ...r };
     }
@@ -493,7 +618,7 @@ function buildBoardMaze(H, x, y, doorCells, a, b) {
   }
   return { links: bestLinks, fallback: true, ...best };
 }
-return { BW, BH, NCELL, MAX_REROLL, MAX_BLOCKS, BLOCK_DRAWS, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, buildBoardMaze };
+return { BW, BH, NCELL, MAX_REROLL, MAX_SWAPS, MAX_BLOCKS, BLOCK_DRAWS, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, repairTree, buildBoardMaze };
 })();
 
 // src/world/band.mjs
