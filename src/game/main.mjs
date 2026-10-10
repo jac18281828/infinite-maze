@@ -169,6 +169,22 @@ function driveTouch(copied) {
     click(sid, 'sound');
     need(g.audio.muted === was, `${sid} SOUND toggles back`);
   };
+  // Dispatched touches carry no native click: a lift the zoom guard leaves
+  // alone clicks nothing, and one it cancels clicks its key itself.
+  let touchId = 0;
+  const touchTap = (el, start, end, liftOn = el) => {
+    const r = live(liftOn, 'tapped element');
+    const t = { identifier: ++touchId, target: el, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    const fire = (type, at) => {
+      const ev = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'timeStamp', { value: at });
+      Object.defineProperty(ev, 'changedTouches', { value: [t] });
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    fire('touchstart', start);
+    return fire('touchend', end);
+  };
 
   // Mode switch and canvas size.
   pointer('pointerdown', display, 10, 10);
@@ -185,6 +201,13 @@ function driveTouch(copied) {
   click('title', 'roll');
   need(g.code !== rolled, 'NEW ROLL changes the code');
   toggles('title');
+  const sound = touch.soft('title', 'sound'), soundArt = sound.querySelector('canvas'), muted = g.audio.muted;
+  need(!touchTap(display, 1000, 1100), 'a lone tap on the view is left to the browser');
+  need(touchTap(display, 1400, 1900), 'a tap starting 300 ms after a lift is cancelled, however long it is held');
+  need(!touchTap(soundArt, 3000, 3100) && g.audio.muted === muted, 'a lone tap on a key is left to the browser');
+  need(touchTap(soundArt, 3400, 3500) && g.audio.muted !== muted, 'a quick second tap on a key is cancelled and clicks it');
+  need(touchTap(soundArt, 3800, 3900, display) && g.audio.muted !== muted, 'a quick second tap lifted off its key clicks nothing');
+  click('title', 'sound');
   // A save under another seed, so the title's save code differs from its seed code.
   store(KEY_SAVE, g.code === 'K7Q2M9XA' ? '0000-0000:13' : 'K7Q2-M9XA:13');
   const saved = decodeSave(load(KEY_SAVE));

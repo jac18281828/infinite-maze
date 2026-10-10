@@ -3292,6 +3292,7 @@ const PAD_FRAC = 0.42;
 const GAP = 8;
 const KEY_H = 48;
 const KEY_MIN_W = 44;
+const DOUBLE_TAP_MS = 350;
 
 const mid = (a, size, inner) => a + (size - inner) / 2;
 
@@ -3565,6 +3566,32 @@ function drawLabel(cv, text) {
 }
 
 /**
+ * Safari ignores user-scalable=no and zooms on a tap that starts within
+ * DOUBLE_TAP_MS of the last lift. Cancelling that tap's touchend stops the
+ * zoom and drops its click, so a soft key it starts and lifts on clicks
+ * itself.
+ */
+function stopDoubleTapZoom() {
+  let lastEnd = -Infinity;
+  const quick = new Set();
+  document.addEventListener('touchstart', (e) => {
+    const gap = e.timeStamp - lastEnd;
+    if (gap >= 0 && gap < DOUBLE_TAP_MS) for (const t of e.changedTouches) quick.add(t.identifier);
+  }, { passive: true });
+  document.addEventListener('touchcancel', (e) => { for (const t of e.changedTouches) quick.delete(t.identifier); });
+  document.addEventListener('touchend', (e) => {
+    lastEnd = e.timeStamp;
+    const lifted = [...e.changedTouches].filter((t) => quick.delete(t.identifier));
+    if (lifted.length === 0 || !e.cancelable) return;
+    e.preventDefault();
+    for (const t of lifted) {
+      const key = t.target.closest && t.target.closest('#touch button');
+      if (key && key.contains(document.elementFromPoint(t.clientX, t.clientY))) key.click();
+    }
+  }, { passive: false });
+}
+
+/**
  * The controls. `state()` reports what the game shows: { screen, typing,
  * save, muted }. `onMode()` runs when touch mode changes, so the caller can
  * refit the canvas through `relayout`.
@@ -3648,6 +3675,7 @@ function createTouch({ state, onMode }) {
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('contextmenu', (e) => e.preventDefault());
+  stopDoubleTapZoom();
 
   function setOn(next) {
     if (next === on) return;
@@ -3963,6 +3991,22 @@ function driveTouch(copied) {
     click(sid, 'sound');
     need(g.audio.muted === was, `${sid} SOUND toggles back`);
   };
+  // Dispatched touches carry no native click: a lift the zoom guard leaves
+  // alone clicks nothing, and one it cancels clicks its key itself.
+  let touchId = 0;
+  const touchTap = (el, start, end, liftOn = el) => {
+    const r = live(liftOn, 'tapped element');
+    const t = { identifier: ++touchId, target: el, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    const fire = (type, at) => {
+      const ev = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'timeStamp', { value: at });
+      Object.defineProperty(ev, 'changedTouches', { value: [t] });
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    fire('touchstart', start);
+    return fire('touchend', end);
+  };
 
   // Mode switch and canvas size.
   pointer('pointerdown', display, 10, 10);
@@ -3979,6 +4023,13 @@ function driveTouch(copied) {
   click('title', 'roll');
   need(g.code !== rolled, 'NEW ROLL changes the code');
   toggles('title');
+  const sound = touch.soft('title', 'sound'), soundArt = sound.querySelector('canvas'), muted = g.audio.muted;
+  need(!touchTap(display, 1000, 1100), 'a lone tap on the view is left to the browser');
+  need(touchTap(display, 1400, 1900), 'a tap starting 300 ms after a lift is cancelled, however long it is held');
+  need(!touchTap(soundArt, 3000, 3100) && g.audio.muted === muted, 'a lone tap on a key is left to the browser');
+  need(touchTap(soundArt, 3400, 3500) && g.audio.muted !== muted, 'a quick second tap on a key is cancelled and clicks it');
+  need(touchTap(soundArt, 3800, 3900, display) && g.audio.muted !== muted, 'a quick second tap lifted off its key clicks nothing');
+  click('title', 'sound');
   // A save under another seed, so the title's save code differs from its seed code.
   store(KEY_SAVE, g.code === 'K7Q2M9XA' ? '0000-0000:13' : 'K7Q2-M9XA:13');
   const saved = decodeSave(load(KEY_SAVE));

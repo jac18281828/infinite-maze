@@ -213,7 +213,8 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
 });
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
-// it here, and again with the touch layer removed and a control mis-keyed.
+// it here, and again with the touch layer removed, a control mis-keyed and
+// the zoom guard dropped.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -230,7 +231,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer or with a mis-keyed control',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control or without the zoom guard',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -240,4 +241,7 @@ test('the self-test touch leg passes, and fails without the touch layer or with 
     const miskeyed = html.replace("...K('KeyR', 'r')", "...K('KeyX', 'x')");
     assert.notEqual(miskeyed, html);
     assert.match(verdict(miskeyed, '500,1000'), /^fail: touch NEW ROLL/);
+    const zoomable = html.replace('stopDoubleTapZoom();', '');
+    assert.notEqual(zoomable, html);
+    assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
   });

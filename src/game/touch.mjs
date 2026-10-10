@@ -12,6 +12,7 @@ export const PAD_FRAC = 0.42;
 const GAP = 8;
 const KEY_H = 48;
 const KEY_MIN_W = 44;
+const DOUBLE_TAP_MS = 350;
 
 const mid = (a, size, inner) => a + (size - inner) / 2;
 
@@ -285,6 +286,32 @@ function drawLabel(cv, text) {
 }
 
 /**
+ * Safari ignores user-scalable=no and zooms on a tap that starts within
+ * DOUBLE_TAP_MS of the last lift. Cancelling that tap's touchend stops the
+ * zoom and drops its click, so a soft key it starts and lifts on clicks
+ * itself.
+ */
+function stopDoubleTapZoom() {
+  let lastEnd = -Infinity;
+  const quick = new Set();
+  document.addEventListener('touchstart', (e) => {
+    const gap = e.timeStamp - lastEnd;
+    if (gap >= 0 && gap < DOUBLE_TAP_MS) for (const t of e.changedTouches) quick.add(t.identifier);
+  }, { passive: true });
+  document.addEventListener('touchcancel', (e) => { for (const t of e.changedTouches) quick.delete(t.identifier); });
+  document.addEventListener('touchend', (e) => {
+    lastEnd = e.timeStamp;
+    const lifted = [...e.changedTouches].filter((t) => quick.delete(t.identifier));
+    if (lifted.length === 0 || !e.cancelable) return;
+    e.preventDefault();
+    for (const t of lifted) {
+      const key = t.target.closest && t.target.closest('#touch button');
+      if (key && key.contains(document.elementFromPoint(t.clientX, t.clientY))) key.click();
+    }
+  }, { passive: false });
+}
+
+/**
  * The controls. `state()` reports what the game shows: { screen, typing,
  * save, muted }. `onMode()` runs when touch mode changes, so the caller can
  * refit the canvas through `relayout`.
@@ -368,6 +395,7 @@ export function createTouch({ state, onMode }) {
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('contextmenu', (e) => e.preventDefault());
+  stopDoubleTapZoom();
 
   function setOn(next) {
     if (next === on) return;
