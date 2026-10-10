@@ -434,7 +434,7 @@ function drawTitle(g, t) {
     r.text('R      NEW ROLL', 72, 92, 'b');
     r.text('T      TYPE A CODE', 72, 104, 'b');
     if (saved) r.text(`C      ${formatCode(saved.code)}:${saved.p}`, 72, 116, 'b');
-    r.text(best === null ? 'NO BAND REACHED YET' : `BEST BAND  ${best}`, VIEW_W / 2, saved ? 132 : 120, 'p', { align: 'center' });
+    r.text(best === null ? 'NO TOMB REACHED YET' : `BEST TOMB  ${best}`, VIEW_W / 2, saved ? 132 : 120, 'p', { align: 'center' });
   }
   if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
   r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
@@ -454,7 +454,7 @@ function drawOver(g) {
   const r = g.renderer, s = g.sim;
   r.panel(40, 34, 240, 112);
   r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
-  r.text(`BANDS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
+  r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
   r.text('SAVE CODE', VIEW_W / 2, 96, 'a', { align: 'center' });
   r.text(entryCode(g), VIEW_W / 2, 108, 'i', { align: 'center' });

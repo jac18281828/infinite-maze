@@ -212,8 +212,8 @@ only real disorientation runs it dry.
 
 When the burn reaches zero, the torch gutters to an 8 px ember for 10 s, and
 reaching a flame in that time relights it. Otherwise the run ends. The end
-screen shows the bands climbed, the time and the save code for the last band
-entry reached, and Continue resumes there with a full torch.
+screen shows the bands climbed, labelled tombs on screen, the time and the
+save code for the last band entry reached, and Continue resumes there with a full torch.
 
 ## 8. Presentation
 
