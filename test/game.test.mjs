@@ -632,6 +632,19 @@ test('a side press on a ladder dismounts to the nearer end; Up or Down held keep
   }
 });
 
+test('a ladder engaged with no tick time left stays engaged, not back at its start', () => {
+  // One run step from the foot, the slide uses the whole tick: the link
+  // engages at prog 0 and moves forward by nothing.
+  const at = ladderCell(1);
+  for (const side of [1, -1]) {
+    const s = simOn(at, side * RUN_SPEED * TICK);
+    step(s, 0, 1, false, { press: KEY.U, release: 0 });
+    assert.ok(s.mode === 'link' && s.link === 1 && Math.abs(s.prog) <= 1e-9, `side ${side}: ${s.mode} ${s.prog}`);
+    step(s, 0, 1);
+    assert.ok(s.mode === 'link' && s.prog > 0, `side ${side}: climbs`);
+  }
+});
+
 test('a side press from a ladder\'s midpoint on dismounts to its far end', () => {
   const at = ladderCell(1), far = world.step(at.bd, at.cell, 1).cell;
   for (const [prog, end] of [[24, far], [24 - 1e-6, at.cell]]) {
