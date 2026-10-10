@@ -3,10 +3,10 @@
 // - room: cell-local [8,40) x [8,40); corridor: the 16 px wall between rooms;
 // - ladder: a 16 px shaft through the slab above the lower room's centre;
 // - gallery: a 45-degree tunnel from the lower room's centre to the upper
-//   room's centre. Its air stays under the lower room's ceiling, stops a
-//   pixel short of any corridor above, and a 3 px solid stair stringer
-//   divides it from any corridor below, so it meets other passages only in
-//   the zone (room plus floor slab) of a cell it links.
+//   room's centre, 24 px tall over its stair. A gallery's 2x2 block holds no
+//   other link, so the walls and slabs it crosses hold no other passage. Its
+//   air stays under the lower room's ceiling, so it meets other passages only
+//   in the zone (room plus floor slab) of a cell it links.
 import { BW, NCELL } from '../world/board.mjs';
 
 export const MASK_W = 576;
@@ -23,7 +23,6 @@ export function boardMask(bd) {
     }
   };
   if (!bd || !bd.links) return mask;
-  const stringers = [];
   for (let c = 0; c < NCELL; c++) {
     const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
     const m = bd.links[c], doors = bd.doorMask[c];
@@ -45,18 +44,9 @@ export function boardMask(bd) {
         const lx = ne ? 24 + i : 23 - i;
         const x = X + lx, f = Y + 8 + i;
         const inRoom = ne ? lx < 40 : lx >= 8;
-        const inWall = ne ? lx >= 40 && lx < 56 : lx >= -8 && lx < 8;
-        let top = f + 25;
-        if (inRoom) top = Math.min(top, Y + 40);
-        else if (inWall) top = Math.min(top, Y + 55);
-        set(x, f + 1, x + 1, top, 0);
-        if (inWall) stringers.push(x, f);
+        set(x, f + 1, x + 1, inRoom ? Math.min(f + 25, Y + 40) : f + 25, 0);
       }
     }
-  }
-  for (let k = 0; k < stringers.length; k += 2) {
-    const x = stringers[k], f = stringers[k + 1];
-    set(x, f - 2, x + 1, f + 1, 1);
   }
   return mask;
 }

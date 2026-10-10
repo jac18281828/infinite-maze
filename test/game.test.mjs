@@ -151,12 +151,13 @@ test('the explorer climbs ladders at 48 px/s', () => {
 });
 
 test('the explorer walks galleries at 72 px/s along the slope', () => {
+  // Blocks never overlap, so galleries never chain; half a second fits one.
   for (const d of [4, 5]) {
-    const s = simAt(d, 2);
+    const s = simAt(d, 1);
     const [x0, y0] = feet(s);
-    run(s, 60, DX[d], 1);
+    run(s, 30, DX[d], 1);
     const [x1, y1] = feet(s);
-    assert.ok(Math.abs(Math.hypot(x1 - x0, y1 - y0) - 72) < 1e-6, `walked ${Math.hypot(x1 - x0, y1 - y0)}`);
+    assert.ok(Math.abs(Math.hypot(x1 - x0, y1 - y0) - 36) < 1e-6, `walked ${Math.hypot(x1 - x0, y1 - y0)}`);
     assert.ok(Math.abs((x1 - x0) * DX[d] - (y1 - y0)) < 1e-6, 'slope is 45 degrees');
   }
 });

@@ -12,8 +12,10 @@ import {
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
 
 export const SEED = '00000000';
-export const DIGEST_0_99 = 'a75d99f7895a561d764d70f7ea24696b25a0ba4ab08da16ab316b3a7071830dd';
+export const DIGEST_0_99 = '74358b58f8fec1cb409240291c6ce7ee2d289f46ee0d7983f4c3925a1236ccc0';
 export const GAP_LIMIT_MS = 150000;
+export const GALLERIES_MIN = 4;
+export const GALLERIES_MAX = 10;
 
 const BW = 12, BH = 7, NCELL = 84, BANDW = 6, BANDH = 4;
 const DX = [1, 0, -1, 0, 1, -1, -1, 1];
@@ -291,6 +293,45 @@ export function checkBounds(world, b0, b1) {
   return { errors, boards, fallbacks };
 }
 
+/**
+ * Every gallery owns its 2x2 block: no other link joins two of its cells and
+ * no cell lies in two blocks. Galleries average 4-10 per board.
+ */
+export function checkGalleries(world, b0, b1) {
+  const errors = [];
+  let boards = 0, galleries = 0, conflicts = 0;
+  for (let b = b0; b <= b1; b++) {
+    for (const bd of bandBoards(world, b)) {
+      if (!bd.links) continue;
+      boards++;
+      const owner = new Array(NCELL).fill(-1);
+      for (let c = 0; c < NCELL; c++) {
+        for (const d of [4, 5]) {
+          if (!(bd.links[c] & (1 << d))) continue;
+          galleries++;
+          const x0 = (c % BW) - (d === 5 ? 1 : 0), a = ((c / BW) | 0) * BW + x0;
+          const block = [a, a + 1, a + BW, a + BW + 1];
+          // Each in-block link counts once from each end; the gallery is one.
+          let ends = 0;
+          for (const u of block) {
+            for (let e = 0; e < 8; e++) if (bd.links[u] & (1 << e) && block.includes(nbCell(u, e))) ends++;
+          }
+          const shared = ends > 2, overlap = block.some((u) => owner[u] >= 0);
+          for (const u of block) owner[u] = c;
+          if (!shared && !overlap) continue;
+          conflicts++;
+          errors.push(`board (${bd.x},${bd.y}): gallery ${c} dir ${d} ${shared ? 'shares its block with another link' : 'overlaps another block'}`);
+        }
+      }
+    }
+  }
+  const mean = boards ? galleries / boards : 0;
+  if (mean < GALLERIES_MIN || mean > GALLERIES_MAX) {
+    errors.push(`galleries per board average ${mean.toFixed(2)}, outside ${GALLERIES_MIN}-${GALLERIES_MAX}`);
+  }
+  return { errors, boards, galleries, conflicts, mean };
+}
+
 /** Walking time in ms from cell A to cell B through the cell graph of `boards`. */
 export function walkMs(world, boards, A, B) {
   const slot = new Map(boards.map((bd, i) => [bd.p, i]));
@@ -459,6 +500,8 @@ function runChecks(world, code, b0, b1) {
   rows.push(['tree', checkTree(world, b0, b1), 'edges = nodes - 1 per band; one door per band pair']);
   const bounds = checkBounds(world, b0, b1);
   rows.push(['bounds', bounds, `${bounds.boards} boards, ${bounds.fallbacks} on best-attempt fallback`]);
+  const galleries = checkGalleries(world, b0, b1);
+  rows.push(['galleries', galleries, `${galleries.mean.toFixed(2)} per board, ${galleries.conflicts} block conflicts`]);
   rows.push(['flames', flames, `${gaps.length} gaps, ${gapText}`]);
   const solve = checkSolvability(world, b0, b1);
   rows.push(['solvability', solve, `${solve.cells} cells searched`]);
@@ -466,7 +509,7 @@ function runChecks(world, code, b0, b1) {
   rows.push(['saves', saves, `${saves.saves} positions`]);
   const det = code === SEED ? checkDeterminism() : { errors: [], digest: digestBands(createWorld(code), 0, 99) };
   rows.push(['determinism', det, `bands 0..99 digest ${det.digest.slice(0, 16)}...`]);
-  return { rows, bounds, gapText };
+  return { rows, bounds, galleries, gapText };
 }
 
 function printRows(rows) {
@@ -488,11 +531,13 @@ async function main(argv) {
   const half = Number(arg('--bands', 1000));
   if (!code || !Number.isInteger(half) || half < 1) { console.error('usage: acceptance.mjs [--code XXXX-XXXX] [--bands N]'); return 2; }
   const b0 = -half, b1 = half;
-  const { rows, bounds, gapText } = runChecks(createWorld(code), code, b0, b1);
+  const { rows, bounds, galleries, gapText } = runChecks(createWorld(code), code, b0, b1);
   const failed = printRows(rows);
   console.log('');
   console.log(`bands checked:  ${b0}..${b1} (${b1 - b0 + 1}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
   console.log(`fallback boards: ${bounds.fallbacks} of ${bounds.boards} (${(100 * bounds.fallbacks / bounds.boards).toFixed(1)}%)`);
+  console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
+  console.log(`block conflicts: ${galleries.conflicts}`);
   console.log(`flame gap:      ${gapText}`);
   console.log(`run time:       ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   console.log(failed ? `FAILED: ${failed} check(s)` : 'ALL CHECKS PASS');

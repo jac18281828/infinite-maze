@@ -1,10 +1,10 @@
 // Each acceptance check passes a sound world and rejects one broken on purpose.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, acrossDoor, posOf } from '../src/world/world.mjs';
+import { createWorld, acrossDoor, posOf, cellPath } from '../src/world/world.mjs';
 import { DX, DY } from '../src/world/board.mjs';
 import {
-  checkContinuity, checkTree, checkBounds, checkFlames, checkSolvability, checkSaves, bandShape,
+  checkContinuity, checkTree, checkBounds, checkGalleries, checkFlames, checkSolvability, checkSaves, bandShape,
 } from '../tools/acceptance.mjs';
 
 const B0 = -2, B1 = 2;
@@ -41,10 +41,55 @@ function setLink(bd, c, d) {
   bd.links[t] |= 1 << (d ^ 2);
 }
 
+function clearLink(bd, c, d) {
+  const t = ((c / 12) | 0) * 12 + (c % 12) + DY[d] * 12 + DX[d];
+  bd.links[c] &= ~(1 << d);
+  bd.links[t] &= ~(1 << (d ^ 2));
+}
+
+/** Tree boards of bands B0..B1. */
+function treeBoards() {
+  const out = [];
+  for (let b = B0; b <= B1; b++) for (const bd of bandShape(world, b).boards) if (bd.links) out.push(bd);
+  return out;
+}
+
+/**
+ * Replaces each gallery of `bd` with one orthogonal link of its block that
+ * rejoins the two halves, so the board stays a tree.
+ */
+function withoutGalleries(bd) {
+  const flat = copyBoard(bd);
+  for (let c = 0; c < 84; c++) {
+    for (const d of [4, 5]) {
+      if (!(flat.links[c] & (1 << d))) continue;
+      clearLink(flat, c, d);
+      const side = c + DX[d], top = c + DX[d] + 12;
+      if (reachable(flat.links, c).includes(side)) setLink(flat, side, 1);
+      else setLink(flat, c, d === 4 ? 0 : 2);
+      assert.ok(reachable(flat.links, c).includes(top));
+    }
+  }
+  return flat;
+}
+
+function reachable(links, from) {
+  const seen = [from];
+  for (let h = 0; h < seen.length; h++) {
+    for (let d = 0; d < 8; d++) {
+      if (!(links[seen[h]] & (1 << d))) continue;
+      const t = seen[h] + DY[d] * 12 + DX[d];
+      if (!seen.includes(t)) seen.push(t);
+    }
+  }
+  return seen;
+}
+
 test('every check passes the sound world', () => {
   assert.deepEqual(checkContinuity(world, B0, B1).errors, []);
   assert.deepEqual(checkTree(world, B0, B1).errors, []);
   assert.deepEqual(checkBounds(world, B0, B1).errors, []);
+  assert.deepEqual(checkGalleries(world, B0, B1).errors, []);
   assert.deepEqual(checkFlames(world, B0, B1).errors, []);
   assert.deepEqual(checkSolvability(world, B0, B1).errors, []);
 });
@@ -125,13 +170,52 @@ test('bounds rejects a dead-end branch 3 boards deep', () => {
   assert.deepEqual(checkTree(w, B0, B1).errors, []);
 });
 
+test('galleries rejects a corridor inside a gallery block of a valid tree', () => {
+  const w = broken(world);
+  const bd = treeBoards().find((b) => b.fallback && b.links.some((m) => m & 16));
+  assert.ok(bd, 'no fallback board with a north-east gallery');
+  const c = bd.links.findIndex((m) => m & 16);
+  const g = new Set([c, c + 13]);
+  const tangled = copyBoard(bd);
+  // The corridor from the gallery's foot east closes a cycle through the tree
+  // path back; dropping a path link other than the gallery leaves a tree.
+  setLink(tangled, c, 0);
+  const { cells, dirs } = cellPath(bd.links, c, c + 1);
+  const k = dirs.findIndex((_, j) => !(g.has(cells[j]) && g.has(cells[j + 1])));
+  clearLink(tangled, cells[k], dirs[k]);
+  w._set(bd.x, bd.y, tangled);
+  const errors = checkGalleries(w, B0, B1).errors;
+  assert.ok(errors.some((e) => e.startsWith(`board (${bd.x},${bd.y}): gallery ${c}`) && e.includes('shares its block')), errors.join('\n'));
+  // The board stays a valid tree, so only the galleries check catches it.
+  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  assert.deepEqual(checkBounds(w, B0, B1).errors, []);
+});
+
+test('galleries rejects a world averaging under 4 galleries per board', () => {
+  const sound = checkGalleries(world, B0, B1);
+  assert.ok(sound.mean >= 4, `sound mean ${sound.mean}`);
+  const w = broken(world);
+  let galleries = sound.galleries;
+  for (const bd of treeBoards()) {
+    if (galleries < 4 * sound.boards) break;
+    const flat = withoutGalleries(bd);
+    for (let c = 0; c < 84; c++) galleries -= ((bd.links[c] >> 4) & 1) + ((bd.links[c] >> 5) & 1);
+    w._set(bd.x, bd.y, flat);
+  }
+  const r = checkGalleries(w, B0, B1);
+  assert.ok(r.mean < 4 && r.mean > 3.5, `mean ${r.mean}`);
+  assert.equal(r.conflicts, 0);
+  assert.ok(r.errors.some((e) => e.includes('galleries per board average')), r.errors.join('\n'));
+  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+});
+
 test('flames rejects a removed flame that opens a gap over 150 s', () => {
-  // In seed 0000-01D5, band 1, dropping chain flame 3 leaves a 156.3 s walk.
-  const base = createWorld('000001D5');
+  // In seed 0000-01C3, band 1, dropping chain flame 4 leaves a 153.3 s walk.
+  const base = createWorld('000001C3');
   const b = 1;
   assert.deepEqual(checkFlames(base, b, b).errors, []);
   const fs = base.bandFlames(b);
-  const gone = fs.chain[3];
+  const gone = fs.chain[4];
   assert.equal(gone.kind, 'route');
   const w = broken(base, {
     flames: new Map([[b, { ...fs, chain: fs.chain.filter((f) => f !== gone), flames: fs.flames.filter((f) => f !== gone) }]]),

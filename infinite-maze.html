@@ -234,13 +234,18 @@ return { CROCKFORD, parseCode, formatCode, codeFromBytes, worldKey, makeHasher, 
 const __m2 = (() => {
 const { sfc32 } = __m1;
 // Board cell maze: a growing-tree spanning tree over the 12x7 cell grid,
-// rerolled until the primary path meets the spec section 4 targets.
+// rerolled until the primary path meets the spec section 4 targets. Each
+// gallery owns a 2x2 block that holds no other link, and blocks never
+// overlap, so a cell has at most one gallery.
 
 
 const BW = 12;
 const BH = 7;
 const NCELL = BW * BH;
 const MAX_REROLL = 64;
+// Each attempt keeps up to MAX_BLOCKS gallery blocks from BLOCK_DRAWS draws.
+const MAX_BLOCKS = 8;
+const BLOCK_DRAWS = 32;
 
 // Directions with y up: E N W S NE NW SW SE. The opposite of d is d ^ 2.
 const DX = [1, 0, -1, 0, 1, -1, -1, 1];
@@ -257,18 +262,15 @@ const TARGET_BRANCH = 3;
 
 // NB[8c + d] is the cell beside c in direction d, or -1 off the grid.
 const NB = new Int16Array(NCELL * 8);
-// XC[8c + d] for a diagonal d: the crossing link as (cell << 3) | dir.
-const XC = new Int16Array(NCELL * 8);
+// GRID[c]: the orthogonal directions that stay on the grid.
+const GRID = new Uint8Array(NCELL);
 for (let c = 0; c < NCELL; c++) {
   const x = c % BW, y = (c / BW) | 0;
   for (let d = 0; d < 8; d++) {
     const nx = x + DX[d], ny = y + DY[d];
     NB[8 * c + d] = nx < 0 || nx >= BW || ny < 0 || ny >= BH ? -1 : ny * BW + nx;
+    if (d < 4 && NB[8 * c + d] >= 0) GRID[c] |= 1 << d;
   }
-  XC[8 * c + 4] = ((c + 1) << 3) | 5;        // NE crosses (x+1,y) NW
-  XC[8 * c + 5] = ((c - 1) << 3) | 4;        // NW crosses (x-1,y) NE
-  XC[8 * c + 6] = ((c - BW) << 3) | 5;       // SW crosses (x,y-1) NW
-  XC[8 * c + 7] = ((c - BW) << 3) | 4;       // SE crosses (x,y-1) NE
 }
 
 function cellNeighbor(c, d) {
@@ -278,9 +280,73 @@ function cellNeighbor(c, d) {
 const seen = new Uint8Array(NCELL);
 const active = new Int16Array(NCELL);
 const cand = new Int32Array(8);
+// open[c]: directions growTree may carve from c.
+const open = new Uint8Array(NCELL);
+const owned = new Uint8Array(NCELL);
+const saved = new Uint8Array(4);
+// Corners of the block at its lower-left cell a: a, a+1, a+BW, a+BW+1.
+const CORNER = [0, 1, BW, BW + 1];
+// In-block orthogonal links of each corner: E N, N W, E S, W S.
+const IN_BLOCK = [0b0011, 0b0110, 0b1001, 0b1100];
 
-/** Carves a spanning tree into `links` (bit d set = link in direction d). */
+/**
+ * True when the `open` graph joins the four corners of the block at a. The
+ * graph was connected before the block changed it, and every path to a
+ * changed link meets a corner first, so joined corners keep it connected.
+ */
+function cornersJoined(a) {
+  seen.fill(0);
+  seen[a] = 1;
+  active[0] = a;
+  let tail = 1, found = 1;
+  for (let h = 0; h < tail; h++) {
+    const c = active[h], m = open[c];
+    for (let d = 0; d < 8; d++) {
+      if (!(m & (1 << d))) continue;
+      const t = NB[8 * c + d];
+      if (seen[t]) continue;
+      seen[t] = 1;
+      active[tail++] = t;
+      if ((t === a + 1 || t === a + BW || t === a + BW + 1) && ++found === 4) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Opens the orthogonal grid, then reserves disjoint 2x2 blocks: draws stop
+ * at MAX_BLOCKS kept or BLOCK_DRAWS made. A block overlapping a kept one is
+ * skipped. A kept block loses its in-block orthogonal links and offers one
+ * diagonal; a block that would disconnect the open graph is dropped.
+ */
+function reserveBlocks(rng) {
+  open.set(GRID);
+  owned.fill(0);
+  for (let k = 0, kept = 0; k < BLOCK_DRAWS && kept < MAX_BLOCKS; k++) {
+    const a = (rng() % (BH - 1)) * BW + rng() % (BW - 1);
+    const ne = rng() % 2 === 0;
+    if (owned[a] | owned[a + 1] | owned[a + BW] | owned[a + BW + 1]) continue;
+    for (let j = 0; j < 4; j++) {
+      saved[j] = open[a + CORNER[j]];
+      open[a + CORNER[j]] &= ~IN_BLOCK[j];
+    }
+    if (ne) { open[a] |= 1 << 4; open[a + BW + 1] |= 1 << 6; }
+    else { open[a + 1] |= 1 << 5; open[a + BW] |= 1 << 7; }
+    if (cornersJoined(a)) {
+      for (let j = 0; j < 4; j++) owned[a + CORNER[j]] = 1;
+      kept++;
+    } else {
+      for (let j = 0; j < 4; j++) open[a + CORNER[j]] = saved[j];
+    }
+  }
+}
+
+/**
+ * Carves a spanning tree into `links` (bit d set = link in direction d). The
+ * open graph stays connected, so the tree spans every cell.
+ */
 function growTree(rng, links) {
+  reserveBlocks(rng);
   links.fill(0);
   seen.fill(0);
   let len = 0;
@@ -290,14 +356,10 @@ function growTree(rng, links) {
   while (len) {
     const i = rng() % 5 < 3 ? len - 1 : rng() % len;
     const c = active[i];
+    const m = open[c];
     let n = 0, total = 0;
     for (let d = 0; d < 8; d++) {
-      const t = NB[8 * c + d];
-      if (t < 0 || seen[t]) continue;
-      if (d >= 4) {
-        const x = XC[8 * c + d];
-        if (links[x >> 3] & (1 << (x & 7))) continue;
-      }
+      if (!(m & (1 << d)) || seen[NB[8 * c + d]]) continue;
       cand[n++] = d;
       total += WEIGHT[d];
     }
@@ -411,7 +473,7 @@ function buildBoardMaze(H, x, y, doorCells, a, b) {
   }
   return { links: bestLinks, fallback: true, ...best };
 }
-return { BW, BH, NCELL, MAX_REROLL, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, buildBoardMaze };
+return { BW, BH, NCELL, MAX_REROLL, MAX_BLOCKS, BLOCK_DRAWS, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, buildBoardMaze };
 })();
 
 // src/world/band.mjs
@@ -1811,10 +1873,10 @@ const { BW, NCELL } = __m2;
 // - room: cell-local [8,40) x [8,40); corridor: the 16 px wall between rooms;
 // - ladder: a 16 px shaft through the slab above the lower room's centre;
 // - gallery: a 45-degree tunnel from the lower room's centre to the upper
-//   room's centre. Its air stays under the lower room's ceiling, stops a
-//   pixel short of any corridor above, and a 3 px solid stair stringer
-//   divides it from any corridor below, so it meets other passages only in
-//   the zone (room plus floor slab) of a cell it links.
+//   room's centre, 24 px tall over its stair. A gallery's 2x2 block holds no
+//   other link, so the walls and slabs it crosses hold no other passage. Its
+//   air stays under the lower room's ceiling, so it meets other passages only
+//   in the zone (room plus floor slab) of a cell it links.
 
 
 const MASK_W = 576;
@@ -1831,7 +1893,6 @@ function boardMask(bd) {
     }
   };
   if (!bd || !bd.links) return mask;
-  const stringers = [];
   for (let c = 0; c < NCELL; c++) {
     const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
     const m = bd.links[c], doors = bd.doorMask[c];
@@ -1853,18 +1914,9 @@ function boardMask(bd) {
         const lx = ne ? 24 + i : 23 - i;
         const x = X + lx, f = Y + 8 + i;
         const inRoom = ne ? lx < 40 : lx >= 8;
-        const inWall = ne ? lx >= 40 && lx < 56 : lx >= -8 && lx < 8;
-        let top = f + 25;
-        if (inRoom) top = Math.min(top, Y + 40);
-        else if (inWall) top = Math.min(top, Y + 55);
-        set(x, f + 1, x + 1, top, 0);
-        if (inWall) stringers.push(x, f);
+        set(x, f + 1, x + 1, inRoom ? Math.min(f + 25, Y + 40) : f + 25, 0);
       }
     }
-  }
-  for (let k = 0; k < stringers.length; k += 2) {
-    const x = stringers[k], f = stringers[k + 1];
-    set(x, f - 2, x + 1, f + 1, 1);
   }
   return mask;
 }

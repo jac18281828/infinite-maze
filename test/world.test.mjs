@@ -8,7 +8,7 @@ import { MIN_ROUTE, MAX_DEPTH } from '../src/world/band.mjs';
 import { checkFlames, checkDeterminism, bandShape, walkMs } from '../tools/acceptance.mjs';
 
 // Pinned digest of bands 0..99 for seed code 0000-0000.
-const DIGEST = 'a75d99f7895a561d764d70f7ea24696b25a0ba4ab08da16ab316b3a7071830dd';
+const DIGEST = '74358b58f8fec1cb409240291c6ce7ee2d289f46ee0d7983f4c3925a1236ccc0';
 
 test('seed 0000-0000 yields the pinned digest over bands 0..99', () => {
   assert.equal(digestBands(createWorld('00000000'), 0, 99), DIGEST);
