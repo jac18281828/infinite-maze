@@ -65,9 +65,20 @@ seed `0000-0000` and drives 3600 ticks of scripted input. It then sets
 
 ## Deploy
 
-The game is served at https://maze.2ad.com from a private S3 bucket behind
-CloudFront. `cdk/` defines the bucket, certificate, distribution and DNS
-records in the shared `2ad.com` zone, which the stack imports read-only.
+Every push to main deploys. `.github/workflows/ci-cd.yml` runs the gates,
+then, for `main` only, deploys `StackMaze2adCom`, uploads `infinite-maze.html`
+as `index.html` and invalidates CloudFront. Pull requests run the gates alone,
+with no AWS credentials. The game is served at https://maze.2ad.com from a
+private S3 bucket behind CloudFront. `cdk/` defines the bucket, certificate,
+distribution and DNS records in the shared `2ad.com` zone, which the stack
+imports read-only.
+
+The workflow signs in through OIDC as `GithubDeployCI`. One-time setup outside
+this repo: the role must trust
+`repo:jac18281828@11556011/infinite-maze@1413247652:ref:refs/heads/main` and
+carry an `AllowMazeDeploymentS3` policy like its `AllowSolitareDeploymentS3`.
+
+### By hand
 
 ```sh
 export AWS_PROFILE=awsapproach

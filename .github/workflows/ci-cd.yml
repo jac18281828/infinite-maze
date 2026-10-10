@@ -1,0 +1,106 @@
+name: CI and Deploy
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Check the committed build
+        run: node tools/build.mjs --check
+      - name: Unit tests
+        run: node --test test/
+      - name: Acceptance
+        run: node tools/acceptance.mjs
+      - name: Self-test in headless Chrome
+        run: |
+          CHROME="$(command -v google-chrome)"
+          WT="$GITHUB_WORKSPACE"
+          DOM="$RUNNER_TEMP/selftest.html"
+          # Write the DOM to a file: grep -q exiting early would fail a pipe.
+          "$CHROME" --headless=new --disable-gpu --virtual-time-budget=30000 \
+            --dump-dom "file://$WT/infinite-maze.html#selftest" > "$DOM"
+          grep -q 'data-selftest="pass"' "$DOM"
+      - name: Ban network access
+        run: |
+          # An if-guard fails on a match; a bare "!" never trips errexit.
+          if grep -Eiq '(src|href)=["'\'']?https?:|fetch\(|XMLHttpRequest|WebSocket' infinite-maze.html; then
+            echo "infinite-maze.html reaches for the network" >&2
+            exit 1
+          fi
+      - name: Install CDK dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run build
+      - name: CDK stack tests
+        run: bun run test
+      - name: Synthesize the stack
+        run: bunx cdk synth StackMaze2adCom
+  deploy:
+    needs: gates
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-maze
+      cancel-in-progress: false
+    env:
+      S3_BUCKET_NAME: "maze-us-east-1-504242000181"
+      AWS_REGION: "us-east-1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          audience: sts.amazonaws.com
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::504242000181:role/GithubDeployCI
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install CDK dependencies
+        run: bun install --frozen-lockfile
+      - name: Deploy infrastructure
+        run: |
+          bunx cdk deploy StackMaze2adCom --require-approval never --no-telemetry --outputs-file cdk-outputs.json
+      - name: Upload the game
+        run: |
+          aws s3 cp infinite-maze.html "s3://${S3_BUCKET_NAME}/index.html" \
+            --region "${AWS_REGION}" \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+      - name: Invalidate CloudFront cache
+        run: |
+          DISTRIBUTION_ID="$(jq -r '.StackMaze2adCom.DistributionId // empty' cdk-outputs.json)"
+          if [[ -z "$DISTRIBUTION_ID" ]]; then
+            echo "Missing DistributionId output for StackMaze2adCom" >&2
+            exit 1
+          fi
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*"

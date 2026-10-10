@@ -14,7 +14,8 @@ WT="$(pwd)"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
-Every gate passes before a change lands:
+Every gate passes before a change lands. The same gates run in
+`.github/workflows/ci-cd.yml`.
 
 ```sh
 node tools/build.mjs --check
