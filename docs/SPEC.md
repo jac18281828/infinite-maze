@@ -208,7 +208,8 @@ covering 48 px of run. Horizontal control in the air runs at run speed. A
 jump on a gallery is ignored.
 - The explorer tucks in the air to 16 px tall, which leaves it 16 px of head
   room in a room's 32 px interior. Every floor jump peaks at exactly that
-  height, in a room, a corridor or under a shaft, and no rise exceeds it.
+  height, in a room, a corridor or under a shaft, and no rise exceeds it by
+  more than rounding.
 - After a let-go with its tucked head above the room's ceiling, the explorer
   stays within 3 px of the shaft's centre until the head drops below it.
 - Over the cell's own up-stair, the stair bounds the landing point from
@@ -226,7 +227,7 @@ jump on a gallery is ignored.
   corridor cell before the mouth: over an up-stair the air keeps run speed,
   which the stair walk lacks, and a jump gains up to 9.7 px; a down-gallery's
   mouth holds an airborne explorer at the cell centre until it lands, and a
-  jump there loses up to 37.2 px.
+  jump there loses up to 36.0 px.
 
 **Air grabs.** In the air:
 - Up grabs the cell's ladder up at the current height when the explorer is

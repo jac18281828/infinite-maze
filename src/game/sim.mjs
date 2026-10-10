@@ -66,7 +66,7 @@ export function createSim(world, start, carry = null) {
     world, bd: start.board, cell: start.cell,
     mode: 'floor', off: 0, alt: 0, vy: 0, link: -1, to: null, prog: 0, len: 0,
     facing: 1, moving: false, burn: BURN_S, ember: 0,
-    tap: 0, buffer: 0, bufferTicks: 0, queued: 0, dismount: 0, letGo: false,
+    tap: 0, buffer: 0, bufferTicks: 0, queued: 0, dismount: 0, noAirGrab: false,
     state: 'play', time: carry ? carry.time : 0,
     startBand: carry ? carry.startBand : start.board.band,
     maxBand: carry ? Math.max(carry.maxBand, start.board.band) : start.board.band,
@@ -96,10 +96,15 @@ function upLink(s) {
   return { up, stair: up >= 4 ? DX[up] : 0 };
 }
 
+/** The cell's galleries on side h: its foot or mouth. */
+function sideGalleries(s, h) {
+  return (h > 0 ? [4, 7] : [5, 6]).filter((e) => canGo(s, e));
+}
+
 /** Reach toward side h: unbounded through a corridor or door, 0 at a gallery foot or mouth, else the wall. */
 function sideLimit(s, h) {
   if (canGo(s, h > 0 ? 0 : 2)) return Infinity;
-  return (h > 0 ? [4, 7] : [5, 6]).some((e) => canGo(s, e)) ? 0 : WALL_REACH;
+  return sideGalleries(s, h).length ? 0 : WALL_REACH;
 }
 
 /** The link vertical intent v picks: the cell's link that way, unless h points away from its gallery. */
@@ -162,7 +167,7 @@ function readEdges(s, { press, release }) {
   if (press & KEY.L && !(press & KEY.R)) s.facing = -1;
   else if (press & KEY.R && !(press & KEY.L)) s.facing = 1;
   if (press & (KEY.L | KEY.R) && s.link < 4) s.dismount = s.prog >= s.len / 2 ? 1 : -1;
-  if (press & KEY.U) s.letGo = false;
+  if (press & KEY.U) s.noAirGrab = false;
   for (const [key, dir] of [[KEY.U, 1], [KEY.D, -1]]) {
     if (press & key && s.mode !== 'link') s.tap |= key;
     if (release & key && s.tap & key) {
@@ -207,7 +212,7 @@ function floorMove(s, h, v, dt) {
   const hd = h > 0 ? 0 : 2;
   let next = s.off + h * stepPx;
   if (!canGo(s, hd)) {
-    const diags = (h > 0 ? [4, 7] : [5, 6]).filter((e) => canGo(s, e));
+    const diags = sideGalleries(s, h);
     if (diags.length === 1 && s.off * h <= 0 && next * h >= 0) {
       const used = Math.abs(s.off) / RUN_SPEED;
       s.walked += Math.abs(s.off);
@@ -240,14 +245,16 @@ function linkMove(s, h, v, dt) {
   s.moving = true;
   if (d < 4) s.climbed += speed * dt;
   else { s.walked += speed * dt; s.facing = DX[d] * along; }
-  // A link always ends at its node; unspent tick time carries to the next tick.
-  if (s.prog >= s.len - 1e-9) {
-    s.carry = (s.prog - s.len) / speed;
+  // A link always ends at its node; unspent tick time carries to the next
+  // tick. `past`: how far the move passed the end it heads for; rounding can
+  // leave it a hair short, which carries nothing.
+  const past = along > 0 ? s.prog - s.len : -s.prog;
+  if (past < -1e-9) return;
+  s.carry = Math.max(0, past) / speed;
+  if (along > 0) {
     if (d === 1) s.stats.ladderUp++;
     arrive(s);
-  } else if (s.prog <= 1e-9) {
-    s.carry = -s.prog / speed;
-  } else return;
+  }
   if (s.dismount) s.stats.dismounts++;
   s.mode = 'floor';
   s.off = 0;
@@ -272,7 +279,7 @@ function letGo(s) {
   if (s.prog <= 0) { launch(s); return; }
   s.mode = 'air';
   s.vy = 0;
-  s.letGo = true;
+  s.noAirGrab = true;
   s.stats.letGos++;
   if (DY[s.link] > 0) { s.alt = s.prog; return; }
   arrive(s);
@@ -292,8 +299,9 @@ function airMove(s, h, v, dt) {
     s.facing = h;
     let next = s.off + h * RUN_SPEED * dt;
     let lim = h === stair ? CELL / 2 : sideLimit(s, h);
-    // A head in the ladder shaft stays within it.
-    if (s.alt > ROOM_CLEAR) lim = Math.min(lim, SHAFT_REACH);
+    // A head in the ladder shaft stays within it. Rounding in the arc can pass
+    // ROOM_CLEAR by about 1e-14 px, which is no rise into the shaft.
+    if (s.alt > ROOM_CLEAR + 1e-9) lim = Math.min(lim, SHAFT_REACH);
     if (next * h > lim) next = Math.max(s.off * h, lim) * h;
     s.moving = next !== s.off;
     s.walked += Math.abs(next - s.off);
@@ -318,10 +326,10 @@ function airMove(s, h, v, dt) {
     s.mode = 'floor';
     s.alt = 0;
     s.vy = 0;
-    s.letGo = false;
+    s.noAirGrab = false;
     return;
   }
-  if (v <= 0 || s.letGo || (stair && h === -stair)) return;
+  if (v <= 0 || s.noAirGrab || (stair && h === -stair)) return;
   if (k >= 0 && s.alt - land <= STAIR_REACH) {
     s.stats.airGrabs++;
     engage(s, up, k * Math.SQRT2);

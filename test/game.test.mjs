@@ -337,6 +337,53 @@ test('every floor jump peaks at ROOM_CLEAR and lands after 0.5 s, under a ladder
   }
 });
 
+/**
+ * x after `ticks` ticks of input from the floor of `s`, a jump launched on the
+ * first: side h from tick `from`. Returns x and the apex.
+ */
+function runAfter(s, go, ticks, from, jump) {
+  let top = 0;
+  for (let i = 0; i < ticks; i++) {
+    go(i >= from ? 1 : 0, 0, jump && i === 0);
+    if (s.mode === 'air') top = Math.max(top, s.alt);
+  }
+  return { x: feet(s)[0], top };
+}
+
+test('a jump on the tick after a ladder\'s top peaks at ROOM_CLEAR and keeps run speed', () => {
+  // The top cell runs east along two corridors without galleries.
+  const at = findCell((bd, c) => c < 72 && c % 12 < 10 && has(bd, c, 1) && noGallery(bd, c + 12) && noGallery(bd, c + 13)
+    && bd.links[c + 12] & 1 && bd.links[c + 13] & 1);
+  const ran = (jump) => {
+    const s = simOn(at);
+    const go = driver(s);
+    // Sixty climb ticks of 0.8 px sum to a hair under 48: the top carries nothing back.
+    for (let i = 0; i < 80 && !(s.mode === 'floor' && s.cell === at.cell + 12); i++) go(0, 1);
+    assert.ok(s.mode === 'floor' && s.cell === at.cell + 12);
+    return runAfter(s, go, 45, 0, jump);
+  };
+  const hop = ran(true), base = ran(false);
+  assert.ok(hop.top <= ROOM_CLEAR, `apex ${hop.top}`);
+  assert.ok(Math.abs(hop.x - base.x) < 1e-9, `${hop.x} vs ${base.x}`);
+});
+
+test('a jump after a ladder trip that leaves a hair of carry keeps run speed', () => {
+  const at = findCell((bd, c) => c % 12 < 10 && has(bd, c, 1) && noGallery(bd, c) && noGallery(bd, c + 1)
+    && bd.links[c] & 1 && bd.links[c + 1] & 1);
+  const ran = (jump) => {
+    const s = simOn(at);
+    const go = driver(s);
+    for (let i = 0; i < 20; i++) go(0, 1);
+    for (let i = 0; i < 40 && s.mode === 'link'; i++) go(0, -1);
+    assert.ok(s.mode === 'floor' && s.carry > 0 && s.carry < 1e-12, `carry ${s.carry}`);
+    // Straight up, then east from tick 5: the apex comes 16 px out, past the shaft.
+    return runAfter(s, go, 45, 5, jump);
+  };
+  const hop = ran(true), base = ran(false);
+  assert.ok(hop.top <= ROOM_CLEAR + 1e-9, `apex ${hop.top}`);
+  assert.ok(Math.abs(hop.x - base.x) < 1e-9, `${hop.x} vs ${base.x}`);
+});
+
 test('Up held through a jump\'s descent grabs the ladder under its shaft only', () => {
   const at = findCell((bd, c) => has(bd, c, 1) && noGallery(bd, c));
   for (const off of [10, -10, 0]) {
@@ -582,6 +629,18 @@ test('a side press on a ladder dismounts to the nearer end; Up or Down held keep
     go(1, 0);
     assert.ok(s.mode === 'link' && s.prog === prog, `dir ${d}: a held side stays on the ladder`);
     assert.equal(s.stats.dismounts, 0);
+  }
+});
+
+test('a side press from a ladder\'s midpoint on dismounts to its far end', () => {
+  const at = ladderCell(1), far = world.step(at.bd, at.cell, 1).cell;
+  for (const [prog, end] of [[24, far], [24 - 1e-6, at.cell]]) {
+    const s = simOn(at);
+    const go = driver(s);
+    go(0, 1);
+    s.prog = prog;
+    for (let i = 0; i < 40 && s.mode !== 'floor'; i++) go(1, 0);
+    assert.ok(s.mode === 'floor' && s.cell === end, `prog ${prog}: ${s.mode} on ${s.cell}`);
   }
 });
 

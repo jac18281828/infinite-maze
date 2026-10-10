@@ -10,3 +10,13 @@ export async function copyText(clipboard, text) {
     return false;
   }
 }
+
+/** Copies `text`, then hands `show` the status a screen reads: COPIED or COPY FAILED. */
+export async function copyWithStatus(clipboard, text, show) {
+  show((await copyText(clipboard, text)) ? 'COPIED' : 'COPY FAILED');
+}
+
+/** The SAVE CODE label, followed by the copy status when there is one. */
+export function saveLabel(status) {
+  return status ? `SAVE CODE  ${status}` : 'SAVE CODE';
+}

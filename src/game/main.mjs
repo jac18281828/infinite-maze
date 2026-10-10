@@ -8,7 +8,7 @@ import { createRenderer, VIEW_W, VIEW_H, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
 import { createTouch, layout, viewport } from './touch.mjs';
-import { copyText } from './clipboard.mjs';
+import { copyWithStatus, saveLabel } from './clipboard.mjs';
 
 const KEY_SAVE = 'infinite-maze.save';
 const KEY_BEST = 'infinite-maze.best';
@@ -326,7 +326,7 @@ function typingKey(g, e) {
 function titleKey(g, e) {
   if (g.typing !== null) { typingKey(g, e); return; }
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) begin(g);
-  else if (e.code === 'KeyR') useCode(g, rollCode());
+  else if (e.code === 'KeyR') { useCode(g, rollCode()); g.note = ''; }
   else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
   else if (e.code === 'KeyC') {
     const s = decodeSave(load(KEY_SAVE) || '');
@@ -334,8 +334,9 @@ function titleKey(g, e) {
   } else if (e.code === 'KeyK') {
     // The save code the title shows, or the seed code when it shows none.
     const s = decodeSave(load(KEY_SAVE) || '');
-    copyText(globalThis.navigator.clipboard, s ? `${formatCode(s.code)}:${s.p}` : formatCode(g.code)).then((ok) => {
-      if (g.screen === 'title') g.note = ok ? 'COPIED' : 'COPY FAILED';
+    const shown = s ? `${formatCode(s.code)}:${s.p}` : formatCode(g.code);
+    copyWithStatus(globalThis.navigator.clipboard, shown, (status) => {
+      if (g.screen === 'title') g.note = status;
     });
   }
 }
@@ -354,8 +355,8 @@ function pauseKey(g, e) {
   if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }
   else if (e.code === 'KeyQ') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
-    copyText(globalThis.navigator.clipboard, hereCode(g)).then((ok) => {
-      if (g.screen === 'pause') g.copied = ok ? 'COPIED' : 'COPY FAILED';
+    copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => {
+      if (g.screen === 'pause') g.copied = status;
     });
   }
 }
@@ -367,8 +368,8 @@ function overKey(g, e) {
     begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
-    copyText(globalThis.navigator.clipboard, entryCode(g)).then((ok) => {
-      if (g.screen === 'over') g.copied = ok ? 'COPIED' : 'COPY FAILED';
+    copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => {
+      if (g.screen === 'over') g.copied = status;
     });
   }
 }
@@ -464,7 +465,7 @@ function drawPause(g) {
   const r = g.renderer;
   r.panel(50, 44, 220, 92);
   r.text('PAUSED', VIEW_W / 2, 54, 'm', { align: 'center', scale: 2 });
-  r.text(g.copied ? `SAVE CODE  ${g.copied}` : 'SAVE CODE', VIEW_W / 2, 78, 'a', { align: 'center' });
+  r.text(saveLabel(g.copied), VIEW_W / 2, 78, 'a', { align: 'center' });
   r.text(hereCode(g), VIEW_W / 2, 90, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 104, '9', { align: 'center' });
   r.text('ESC RESUME  M MUTE  Q TITLE  C COPY', VIEW_W / 2, 120, 'b', { align: 'center' });
@@ -476,7 +477,7 @@ function drawOver(g) {
   r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
   r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
-  r.text(g.copied ? `SAVE CODE  ${g.copied}` : 'SAVE CODE', VIEW_W / 2, 96, 'a', { align: 'center' });
+  r.text(saveLabel(g.copied), VIEW_W / 2, 96, 'a', { align: 'center' });
   r.text(entryCode(g), VIEW_W / 2, 108, 'i', { align: 'center' });
   r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 126, 'b', { align: 'center' });
 }
