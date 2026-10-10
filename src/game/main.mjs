@@ -3,7 +3,7 @@
 import { createWorld, boardOfPos } from '../world/world.mjs';
 import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
-import { createSim, step, TICK, BURN_S, feet, pose } from './sim.mjs';
+import { createSim, step, TICK, BURN_S, KEY, feet, pose } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
@@ -94,6 +94,8 @@ function selftest() {
 const DIRS = {
   ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
 };
+const DIR_BITS = { l: KEY.L, r: KEY.R, u: KEY.U, d: KEY.D };
+const JUMP_KEYS = ['Space', 'KeyZ'];
 
 function readBest(code) {
   try { return JSON.parse(load(KEY_BEST) || '{}')[code] ?? null; } catch { return null; }
@@ -109,6 +111,8 @@ function writeBest(code, band) {
 function createGame() {
   return {
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
+    // Key edges since the last tick: KEY bits pressed and released, and a jump press.
+    press: 0, release: 0, jump: false,
     code: parseCode((decodeSave(load(KEY_SAVE) || '') || {}).code || '') || rollCode(),
     world: null, renderer: null, sim: null, preview: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
@@ -136,6 +140,9 @@ function begin(g, p = null, carry = null) {
   snapCam(g.cam, g.sim);
   g.screen = 'play';
   g.note = '';
+  g.press = 0;
+  g.release = 0;
+  g.jump = false;
 }
 
 function hereCode(g) {
@@ -169,7 +176,7 @@ function typingKey(g, e) {
 
 function titleKey(g, e) {
   if (g.typing !== null) { typingKey(g, e); return; }
-  if (e.key === 'Enter' || e.code === 'Space') begin(g);
+  if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) begin(g);
   else if (e.code === 'KeyR') useCode(g, rollCode());
   else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
   else if (e.code === 'KeyC') {
@@ -180,7 +187,11 @@ function titleKey(g, e) {
 
 function playKey(g, e) {
   if (e.key === 'Escape') { g.screen = 'pause'; store(KEY_SAVE, hereCode(g)); return; }
-  if (DIRS[e.code]) g.keys.add(DIRS[e.code]);
+  if (DIRS[e.code]) {
+    g.keys.add(DIRS[e.code]);
+    if (!e.repeat) g.press |= DIR_BITS[DIRS[e.code]];
+  }
+  if (JUMP_KEYS.includes(e.code) && !e.repeat) g.jump = true;
 }
 
 function pauseKey(g, e) {
@@ -190,7 +201,7 @@ function pauseKey(g, e) {
 
 function overKey(g, e) {
   const s = g.sim;
-  if (e.key === 'Enter' || e.code === 'Space') {
+  if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) {
     begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; titleCam(g); }
 }
@@ -207,7 +218,10 @@ function onKeyDown(g, e) {
 function stepSim(g) {
   const h = (g.keys.has('r') ? 1 : 0) - (g.keys.has('l') ? 1 : 0);
   const v = (g.keys.has('u') ? 1 : 0) - (g.keys.has('d') ? 1 : 0);
-  step(g.sim, h, v);
+  step(g.sim, h, v, g.jump, { press: g.press, release: g.release });
+  g.press = 0;
+  g.release = 0;
+  g.jump = false;
 }
 
 function handleEvents(g) {
@@ -275,7 +289,7 @@ function drawTitle(g, t) {
     r.text(best === null ? 'NO BAND REACHED YET' : `BEST BAND  ${best}`, VIEW_W / 2, saved ? 132 : 120, 'p', { align: 'center' });
   }
   if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
-  r.text('ARROWS OR WASD MOVE  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+  r.text('ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
 function drawPause(g) {
@@ -328,7 +342,12 @@ function runLoop(g) {
 function boot() {
   const g = createGame();
   window.addEventListener('keydown', (e) => onKeyDown(g, e));
-  window.addEventListener('keyup', (e) => { if (DIRS[e.code]) g.keys.delete(DIRS[e.code]); });
+  window.addEventListener('keyup', (e) => {
+    const k = DIRS[e.code];
+    if (!k) return;
+    g.keys.delete(k);
+    if (g.screen === 'play') g.release |= DIR_BITS[k];
+  });
   window.addEventListener('blur', () => g.keys.clear());
   window.addEventListener('resize', fit);
   fit();

@@ -10,9 +10,13 @@ leads up. `docs/SPEC.md` is the full specification.
 Open `infinite-maze.html` in a browser. It is one file with no network access
 and no assets.
 
-- **Arrows or WASD** move. Left and right run the corridors. Up and down climb
-  ladders. Up or down with a side walks a gallery stair; a lone stair is taken
-  by running into it.
+- **Arrows or WASD** move. Left and right run the corridors. Up or down takes
+  the cell's ladder or gallery stair from anywhere on its floor; holding the
+  side away from a stair keeps the explorer on the floor. A stair is also
+  taken by running into it, and an Up or Down tapped just before a cell counts
+  on arrival.
+- **Space or Z** jumps. In the air, Up grabs the ladder overhead or the stair
+  below, and a jump onto a stair lands on it.
 - **Esc** pauses and shows the save code. **M** mutes.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;

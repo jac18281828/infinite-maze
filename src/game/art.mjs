@@ -255,6 +255,27 @@ const LEGS = {
     '....655.........',
     '.....55.........',
   ],
+  // Jump: knees tucked while rising, legs reaching down while falling.
+  tuck: [
+    '.....rrssss.....',
+    '....rrr..sss....',
+    '...rr.....sss...',
+    '...rr....sss....',
+    '....rr..ss......',
+    '...655.655......',
+    '...55..55.......',
+    '................',
+  ],
+  reach: [
+    '.....rrssss.....',
+    '.....rr..ss.....',
+    '....rr....ss....',
+    '....rr....ss....',
+    '...rr......ss...',
+    '...rr......ss...',
+    '..655......655..',
+    '..55........55..',
+  ],
 };
 
 function compose(head, torso, legs, bob = 0) {
@@ -286,6 +307,7 @@ export const EXPLORER = {
     compose('side', 'hold', 'step3'), compose('side', 'hold', 'step2', 1),
   ],
   gasp: [compose('gasp', 'chest', 'stand', 1), compose('gasp', 'chest', 'stand', 2)],
+  jump: [compose('side', 'swing', 'tuck'), compose('side', 'hold', 'reach')],
 };
 
 /** Torch tip (x, y) within a frame, where the flame is drawn. */
@@ -298,7 +320,7 @@ export function torchTip(anim, frame) {
 
 const EXPLORER_BOB = {
   idle: [0, 0, 1, 1], run: [1, 0, 0, 0, 1, 0, 0, 0], climb: [0, 1, 0, 1],
-  gallery: [0, 1, 0, 1, 0, 1, 0, 1], gasp: [1, 2],
+  gallery: [0, 1, 0, 1, 0, 1, 0, 1], gasp: [1, 2], jump: [0, 0],
 };
 
 // Sandstone blocks in three variants.

@@ -103,9 +103,16 @@ growing-tree algorithm:
 - Choose neighbours by weight: horizontal 4, vertical 1, diagonal 1.
 
 A horizontal link is a corridor, a vertical link is a ladder and a diagonal
-link is a 45° gallery. A diagonal is refused when the diagonal crossing it in
-the same 2×2 block is already carved. Corridors and ladders alone connect the
-grid, so the tree always spans every cell.
+link is a 45° gallery. A gallery from `(x, y)` to `(x±1, y+1)` owns the 2×2
+block of those four cells: no other link joins two of its cells, and no cell
+lies in two blocks. A cell therefore holds at most one gallery, and at most
+one up-link and one down-link.
+
+Before growing its tree, each attempt reserves up to 8 disjoint blocks from
+at most 32 random draws. A reserved block loses its four orthogonal links and
+offers one diagonal, drawn at random. A block whose four cells the remaining
+links no longer join is dropped, so those links connect the grid and the tree
+always spans every cell. Boards average 4–10 galleries.
 
 The board's primary door pair is its route entry and route exit, or, on a
 dead-end board, its single door and its deepest cell. Reroll `k` until both
@@ -137,14 +144,51 @@ score.
 ## 6. Movement
 
 The explorer can run left and right along corridors, climb ladders up and
-down, and walk galleries up and down at 45°. The game has no jump and no fall:
-floors are solid everywhere except at ladder shafts and gallery mouths. A drop
-would be a one-way link, which could open a second route or trap the explorer.
-Doors are openings in a board's wall at the door cell. Crossing one scrolls
-seamlessly into the neighbouring board.
+down, walk galleries up and down at 45° and jump. Doors are openings in a
+board's wall at the door cell. Crossing one scrolls seamlessly into the
+neighbouring board.
 
 Movement speeds are 96 px/s running, 72 px/s on a gallery and 48 px/s on a
 ladder.
+
+**Rails.** The explorer moves along the cell graph. A jump is an air state of
+the current cell. On the ground or in the air, the explorer leaves a cell
+only along a tree link or door, so motion follows exactly the tree. Nothing
+falls between cells: a drop would be a one-way link, which could open a
+second route or trap the explorer. Ladder tops are solid to walk and land on.
+
+**Intent.** On the floor, Up takes the cell's up-link, unless Left or Right
+is held toward the side opposite an up-gallery; Down mirrors it.
+- The link engages from any point on the floor. The explorer slides to its
+  foot at run speed, facing the gallery's direction, or keeping its facing
+  for a ladder.
+- Walking toward a side with no corridor and one gallery enters that gallery.
+  Left, Right, Up or Down along a link moves along it.
+- A Left or Right press sets facing at once, even when the explorer cannot
+  move.
+- An Up or Down tap released up to 150 ms (9 ticks) before the explorer
+  reaches a cell with a matching link engages it. Travel along the link still
+  needs the key held.
+
+**Jump.** The jump starts from the floor only: a launch at 160 px/s under
+800 px/s² gravity, a 16 px apex and 0.4 s of air. Horizontal control in the
+air runs at run speed.
+- The head stops at rock, which zeroes vertical speed. A room's interior is
+  32 px and the explorer 24 px, so a room jump is an 8 px hop of about 0.2 s.
+- Under the cell's own ladder-up shaft, within 3 px of its centre, the head
+  rises into the shaft to the full apex, and the explorer stays within 3 px
+  of the centre while its head is above the room's ceiling.
+- Over the cell's own up-stair, the stair bounds the feet from below.
+  Elsewhere the floor's side limits hold in the air, so a down-gallery's
+  mouth keeps the explorer out.
+
+**Air grabs.** In the air:
+- Up grabs the cell's ladder up at the current height when the explorer is
+  under its shaft.
+- Feet that fall onto the cell's up-stair land on the gallery at that point.
+- With Up held, the up-gallery engages once the feet come within 4 px of its
+  stair. In a room the gap closes at up to 3.5 px per tick, so a held Up never
+  skips that window.
 
 ## 7. Torch
 
@@ -199,6 +243,7 @@ animations:
 | Climb | 4 |
 | Gallery walk | 8 |
 | Ember gasp | 2 |
+| Jump | 2: rising, falling |
 
 **Music.** Synthesized with WebAudio on a lookahead scheduler:
 - The Hijaz mode on E (E F G♯ A B C D) carries the melancholy.
@@ -219,8 +264,10 @@ The simulation runs on a fixed 60 Hz timestep, with rendering on
 0.1 ms. Audio starts on the first key press, as browser autoplay policy
 requires.
 
-Controls are the arrow keys or WASD for movement, M to mute and Esc to pause
-and show the save code.
+Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
+mute and Esc to pause and show the save code. The title and end screens
+ignore auto-repeated Space presses, so a held jump cannot skip the end screen
+and its save code.
 
 ## 10. Acceptance
 
@@ -235,6 +282,9 @@ same source the game uses:
   consecutive bands.
 - **Bounds:** every dead-end branch is at most 2 boards deep, and every board
   meets the targets in §4 or records its best-attempt fallback.
+- **Galleries:** every gallery owns its 2×2 block, no two blocks share a
+  cell, and galleries average 4–10 per board. The harness reports the mean
+  and the block conflicts.
 - **Flames:** every band entry holds a flame, and the walking time between
   consecutive route flames stays at or under 150 s. The harness reports the
   maximum and the 99th percentile.
