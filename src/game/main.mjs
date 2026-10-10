@@ -109,6 +109,19 @@ function selftest() {
  * `touch <what>` on the first miss.
  */
 function touchLeg() {
+  // The leg writes the save and best band; it restores the player's own.
+  const kept = [KEY_SAVE, KEY_BEST].map((k) => [k, load(k)]);
+  try {
+    driveTouch();
+  } finally {
+    for (const [k, v] of kept) {
+      try { if (v === null) globalThis.localStorage.removeItem(k); else store(k, v); } catch { /* storage unavailable */ }
+    }
+  }
+  if (kept.some(([k, v]) => load(k) !== v)) throw new Error('touch storage restored');
+}
+
+function driveTouch() {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
   const g = boot();
   need(touch && !touch.on, 'starts in keyboard mode');
@@ -138,9 +151,9 @@ function touchLeg() {
   live(touch.soft('title', 'begin'), 'title/begin');
   const lay = layout({ ...viewport(), touch: true });
   need(display.width === lay.backing.w && display.height === lay.backing.h, 'canvas backing size follows the layout');
-  // The style reads back in layout units of 1/64 CSS px.
-  need(Math.abs(parseFloat(display.style.width) - lay.view.w) < 0.05
-    && Math.abs(parseFloat(display.style.height) - lay.view.h) < 0.05, 'canvas CSS size follows the layout');
+  // Layout rounds to 1/64 CSS px, so the laid-out box matches within that.
+  const box = display.getBoundingClientRect();
+  need(Math.abs(box.width - lay.view.w) <= 1 / 64 && Math.abs(box.height - lay.view.h) <= 1 / 64, 'canvas CSS size follows the layout');
 
   // Title.
   const rolled = g.code;
@@ -177,6 +190,11 @@ function touchLeg() {
   const pad = touch.padEl;
   const r = live(pad, 'pad');
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2, d = r.width / 3;
+  pointer('pointerdown', pad, cx + d, cy);
+  pointer('pointercancel', pad, cx + d, cy);
+  need(!g.keys.has('r') && (g.release & KEY.R) !== 0, 'pointercancel releases Right');
+  g.press = 0;
+  g.release = 0;
   pointer('pointerdown', pad, cx + d, cy);
   need(g.keys.has('r') && (g.press & KEY.R) !== 0, 'the right arm holds Right');
   pointer('pointermove', pad, cx, cy - d);

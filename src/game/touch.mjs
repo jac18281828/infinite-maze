@@ -198,7 +198,7 @@ export function textWidth(str) {
 // Horizontal extent of each screen's panel in view pixels (the r.panel calls
 // in main.mjs). Overlay-mode keys stay in the strips outside it, so they
 // never cover the panel, the title's note line or its footer.
-const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280] };
+export const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280] };
 
 function keyRegion(lay, sid) {
   const { safe } = lay;
@@ -221,7 +221,7 @@ function keyRegion(lay, sid) {
 
 /**
  * Rectangles for the soft keys of screen `sid`, one per label, in order.
- * Each carries the largest label scale (3, 2 or 1) that fits its width.
+ * Each carries one label scale (3, 2 or 1), the largest that fits every label.
  */
 export function keyRects(lay, sid, labels) {
   const n = labels.length;
@@ -235,10 +235,11 @@ export function keyRects(lay, sid, labels) {
   const gridW = cols * w + (cols - 1) * GAP, gridH = rows * KEY_H + (rows - 1) * GAP;
   const x0 = mid(r.x, r.w, gridW);
   const y0 = r.align === 'start' ? r.y : r.align === 'end' ? r.y + r.h - gridH : mid(r.y, r.h, gridH);
-  return labels.map((text, i) => {
-    const scale = [3, 2, 1].find((s) => textWidth(text) * s + 8 <= w) || 1;
-    return { x: x0 + (i % cols) * (w + GAP), y: y0 + Math.floor(i / cols) * (KEY_H + GAP), w, h: KEY_H, scale };
-  });
+  // Keys share a width, so they share the largest scale the longest label fits.
+  const scale = [3, 2, 1].find((s) => labels.every((t) => textWidth(t) * s + 8 <= w)) || 1;
+  return labels.map((text, i) => (
+    { x: x0 + (i % cols) * (w + GAP), y: y0 + Math.floor(i / cols) * (KEY_H + GAP), w, h: KEY_H, scale }
+  ));
 }
 
 // ---- DOM binding ----

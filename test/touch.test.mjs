@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN,
+  layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X,
 } from '../src/game/touch.mjs';
 import { build } from '../tools/build.mjs';
 
@@ -145,6 +145,27 @@ test('every soft key names a key its screen handler accepts', () => {
   }
 });
 
+test('the keys of one screen share a label scale', () => {
+  const lay = layout(LANDSCAPE);
+  const rects = keyRects(lay, 'title', ['BEGIN', 'NEW ROLL', 'TYPE CODE', 'CONTINUE', 'SOUND']);
+  assert.equal(new Set(rects.map((r) => r.scale)).size, 1);
+});
+
+test('PANEL_X matches the panels main.mjs draws', () => {
+  const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
+  const extent = (name) => {
+    const fn = src.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`));
+    assert.ok(fn, `${name} found`);
+    const p = fn[0].match(/r\.panel\((\d+), \d+, (\d+),/);
+    assert.ok(p, `${name} draws a panel`);
+    return [+p[1], +p[1] + +p[2]];
+  };
+  assert.deepEqual(PANEL_X.title, extent('drawTitle'));
+  assert.deepEqual(PANEL_X.typing, extent('drawTitle'));
+  assert.deepEqual(PANEL_X.pause, extent('drawPause'));
+  assert.deepEqual(PANEL_X.over, extent('drawOver'));
+});
+
 test('soft keys follow the game state', () => {
   const ids = (st) => softKeys(st).map((k) => k.id);
   assert.deepEqual(ids({ screen: 'title', typing: false, save: false }), ['begin', 'roll', 'type', 'sound']);
@@ -156,7 +177,6 @@ test('soft keys follow the game state', () => {
   assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
 });
 
-const PANELS = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280] };
 const inside = (r, o) => r.x >= o.x - 1e-9 && r.y >= o.y - 1e-9 && r.x + r.w <= o.x + o.w + 1e-9 && r.y + r.h <= o.y + o.h + 1e-9;
 
 test('soft keys are at least 44 px, in the safe area, and clear of the panel in overlay mode', () => {
@@ -171,7 +191,7 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
         assert.ok(r.w >= 44 && r.h >= 44, `${lay.mode} ${sid} key size`);
         assert.ok(inside(r, lay.safe), `${lay.mode} ${sid} key in the safe area`);
         if (lay.mode === 'overlay' && sid !== 'play') {
-          const [x0, x1] = PANELS[sid];
+          const [x0, x1] = PANEL_X[sid];
           const left = lay.view.x + x0 * lay.scale, right = lay.view.x + x1 * lay.scale;
           assert.ok(r.x + r.w <= left || r.x >= right, `${sid} key clear of the panel`);
         }
