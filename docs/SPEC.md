@@ -326,6 +326,13 @@ mute and Esc to pause and show the save code. The title and end screens
 ignore auto-repeated Space presses, so a held jump cannot skip the end screen
 and its save code.
 
+C on the pause and end screens writes the save code shown to the clipboard.
+On the title, where C continues, K copies the save code it shows, or the seed
+code when it shows none; during code entry K types a letter. Each screen then
+reads COPIED, or COPY FAILED when the clipboard is absent or refuses. The copy
+uses `navigator.clipboard.writeText`, which browsers allow from a key press
+in a secure context, https and `file://` alike.
+
 **Touch.** Touch mode is on at boot when the device reports a touch point or a
 coarse pointer, or when the URL hash is `#touch`. A touch `pointerdown` turns
 it on and a trusted keydown turns it off, so the page follows the last input

@@ -18,7 +18,7 @@ and no assets.
 - **Space or Z** jumps. In the air, Up grabs the ladder overhead or the stair
   below, and a jump onto a stair lands on it. On a ladder, a jump lets go and
   drops to the floor below; a held Up grabs again once pressed anew.
-- **Esc** pauses and shows the save code. **M** mutes.
+- **Esc** pauses and shows the save code; **C** there copies it. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:
   BEGIN, NEW ROLL, TYPE CODE (a prompt that takes a pasted save code),
@@ -32,8 +32,9 @@ and no assets.
 
 The title screen shows the seed code. **Enter** begins at band 0. **R** rolls
 a new world. **T** takes a typed seed or save code. **C** continues the last
-save. The game keeps that save and the best band per seed in `localStorage`
-and runs without them where storage is blocked.
+save. **K** copies the save code shown, or the seed code. The end screen's
+**C** copies its save code. The game keeps that save and the best band per
+seed in `localStorage` and runs without them where storage is blocked.
 
 ## Save codes
 

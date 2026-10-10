@@ -8,6 +8,7 @@ import { createRenderer, VIEW_W, VIEW_H, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
 import { createTouch, layout, viewport } from './touch.mjs';
+import { copyText } from './clipboard.mjs';
 
 const KEY_SAVE = 'infinite-maze.save';
 const KEY_BEST = 'infinite-maze.best';
@@ -330,6 +331,12 @@ function titleKey(g, e) {
   else if (e.code === 'KeyC') {
     const s = decodeSave(load(KEY_SAVE) || '');
     if (s) { if (s.code !== g.code) useCode(g, s.code); begin(g, s.p); }
+  } else if (e.code === 'KeyK') {
+    // The save code the title shows, or the seed code when it shows none.
+    const s = decodeSave(load(KEY_SAVE) || '');
+    copyText(globalThis.navigator.clipboard, s ? `${formatCode(s.code)}:${s.p}` : formatCode(g.code)).then((ok) => {
+      if (g.screen === 'title') g.note = ok ? 'COPIED' : 'COPY FAILED';
+    });
   }
 }
 
@@ -342,16 +349,28 @@ function playKey(g, e) {
   if (JUMP_KEYS.includes(e.code) && !e.repeat) g.jump = true;
 }
 
+// g.copied: the copy status the pause or end screen shows, cleared on leaving it.
 function pauseKey(g, e) {
-  if (e.key === 'Escape') g.screen = 'play';
-  else if (e.code === 'KeyQ') { g.screen = 'title'; titleCam(g); }
+  if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }
+  else if (e.code === 'KeyQ') { g.screen = 'title'; g.copied = ''; titleCam(g); }
+  else if (e.code === 'KeyC') {
+    copyText(globalThis.navigator.clipboard, hereCode(g)).then((ok) => {
+      if (g.screen === 'pause') g.copied = ok ? 'COPIED' : 'COPY FAILED';
+    });
+  }
 }
 
 function overKey(g, e) {
   const s = g.sim;
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) {
+    g.copied = '';
     begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
-  } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; titleCam(g); }
+  } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
+  else if (e.code === 'KeyC') {
+    copyText(globalThis.navigator.clipboard, entryCode(g)).then((ok) => {
+      if (g.screen === 'over') g.copied = ok ? 'COPIED' : 'COPY FAILED';
+    });
+  }
 }
 
 const SCREEN_KEYS = { title: titleKey, play: playKey, pause: pauseKey, over: overKey };
@@ -432,6 +451,7 @@ function drawTitle(g, t) {
   } else {
     r.text('ENTER  BEGIN', 72, 80, 'c');
     r.text('R      NEW ROLL', 72, 92, 'b');
+    r.text('K COPY', 248, 92, 'b', { align: 'right' });
     r.text('T      TYPE A CODE', 72, 104, 'b');
     if (saved) r.text(`C      ${formatCode(saved.code)}:${saved.p}`, 72, 116, 'b');
     r.text(best === null ? 'NO TOMB REACHED YET' : `BEST TOMB  ${best}`, VIEW_W / 2, saved ? 132 : 120, 'p', { align: 'center' });
@@ -444,10 +464,10 @@ function drawPause(g) {
   const r = g.renderer;
   r.panel(50, 44, 220, 92);
   r.text('PAUSED', VIEW_W / 2, 54, 'm', { align: 'center', scale: 2 });
-  r.text('SAVE CODE', VIEW_W / 2, 78, 'a', { align: 'center' });
+  r.text(g.copied ? `SAVE CODE  ${g.copied}` : 'SAVE CODE', VIEW_W / 2, 78, 'a', { align: 'center' });
   r.text(hereCode(g), VIEW_W / 2, 90, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 104, '9', { align: 'center' });
-  r.text('ESC RESUME  M MUTE  Q TITLE', VIEW_W / 2, 120, 'b', { align: 'center' });
+  r.text('ESC RESUME  M MUTE  Q TITLE  C COPY', VIEW_W / 2, 120, 'b', { align: 'center' });
 }
 
 function drawOver(g) {
@@ -456,9 +476,9 @@ function drawOver(g) {
   r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
   r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
-  r.text('SAVE CODE', VIEW_W / 2, 96, 'a', { align: 'center' });
+  r.text(g.copied ? `SAVE CODE  ${g.copied}` : 'SAVE CODE', VIEW_W / 2, 96, 'a', { align: 'center' });
   r.text(entryCode(g), VIEW_W / 2, 108, 'i', { align: 'center' });
-  r.text('ENTER CONTINUE  Q TITLE', VIEW_W / 2, 126, 'b', { align: 'center' });
+  r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 126, 'b', { align: 'center' });
 }
 
 function draw(g, t) {
