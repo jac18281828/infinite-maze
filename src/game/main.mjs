@@ -138,6 +138,14 @@ function driveTouch() {
     pointerId: 7, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true,
   }));
   const press = (code, key) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }));
+  // COPY writes through this fake; writeText runs within the click.
+  const copied = [];
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
+  const copies = (sid, want) => {
+    copied.length = 0;
+    click(sid, 'copy');
+    need(copied.length === 1 && copied[0] === want, `${sid} COPY writes ${want}`);
+  };
   const toggles = (sid) => {
     const was = g.audio.muted;
     click(sid, 'sound');
@@ -161,6 +169,8 @@ function driveTouch() {
   click('title', 'roll');
   need(g.code !== rolled, 'NEW ROLL changes the code');
   toggles('title');
+  const saved = decodeSave(load(KEY_SAVE) || '');
+  copies('title', saved ? `${formatCode(saved.code)}:${saved.p}` : formatCode(g.code));
   const realPrompt = window.prompt;
   try {
     window.prompt = () => 'K7Q2-M9XA';
@@ -213,6 +223,7 @@ function driveTouch() {
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
   toggles('pause');
+  copies('pause', hereCode(g));
   click('pause', 'resume');
   need(g.screen === 'play', 'RESUME returns to play');
   click('play', 'pause');
@@ -226,12 +237,15 @@ function driveTouch() {
   // End screen.
   endRun(g);
   draw(g, 0);
+  copies('over', entryCode(g));
   click('over', 'continue');
   need(g.screen === 'play', 'the end screen CONTINUE reaches play');
   endRun(g);
   draw(g, 0);
   click('over', 'title');
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
+
+  delete navigator.clipboard;
 
   // Leave a run on screen for the screenshot.
   click('title', 'begin');

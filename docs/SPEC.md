@@ -349,11 +349,11 @@ scrolls, zooms or selects.
 
   | Screen | Keys |
   |---|---|
-  | title | BEGIN (Enter), NEW ROLL (R), TYPE CODE, CONTINUE (C, with a save), SOUND (M) |
+  | title | BEGIN (Enter), NEW ROLL (R), TYPE CODE, CONTINUE (C, with a save), COPY (K), SOUND (M) |
   | title, typing | ACCEPT (Enter), CANCEL (Esc) |
   | play | PAUSE (Esc) |
-  | pause | RESUME (Esc), SOUND (M), TITLE (Q) |
-  | over | CONTINUE (Enter), TITLE (Q) |
+  | pause | RESUME (Esc), COPY (C), SOUND (M), TITLE (Q) |
+  | over | CONTINUE (Enter), COPY (C), TITLE (Q) |
 
   TYPE CODE sends T, opens the browser's `prompt`, then sends each character
   of the answer as a key press and finally Enter, or Esc on cancel. The

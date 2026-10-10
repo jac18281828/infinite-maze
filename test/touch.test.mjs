@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X,
+  layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X, textWidth,
 } from '../src/game/touch.mjs';
 import { build } from '../tools/build.mjs';
 
@@ -147,7 +147,7 @@ test('every soft key names a key its screen handler accepts', () => {
 
 test('the keys of one screen share a label scale', () => {
   const lay = layout(LANDSCAPE);
-  const rects = keyRects(lay, 'title', ['BEGIN', 'NEW ROLL', 'TYPE CODE', 'CONTINUE', 'SOUND']);
+  const rects = keyRects(lay, 'title', ['BEGIN', 'NEW ROLL', 'TYPE CODE', 'CONTINUE', 'COPY', 'SOUND']);
   assert.equal(new Set(rects.map((r) => r.scale)).size, 1);
 });
 
@@ -168,12 +168,12 @@ test('PANEL_X matches the panels main.mjs draws', () => {
 
 test('soft keys follow the game state', () => {
   const ids = (st) => softKeys(st).map((k) => k.id);
-  assert.deepEqual(ids({ screen: 'title', typing: false, save: false }), ['begin', 'roll', 'type', 'sound']);
-  assert.deepEqual(ids({ screen: 'title', typing: false, save: true }), ['begin', 'roll', 'type', 'continue', 'sound']);
+  assert.deepEqual(ids({ screen: 'title', typing: false, save: false }), ['begin', 'roll', 'type', 'copy', 'sound']);
+  assert.deepEqual(ids({ screen: 'title', typing: false, save: true }), ['begin', 'roll', 'type', 'continue', 'copy', 'sound']);
   assert.deepEqual(ids({ screen: 'title', typing: true, save: true }), ['accept', 'cancel']);
   assert.deepEqual(ids({ screen: 'play' }), ['pause']);
-  assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'sound', 'title']);
-  assert.deepEqual(ids({ screen: 'over' }), ['continue', 'title']);
+  assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'copy', 'sound', 'title']);
+  assert.deepEqual(ids({ screen: 'over' }), ['continue', 'copy', 'title']);
   assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
 });
 
@@ -187,6 +187,8 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
       const labels = softKeys(state).map((k) => k.text);
       const rects = keyRects(lay, sid, labels);
       assert.equal(rects.length, labels.length);
+      assert.ok(new Set(rects.map((r) => r.scale)).size <= 1, `${lay.mode} ${sid}: one label scale`);
+      rects.forEach((r, i) => assert.ok(textWidth(labels[i]) * r.scale + 8 <= r.w, `${lay.mode} ${sid}: ${labels[i]} fits its key`));
       for (const r of rects) {
         assert.ok(r.w >= 44 && r.h >= 44, `${lay.mode} ${sid} key size`);
         assert.ok(inside(r, lay.safe), `${lay.mode} ${sid} key in the safe area`);

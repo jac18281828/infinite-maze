@@ -159,6 +159,7 @@ export const SOFT = {
     { id: 'roll', label: 'NEW ROLL', ...K('KeyR', 'r') },
     { id: 'type', label: 'TYPE CODE', act: 'type' },
     { id: 'continue', label: 'CONTINUE', ...K('KeyC', 'c'), when: 'save' },
+    { id: 'copy', label: 'COPY', ...K('KeyK', 'k') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
   ],
   typing: [
@@ -170,11 +171,13 @@ export const SOFT = {
   ],
   pause: [
     { id: 'resume', label: 'RESUME', ...K('Escape', 'Escape') },
+    { id: 'copy', label: 'COPY', ...K('KeyC', 'c') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
     { id: 'title', label: 'TITLE', ...K('KeyQ', 'q') },
   ],
   over: [
     { id: 'continue', label: 'CONTINUE', ...K('Enter', 'Enter') },
+    { id: 'copy', label: 'COPY', ...K('KeyC', 'c') },
     { id: 'title', label: 'TITLE', ...K('KeyQ', 'q') },
   ],
 };

@@ -22,7 +22,7 @@ and no assets.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:
   BEGIN, NEW ROLL, TYPE CODE (a prompt that takes a pasted save code),
-  CONTINUE, SOUND, PAUSE, RESUME and TITLE. Pressing a key switches back to
+  CONTINUE, COPY, SOUND, PAUSE, RESUME and TITLE. Pressing a key switches back to
   the keyboard layout; `#touch` on the URL forces touch on a desktop.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
