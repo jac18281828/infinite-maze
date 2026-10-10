@@ -223,11 +223,11 @@ jump on a gallery is ignored.
 - Elsewhere the floor's side limits hold in the air, so a down-gallery's
   mouth keeps the explorer out.
 - Along corridors, ladder cells included, a jump never speeds or slows a run.
-  At gallery mouths it does, measured as route progress over a run from the
-  corridor cell before the mouth: over an up-stair the air keeps run speed,
-  which the stair walk lacks, and a jump gains up to 9.7 px; a down-gallery's
-  mouth holds an airborne explorer at the cell centre until it lands, and a
-  jump there loses up to 36.0 px.
+  At gallery mouths it does. Over an up-stair the air keeps run speed, which
+  the stair walk lacks, and a jump saves up to 0.1 s (6 ticks), 7.4 px on the
+  stair. A down-gallery's mouth holds an airborne explorer at the cell centre
+  until it lands, and a jump there loses up to 36.0 px of route over a run
+  from the corridor cell before the mouth.
 
 **Air grabs.** In the air:
 - Up grabs the cell's ladder up at the current height when the explorer is
