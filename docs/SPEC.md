@@ -283,8 +283,8 @@ only real disorientation runs it dry.
 
 When the burn reaches zero, the torch gutters to an 8 px ember for 10 s, and
 reaching a flame in that time relights it. Otherwise the run ends. The end
-screen shows the bands climbed, labelled tombs on screen, the time and the
-save code for the last band entry reached, and Continue resumes there with a full torch.
+screen shows the bands climbed, the time and the save code for the last band
+entry reached, and Continue resumes there with a full torch.
 
 ## 8. Presentation
 
@@ -307,6 +307,9 @@ save code for the last band entry reached, and Continue resumes there with a ful
 **Lighting.** A light map at quarter resolution, lit by the torch, the
 sconces and the flames, composited multiplicatively over the scene. Hieroglyph walls scroll
 behind at 0.5× for depth, and dust motes drift in the torch beam.
+
+**Labels.** On screen a band is a tomb: the HUD reads `TOMB n`, the title
+`BEST TOMB`, and the end screen `TOMBS CLIMBED`.
 
 **Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
 pixels. It scrolls freely across board seams, and rock fills every position
