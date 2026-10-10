@@ -112,17 +112,23 @@ function selftest() {
 function touchLeg() {
   // The leg writes the save and best band; it restores the player's own.
   const kept = [KEY_SAVE, KEY_BEST].map((k) => [k, load(k)]);
+  // COPY writes through a fake clipboard, gone again however the leg ends.
+  const copied = [];
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
   try {
-    driveTouch();
+    driveTouch(copied);
   } finally {
+    delete navigator.clipboard;
     for (const [k, v] of kept) {
       try { if (v === null) globalThis.localStorage.removeItem(k); else store(k, v); } catch { /* storage unavailable */ }
     }
   }
   if (kept.some(([k, v]) => load(k) !== v)) throw new Error('touch storage restored');
+  if (Object.getOwnPropertyDescriptor(navigator, 'clipboard')) throw new Error('touch clipboard restored');
 }
 
-function driveTouch() {
+/** `copied` records each clipboard write; writeText runs within the click. */
+function driveTouch(copied) {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
   const g = boot();
   need(touch && !touch.on, 'starts in keyboard mode');
@@ -138,13 +144,23 @@ function driveTouch() {
     pointerId: 7, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true,
   }));
   const press = (code, key) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }));
-  // COPY writes through this fake; writeText runs within the click.
-  const copied = [];
-  Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
   const copies = (sid, want) => {
     copied.length = 0;
     click(sid, 'copy');
     need(copied.length === 1 && copied[0] === want, `${sid} COPY writes ${want}`);
+  };
+  // Another tree board of the explorer's band, keeping its last entry, so the
+  // pause screen's save code and the end screen's entry code differ.
+  const offEntry = () => {
+    const s = g.sim, b = s.bd.band;
+    const carry = { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry };
+    for (let i = 0; i < 24; i++) {
+      const bd = g.world.board(i % 6, 4 * b + Math.floor(i / 6));
+      if (!bd.links || bd.routeIndex === 0 || bd === s.bd || bd.p === s.lastEntry) continue;
+      g.sim = createSim(g.world, g.world.resumePoint(bd.x, bd.y), carry);
+      break;
+    }
+    need(hereCode(g) !== entryCode(g), 'the explorer is off its entry board');
   };
   const toggles = (sid) => {
     const was = g.audio.muted;
@@ -169,8 +185,11 @@ function driveTouch() {
   click('title', 'roll');
   need(g.code !== rolled, 'NEW ROLL changes the code');
   toggles('title');
-  const saved = decodeSave(load(KEY_SAVE) || '');
-  copies('title', saved ? `${formatCode(saved.code)}:${saved.p}` : formatCode(g.code));
+  // A save under another seed, so the title's save code differs from its seed code.
+  store(KEY_SAVE, g.code === 'K7Q2M9XA' ? '0000-0000:13' : 'K7Q2-M9XA:13');
+  const saved = decodeSave(load(KEY_SAVE));
+  need(formatCode(saved.code) !== formatCode(g.code), 'the title shows a save under another seed');
+  copies('title', `${formatCode(saved.code)}:${saved.p}`);
   const realPrompt = window.prompt;
   try {
     window.prompt = () => 'K7Q2-M9XA';
@@ -220,6 +239,7 @@ function driveTouch() {
   g.jump = false;
 
   // Pause.
+  offEntry();
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
   toggles('pause');
@@ -235,6 +255,7 @@ function driveTouch() {
   need(g.screen === 'play', 'CONTINUE reaches play');
 
   // End screen.
+  offEntry();
   endRun(g);
   draw(g, 0);
   copies('over', entryCode(g));
@@ -244,8 +265,6 @@ function driveTouch() {
   draw(g, 0);
   click('over', 'title');
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
-
-  delete navigator.clipboard;
 
   // Leave a run on screen for the screenshot.
   click('title', 'begin');
