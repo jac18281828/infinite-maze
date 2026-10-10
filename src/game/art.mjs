@@ -255,28 +255,53 @@ const LEGS = {
     '....655.........',
     '.....55.........',
   ],
-  // Jump: knees tucked while rising, legs reaching down while falling.
-  tuck: [
-    '.....rrssss.....',
-    '....rrr..sss....',
-    '...rr.....sss...',
-    '...rr....sss....',
-    '....rr..ss......',
-    '...655.655......',
-    '...55..55.......',
-    '................',
+};
+
+// Jump: the explorer tucks into rows 8-23, 16 px tall, knees drawn up while
+// rising and legs reaching down while falling. The torch hand sits at
+// column 12, rows 14-16.
+const TUCK = {
+  rise: [
+    '......6666......',
+    '.....677776.....',
+    '.....655556.....',
+    '...66677777666..',
+    '......uuu0u.....',
+    '......uuuuuu....',
+    '.....sssvuv.v...',
+    '...ssstssstsv...',
+    '...usstssssvu...',
+    '....sstsssss....',
+    '....v555v5sss...',
+    '....rrr.ssss....',
+    '...rrrr.sss.....',
+    '...rr655.655....',
+    '...655...55.....',
+    '...55...........',
   ],
-  reach: [
-    '.....rrssss.....',
-    '.....rr..ss.....',
-    '....rr....ss....',
-    '....rr....ss....',
-    '...rr......ss...',
-    '...rr......ss...',
-    '..655......655..',
-    '..55........55..',
+  fall: [
+    '......6666......',
+    '.....677776.....',
+    '.....655556.....',
+    '...66677777666..',
+    '......uuu0u.....',
+    '......uuuuuu....',
+    '.....ssvuuv.v...',
+    '....sstssstsv...',
+    '....sstssssvu...',
+    '....ssttsss.....',
+    '....v555v5......',
+    '....rr...ss.....',
+    '...rr.....ss....',
+    '...rr.....ss....',
+    '..655.....655...',
+    '..55.......55...',
   ],
 };
+
+function tucked(rows) {
+  return [...Array(8).fill('.'.repeat(16)), ...rows];
+}
 
 function compose(head, torso, legs, bob = 0) {
   const top = [...HEAD[head], ...TORSO[torso]];
@@ -307,7 +332,7 @@ export const EXPLORER = {
     compose('side', 'hold', 'step3'), compose('side', 'hold', 'step2', 1),
   ],
   gasp: [compose('gasp', 'chest', 'stand', 1), compose('gasp', 'chest', 'stand', 2)],
-  jump: [compose('side', 'swing', 'tuck'), compose('side', 'hold', 'reach')],
+  jump: [tucked(TUCK.rise), tucked(TUCK.fall)],
 };
 
 /** Torch tip (x, y) within a frame, where the flame is drawn. */
@@ -315,6 +340,7 @@ export function torchTip(anim, frame) {
   let y = 9;
   if (anim === 'climb') y = frame < 2 ? 11 : 9;
   else if (anim === 'gasp') y = 12;
+  else if (anim === 'jump') y = 13;
   return [12, y + EXPLORER_BOB[anim][frame]];
 }
 

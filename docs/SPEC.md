@@ -166,10 +166,11 @@ Movement speeds are 96 px/s running, 72 px/s on a gallery and 48 px/s on a
 ladder.
 
 **Rails.** The explorer moves along the cell graph. A jump is an air state of
-the current cell. On the ground or in the air, the explorer leaves a cell
-only along a tree link or door, so motion follows exactly the tree. Nothing
-falls between cells: a drop would be a one-way link, which could open a
-second route or trap the explorer. Ladder tops are solid to walk and land on.
+the current cell, and a let-go one of the ladder's lower cell. On the ground or
+in the air, the explorer leaves a cell only along a tree link or door, so
+motion follows exactly the tree. Nothing falls between cells: a drop would be
+a one-way link, which could open a second route or trap the explorer. Ladder
+tops are solid to walk and land on.
 
 **Intent.** On the floor, Up takes the cell's up-link, unless Left or Right
 is held toward the side opposite an up-gallery; Down mirrors it.
@@ -180,29 +181,62 @@ is held toward the side opposite an up-gallery; Down mirrors it.
   Left, Right, Up or Down along a link moves along it.
 - A Left or Right press sets facing at once, even when the explorer cannot
   move.
-- An Up or Down tap released up to 150 ms (9 ticks) before the explorer
-  reaches a cell with a matching link engages it. Travel along the link still
-  needs the key held.
+- An Up or Down tap released up to 150 ms (9 ticks) before the tick that
+  enters a cell with a matching link engages it, whether held one tick or
+  pressed and released within one. Travel along the link still needs the key
+  held.
 
-**Jump.** The jump starts from the floor only: a launch at 160 px/s under
-800 px/s² gravity, a 16 px apex and 0.4 s of air. Horizontal control in the
-air runs at run speed.
-- The head stops at rock, which zeroes vertical speed. A room's interior is
-  32 px and the explorer 24 px, so a room jump is an 8 px hop of about 0.2 s.
-- Under the cell's own ladder-up shaft, within 3 px of its centre, the head
-  rises into the shaft to the full apex, and the explorer stays within 3 px
-  of the centre while its head is above the room's ceiling.
-- Over the cell's own up-stair, the stair bounds the feet from below.
-  Elsewhere the floor's side limits hold in the air, so a down-gallery's
+**Leaving a ladder.** Every point on a ladder lies within 24 px of a floor.
+- On a ladder, with Up and Down released, a Left or Right press commits the
+  explorer to the ladder's nearer end, the far end from the midpoint on. It
+  travels there at ladder speed and stands on that end's floor; a side still
+  held then walks by the floor rules. A side held from before the ladder
+  engaged leaves the explorer on it. Holding Up or Down cancels the dismount
+  and moves along the ladder.
+- A jump lets go. The explorer drops from the height of its feet, with zero
+  vertical speed, over the ladder's lower cell, and the air rules carry it to
+  that floor. A let-go from a down-ladder moves to the link's lower cell along
+  the ladder link, firing the board events a ladder arrival fires. At the
+  ladder's start, before it has moved, the explorer stands on the floor it
+  engaged from, and a jump there is an ordinary floor jump.
+- After a let-go, a held Up grabs nothing until Up is pressed anew or the
+  explorer lands.
+
+**Jump.** The jump starts from the floor or a ladder's start: a launch at
+128 px/s under 512 px/s² gravity, a 16 px apex after 0.25 s and 0.5 s of air,
+covering 48 px of run. Horizontal control in the air runs at run speed. A
+jump on a gallery is ignored.
+- The explorer tucks in the air to 16 px tall, which leaves it 16 px of head
+  room in a room's 32 px interior. Every floor jump peaks at exactly that
+  height, in a room, a corridor or under a shaft, and no rise exceeds it.
+- After a let-go with its tucked head above the room's ceiling, the explorer
+  stays within 3 px of the shaft's centre until the head drops below it.
+- Over the cell's own up-stair, the stair bounds the landing point from
+  below. Once the feet pass 11 px from the cell centre toward the stair, the
+  landing point is the leading foot, the box's lower corner 5 px from the
+  feet on the stair's rising side; that corner then lies past the room wall,
+  where the stair is rock. Elsewhere it is the feet's centre, since the room
+  holds no stair rock. The explorer lands when its landing point meets the
+  stair, at the gallery position under its feet, so a leading-foot landing
+  drops the feet at most 5 px. The air box never enters rock.
+- Elsewhere the floor's side limits hold in the air, so a down-gallery's
   mouth keeps the explorer out.
+- Along corridors, ladder cells included, a jump never speeds or slows a run.
+  At gallery mouths it does, measured as route progress over a run from the
+  corridor cell before the mouth: over an up-stair the air keeps run speed,
+  which the stair walk lacks, and a jump gains up to 9.7 px; a down-gallery's
+  mouth holds an airborne explorer at the cell centre until it lands, and a
+  jump there loses up to 37.2 px.
 
 **Air grabs.** In the air:
 - Up grabs the cell's ladder up at the current height when the explorer is
-  under its shaft.
-- Feet that fall onto the cell's up-stair land on the gallery at that point.
-- With Up held, the up-gallery engages once the feet come within 4 px of its
-  stair. In a room the gap closes at up to 3.5 px per tick, so a held Up never
-  skips that window.
+  within 3 px of its shaft's centre.
+- A landing point that falls onto the cell's up-stair lands on the gallery.
+- With Up held, the up-gallery engages once the landing point comes within
+  4 px of its stair. The arc lands at 128 px/s, so per tick it closes that gap
+  by at most 3.7 px, 2.1 vertical and 1.6 horizontal, and a held Up never
+  skips the window, except on the tick the feet pass 11 px, where the landing
+  point moves 5 px up the stair and the stair landing catches the explorer.
 
 ## 7. Torch
 
@@ -265,7 +299,7 @@ animations:
 | Climb | 4 |
 | Gallery walk | 8 |
 | Ember gasp | 2 |
-| Jump | 2: rising, falling |
+| Jump | 2: rising, falling, tucked 16 px tall |
 
 **Music.** Synthesized with WebAudio on a lookahead scheduler:
 - The Hijaz mode on E (E F G♯ A B C D) carries the melancholy.

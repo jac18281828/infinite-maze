@@ -14,9 +14,10 @@ and no assets.
   the cell's ladder or gallery stair from anywhere on its floor; holding the
   side away from a stair keeps the explorer on the floor. A stair is also
   taken by running into it, and an Up or Down tapped just before a cell counts
-  on arrival.
+  on arrival. On a ladder, a Left or Right press climbs off at its nearer end.
 - **Space or Z** jumps. In the air, Up grabs the ladder overhead or the stair
-  below, and a jump onto a stair lands on it.
+  below, and a jump onto a stair lands on it. On a ladder, a jump lets go and
+  drops to the floor below; a held Up grabs again once pressed anew.
 - **Esc** pauses and shows the save code. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:

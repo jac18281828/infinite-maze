@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld } from '../src/world/world.mjs';
-import { BW, NCELL, cellNeighbor, DX } from '../src/world/board.mjs';
-import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
+import { BW, NCELL, cellNeighbor, DX, DY } from '../src/world/board.mjs';
+import { boardMask, rockAt, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import {
   createSim, step, feet, torchRadius, nodeXY, inputEdges, BURN_S, EMBER_S, TICK, KEY, ROOM_CLEAR, SHAFT_REACH,
-  STAIR_REACH,
+  STAIR_REACH, RUN_SPEED, GALLERY_SPEED, GRAVITY, BOARD_W, BOARD_H, pose,
 } from '../src/game/sim.mjs';
 import { runScript, SELFTEST_TICKS } from '../src/game/autopilot.mjs';
-import { artSets } from '../src/game/art.mjs';
+import { artSets, EXPLORER, torchTip } from '../src/game/art.mjs';
 
 const world = createWorld('00000000');
 const UP = [1, 4, 5];
@@ -269,48 +269,89 @@ test('an Up tap released 9 ticks before the tick that enters a ladder cell takes
   }
 });
 
-test('a Left or Right press turns the explorer at once, even on a ladder', () => {
+test('a Left or Right press turns the explorer at once and, on a ladder, dismounts it', () => {
   const s = simAt(1, 2);
   run(s, 10, 0, 1);
   assert.equal(s.mode, 'link');
-  const prog = s.prog;
+  const { cell } = s, prog = s.prog;
   step(s, -1, 0, false, { press: KEY.L, release: 0 });
   assert.equal(s.facing, -1);
+  assert.ok(s.prog < prog, `prog ${s.prog}: heads for the nearer end`);
   step(s, 1, 0, false, { press: KEY.R, release: KEY.L });
   assert.equal(s.facing, 1);
-  assert.equal(s.prog, prog);
+  for (let i = 0; i < 20 && s.mode === 'link'; i++) step(s, 1, 0);
+  assert.ok(s.mode === 'floor' && s.cell === cell, `${s.mode} on cell ${s.cell}`);
 });
 
-test('a room jump stops the head at the 8 px clearance and lands in about 0.2 s', () => {
-  const s = simOn(findCell((bd, c) => UP.every((d) => !has(bd, c, d))));
-  const go = driver(s);
-  let top = 0, ticks = 0;
-  go(0, 0, true);
-  while (s.mode === 'air') {
-    top = Math.max(top, s.alt);
-    go(0, 0);
-    ticks++;
+/** Cells whose links never stop a sideways move short of the wall. */
+const noGallery = (bd, c) => [4, 5, 6, 7].every((d) => !has(bd, c, d));
+
+// A ladder cell in direction d with no gallery, entered by a corridor from a
+// west neighbour that has no link toward d.
+function ladderCell(d) {
+  const toward = DY[d] > 0 ? UP : [3, 6, 7];
+  return findCell((bd, c) => has(bd, c, d) && bd.links[c] & 4 && noGallery(bd, c)
+    && toward.every((e) => !has(bd, c - 1, e)) && noGallery(bd, world.step(bd, c, d).cell));
+}
+
+/** Rock pixels in the explorer's box: x in [X - 5, X + 5), y in [Y, Y + h) over the feet (X, Y). */
+function boxRock(w, s, masks) {
+  const [fx, fy] = feet(s);
+  // drawExplorer rounds screen y, which runs down, so the feet's y rounds as -round(-fy).
+  const X = Math.round(fx), Y = -Math.round(-fy), h = s.mode === 'air' ? 16 : 24;
+  let n = 0;
+  for (let y = Y; y < Y + h; y++) {
+    const by = Math.floor(y / BOARD_H);
+    for (let x = X - 5; x < X + 5; x++) {
+      const bx = Math.floor(x / BOARD_W);
+      if (bx < 0 || bx > 5) { n++; continue; }
+      const bd = w.board(bx, by);
+      if (!masks.has(bd)) masks.set(bd, boardMask(bd));
+      if (rockAt(masks.get(bd), x - bx * BOARD_W, y - by * BOARD_H)) n++;
+    }
   }
-  assert.equal(top, ROOM_CLEAR);
-  assert.equal(s.mode, 'floor');
-  assert.ok(ticks >= 10 && ticks <= 13, `${ticks + 1} ticks of air`);
+  return n;
+}
+
+test('every floor jump peaks at ROOM_CLEAR and lands after 0.5 s, under a ladder shaft too', () => {
+  const ladder = findCell((bd, c) => has(bd, c, 1) && noGallery(bd, c));
+  const room = findCell((bd, c) => UP.every((d) => !has(bd, c, d)));
+  for (const [at, off] of [[ladder, 0], [ladder, 10], [ladder, -10], [room, 0]]) {
+    // A jump pressed again in the air changes nothing.
+    for (const again of [false, true]) {
+      const s = simOn(at, off);
+      const go = driver(s);
+      let top = 0, ticks = 1;
+      go(0, 0, true);
+      for (let q = 0; s.mode === 'air' && q < 120; q++) {
+        top = Math.max(top, s.alt);
+        go(0, 0, again);
+        ticks++;
+      }
+      const label = `off ${off}, ${at === room ? 'room' : 'ladder'}, again ${again}`;
+      assert.ok(top <= ROOM_CLEAR && top > ROOM_CLEAR - 1e-9, `${label}: apex ${top}`);
+      assert.equal(s.mode, 'floor', label);
+      assert.ok(ticks >= 29 && ticks <= 31, `${label}: lands on tick ${ticks}`);
+      assert.equal(s.stats.jumps, 1, label);
+    }
+  }
 });
 
-test('under its ladder shaft a jump rises 16 px, and the head stays within the shaft', () => {
-  const at = findCell((bd, c) => has(bd, c, 1) && !has(bd, c, 7) && !has(bd, c, 6));
-  const s = simOn(at);
-  const go = driver(s);
-  let top = 0, ticks = 0;
-  go(0, 0, true);
-  while (s.mode === 'air') {
-    top = Math.max(top, s.alt);
-    // Halfway up, run sideways: the shaft holds the head until it drops into the room.
-    go(ticks >= 6 ? 1 : 0, 0);
-    if (s.alt > ROOM_CLEAR) assert.ok(Math.abs(s.off) <= SHAFT_REACH, `off ${s.off} at height ${s.alt}`);
-    ticks++;
+test('Up held through a jump\'s descent grabs the ladder under its shaft only', () => {
+  const at = findCell((bd, c) => has(bd, c, 1) && noGallery(bd, c));
+  for (const off of [10, -10, 0]) {
+    const s = simOn(at, off);
+    const go = driver(s);
+    go(0, 0, true);
+    for (let q = 0; s.vy > 0 && q < 60; q++) go(0, 0);
+    let before = null;
+    for (let q = 0; s.mode === 'air' && q < 120; q++) {
+      before = s.mode;
+      go(0, 1);
+    }
+    if (off) assert.ok(s.mode === 'floor' && s.stats.airGrabs === 0, `off ${off}: ${s.mode}`);
+    else assert.ok(before === 'air' && s.mode === 'link' && s.link === 1 && s.prog > 0, `${s.mode} ${s.prog}`);
   }
-  assert.ok(Math.abs(top - 16) < 1e-9, `apex ${top}`);
-  assert.ok(ticks >= 22 && ticks <= 24, `${ticks + 1} ticks of air`);
 });
 
 test('Up in the air under a ladder shaft grabs the ladder at the current height', () => {
@@ -322,6 +363,43 @@ test('Up in the air under a ladder shaft grabs the ladder at the current height'
   go(0, 1);
   assert.ok(s.mode === 'link' && s.link === 1 && s.prog > 0, `${s.mode} ${s.link} ${s.prog}`);
   assert.equal(s.stats.airGrabs, 1);
+});
+
+test('over an up-stair a jump lands on the leading foot past the room wall, else flies its arc', () => {
+  for (const g of [4, 5]) {
+    const at = findCell((bd, c) => has(bd, c, g));
+    const dir = DX[g], masks = new Map();
+    // Straight up from the cell centre: the full arc, onto the floor.
+    const up = simOn(at, 0, dir);
+    const hop = driver(up);
+    let ticks = 1;
+    hop(0, 0, true);
+    for (let q = 0; up.mode === 'air' && q < 120; q++) {
+      assert.equal(boxRock(world, up, masks), 0, `dir ${g}: rock at alt ${up.alt}`);
+      hop(0, 0);
+      ticks++;
+    }
+    assert.ok(up.mode === 'floor' && ticks >= 29 && ticks <= 31, `dir ${g}: ${up.mode} after ${ticks} ticks`);
+    // A running jump from the far side lands on the stair under its leading foot.
+    const s = simOn(at, -11 * dir, dir);
+    const go = driver(s);
+    let prev = null;
+    go(dir, 0, true);
+    for (let q = 0; s.mode === 'air' && q < 120; q++) {
+      assert.equal(boxRock(world, s, masks), 0, `dir ${g}: rock at off ${s.off}, alt ${s.alt}`);
+      prev = { off: s.off, alt: s.alt, vy: s.vy, x: feet(s)[0] };
+      go(dir, 0);
+    }
+    assert.ok(prev, `dir ${g}: airborne the tick before`);
+    assert.ok(s.mode === 'link' && s.link === g && s.stats.stairLandings === 1, `dir ${g}: ${s.mode}`);
+    assert.ok(prev.alt > prev.off * dir + 5, `dir ${g}: leading foot above the stair the tick before`);
+    // The landing keeps the feet's x and engages at the prog under them.
+    const x = prev.x + dir * RUN_SPEED * TICK, k = (x - nodeXY(at.bd, at.cell)[0]) * dir;
+    assert.ok(k > 11, `dir ${g}: lands at off ${k}`);
+    assert.ok(Math.abs(feet(s)[0] - x) < 1e-9 && Math.abs(s.prog - k * Math.SQRT2) < 1e-9, `dir ${g}: prog ${s.prog}`);
+    const alt = prev.alt + prev.vy * TICK - GRAVITY * TICK * TICK / 2;
+    assert.ok(alt >= k && alt - k <= 5, `dir ${g}: feet drop ${alt - k}`);
+  }
 });
 
 test('a jump from the cell centre toward an up-gallery lands on its stair, Up never pressed', () => {
@@ -340,29 +418,73 @@ test('a jump from the cell centre toward an up-gallery lands on its stair, Up ne
   }
 });
 
-test('Up held in the air engages an up-gallery within 4 px of its stair', () => {
+/**
+ * A jump from offset `off` in `at`, straight up until tick m, then toward
+ * the stair; Up held from the tick after launch when `holdUp`. Each entry is
+ * the state after a tick: mode, prog, and the landing point's gap over the
+ * stair.
+ */
+function stairTrace(at, g, off, m, holdUp) {
+  const s = simOn(at, off, DX[g]);
+  const go = driver(s);
+  const out = [];
+  go(m === 0 ? DX[g] : 0, 0, true);
+  for (let i = 1; i < 40 && s.mode === 'air'; i++) {
+    go(i >= m ? DX[g] : 0, holdUp ? 1 : 0);
+    const k = s.off * DX[g];
+    out.push({ mode: s.mode, prog: s.prog, k, over: k >= 0, gap: s.alt - (k > 11 ? k + 5 : k) });
+  }
+  return out;
+}
+
+test('Up held in the air engages an up-gallery once its landing point comes within 4 px of the stair', () => {
   for (const g of [4, 5]) {
     const at = findCell((bd, c) => has(bd, c, g));
-    // The same running jump from the far side, with and without Up held.
-    const trace = (holdUp) => {
-      const s = simOn(at, -11 * DX[g], DX[g]);
-      const go = driver(s);
-      const out = [];
-      go(DX[g], 0, true);
-      for (let i = 0; i < 30; i++) {
-        out.push({ mode: s.mode, gap: s.alt - s.off * DX[g], over: s.off * DX[g] >= 0 });
-        if (s.mode !== 'air') break;
-        go(DX[g], holdUp ? 1 : 0);
+    let windows = 0, landings = 0;
+    // From the centre, toward the stair from tick m; from the far side, at once.
+    const runs = [...Array(29).keys()].map((m) => [0, m + 1]).concat([[-11 * DX[g], 0], [-9 * DX[g], 0]]);
+    for (const [off, m] of runs) {
+      const held = stairTrace(at, g, off, m, true), free = stairTrace(at, g, off, m, false);
+      const t = held.findIndex((p) => p.mode === 'link');
+      // Entry -1 is the launch tick, airborne.
+      assert.ok(t >= 0 && (t === 0 || held[t - 1].mode === 'air'), `dir ${g}, off ${off}, m ${m}: airborne before engaging`);
+      for (let j = 0; j < t; j++) {
+        assert.ok(free[j].mode === 'air' && (!free[j].over || free[j].gap > STAIR_REACH), `dir ${g}, off ${off}, m ${m}: window open at ${j}`);
       }
-      return out;
-    };
-    const held = trace(true), free = trace(false);
-    const t = held.findIndex((p) => p.mode === 'link');
-    assert.ok(t > 0 && held[t - 1].mode === 'air', `dir ${g}: airborne before engaging`);
-    // Without Up the arc is still airborne there, its feet 0-4 px over the stair.
-    assert.equal(free[t].mode, 'air');
-    assert.ok(free[t].over && free[t].gap > 0 && free[t].gap <= STAIR_REACH, `dir ${g}: gap ${free[t].gap}`);
-    for (let j = 0; j < t; j++) assert.ok(!free[j].over || free[j].gap > STAIR_REACH, `dir ${g}: window open at ${j}`);
+      if (free[t].mode === 'air') {
+        // Without Up the arc is still airborne there, its landing point 0-4 px over the stair.
+        assert.ok(free[t].over && free[t].gap > 0 && free[t].gap <= STAIR_REACH, `dir ${g}, off ${off}, m ${m}: gap ${free[t].gap}`);
+        assert.ok(Math.abs(held[t].prog - free[t].k * Math.SQRT2) < 1e-9, `dir ${g}, off ${off}, m ${m}: prog ${held[t].prog}`);
+        windows++;
+      } else {
+        // The tick that crosses off 11 skips the window; the stair landing catches it.
+        assert.equal(free[t].mode, 'link', `dir ${g}, off ${off}, m ${m}`);
+        assert.equal(held[t].prog, free[t].prog);
+        landings++;
+      }
+    }
+    assert.ok(windows > 0 && landings > 0, `dir ${g}: ${windows} windows, ${landings} landings`);
+  }
+});
+
+test('Up held in the air moving away from an up-gallery never engages it', () => {
+  for (const g of [4, 5]) {
+    const at = findCell((bd, c) => has(bd, c, g));
+    let near = 0;
+    // A run toward the stair from the centre lands on it at tick 7.
+    for (let m = 2; m <= 6; m++) {
+      // Toward the stair until tick m, then away from it with Up held.
+      const s = simOn(at, 0, DX[g]);
+      const go = driver(s);
+      go(DX[g], 0, true);
+      for (let i = 1; i < 40 && s.mode === 'air'; i++) {
+        go(i < m ? DX[g] : -DX[g], i < m ? 0 : 1);
+        const k = s.off * DX[g];
+        if (i >= m && s.mode === 'air' && k >= 0 && s.alt - k <= STAIR_REACH) near++;
+      }
+      assert.equal(s.mode, 'floor', `dir ${g}, m ${m}`);
+    }
+    assert.ok(near > 0, `dir ${g}: never within the window`);
   }
 });
 
@@ -372,39 +494,236 @@ test('in the air a down-gallery mouth keeps the explorer out', () => {
     const go = driver(s);
     let air = 0;
     go(DX[g], 0, true);
-    while (s.mode === 'air') {
+    for (let q = 0; s.mode === 'air' && q < 120; q++) {
       assert.ok(s.off * DX[g] <= 0, `dir ${g}: off ${s.off}`);
       go(DX[g], 0);
       air++;
     }
-    assert.ok(air >= 10);
+    assert.ok(air >= 29);
   }
 });
 
-test('a jump neither speeds nor slows a run', () => {
-  const at = findCell((bd, c) => c % 12 < 10 && bd.links[c] & 1 && bd.links[c + 1] & 1
-    && [c, c + 1, c + 2].every((u) => UP.every((d) => !has(bd, u, d))));
-  const ran = (jumpAt) => {
-    const s = simOn(at);
-    const go = driver(s);
-    for (let i = 0; i < 40; i++) go(1, 0, i === jumpAt);
-    return { x: feet(s)[0], jumps: s.stats.jumps };
-  };
-  const plain = ran(-1), hop = ran(3);
-  assert.equal(hop.jumps, 1);
-  assert.ok(Math.abs(hop.x - plain.x) < 1e-9, `${hop.x} vs ${plain.x}`);
+test('a jump neither speeds nor slows a run along corridors, across a ladder-up cell too', () => {
+  const straight = (bd, c) => c % 12 < 9 && [c, c + 1, c + 2].every((u) => bd.links[u] & 1 && noGallery(bd, u));
+  const plain = findCell((bd, c) => straight(bd, c) && [c, c + 1, c + 2].every((u) => UP.every((d) => !has(bd, u, d))));
+  const ladder = findCell((bd, c) => straight(bd, c) && has(bd, c + 1, 1));
+  for (const at of [plain, ladder]) {
+    const ran = (jumpAt) => {
+      const s = simOn(at);
+      const go = driver(s);
+      for (let i = 0; i < 60; i++) go(1, 0, i === jumpAt);
+      return { x: feet(s)[0], jumps: s.stats.jumps };
+    };
+    const base = ran(-1);
+    for (let j = 0; j < 60; j++) {
+      const hop = ran(j);
+      assert.equal(hop.jumps, 1);
+      assert.ok(Math.abs(hop.x - base.x) < 1e-9, `${at === ladder ? 'ladder' : 'plain'} run, jump at ${j}: ${hop.x} vs ${base.x}`);
+    }
+  }
 });
 
-test('the explorer never leaves a cell except along a link or door', () => {
+test('a run with Right held that buffers a tap onto a ladder stops there; a Right press dismounts, a jump hops', () => {
+  for (const d of [1, 3]) {
+    const at = ladderCell(d), key = DY[d] > 0 ? KEY.U : KEY.D;
+    const parked = () => {
+      // From 12 px short of the shared wall: the tap rides the buffer into the ladder cell.
+      const s = simOn({ bd: at.bd, cell: at.cell - 1 }, 12);
+      step(s, 1, 0, false, { press: KEY.R | key, release: key });
+      let engaged = -1;
+      for (let i = 0; i < 60; i++) {
+        step(s, 1, 0);
+        if (engaged < 0 && s.mode === 'link') engaged = i;
+        if (engaged >= 0) assert.ok(s.mode === 'link' && s.link === d && s.prog === 0, `dir ${d}, tick ${i}: ${s.mode} ${s.prog}`);
+      }
+      assert.ok(engaged >= 0 && engaged < 30, `dir ${d}: engaged at ${engaged}`);
+      return s;
+    };
+    const s = parked();
+    step(s, 0, 0, false, { press: 0, release: KEY.R });
+    assert.equal(s.mode, 'link');
+    step(s, 1, 0, false, { press: KEY.R, release: 0 });
+    assert.ok(s.mode === 'floor' && s.cell === at.cell && s.stats.dismounts === 1, `dir ${d}: ${s.mode} on ${s.cell}`);
+    for (let i = 0; i < 5; i++) step(s, 1, 0);
+    assert.ok(s.mode === 'floor' && s.off > 0, `dir ${d}: walks right, off ${s.off}`);
+    const j = parked();
+    const go = driver(j);
+    let top = 0;
+    go(0, 0, true);
+    for (let q = 0; j.mode === 'air' && q < 120; q++) { top = Math.max(top, j.alt); go(0, 0); }
+    assert.ok(top > ROOM_CLEAR - 1e-9 && j.mode === 'floor' && j.cell === at.cell, `dir ${d}: apex ${top}, ${j.mode} on ${j.cell}`);
+  }
+});
+
+test('a side press on a ladder dismounts to the nearer end; Up or Down held keeps the explorer on the ladder', () => {
+  for (const d of [1, 3]) {
+    const at = ladderCell(d), far = world.step(at.bd, at.cell, d).cell;
+    for (const [n, end] of [[12, at.cell], [48, far]]) {
+      const s = simOn(at);
+      const go = driver(s);
+      for (let i = 0; i < n; i++) go(0, DY[d]);
+      assert.ok(s.mode === 'link' && Math.abs(s.prog - 0.8 * n) < 1e-9, `dir ${d}: prog ${s.prog}`);
+      for (let i = 0; i < 40 && s.mode === 'link'; i++) go(1, 0);
+      assert.ok(s.mode === 'floor' && s.cell === end && s.stats.dismounts === 1, `dir ${d}, prog ${0.8 * n}: ${s.mode} on ${s.cell}`);
+      const off = s.off;
+      go(1, 0);
+      assert.ok(s.off > off, `dir ${d}: walks on`);
+    }
+    // A side pressed with Up or Down held moves along the ladder; the press then lapses.
+    const s = simOn(at);
+    const go = driver(s);
+    for (let i = 0; i < 12; i++) go(0, DY[d]);
+    let prog = s.prog;
+    for (let i = 0; i < 10; i++) {
+      go(1, DY[d]);
+      assert.ok(s.mode === 'link' && s.prog > prog, `dir ${d}, tick ${i}: prog ${s.prog}`);
+      prog = s.prog;
+    }
+    go(1, 0);
+    assert.ok(s.mode === 'link' && s.prog === prog, `dir ${d}: a held side stays on the ladder`);
+    assert.equal(s.stats.dismounts, 0);
+  }
+});
+
+test('a jump on a ladder lets go and lands on its lower cell', () => {
+  for (const d of [1, 3]) {
+    const at = ladderCell(d), link = world.step(at.bd, at.cell, d);
+    const s = simOn(at);
+    const go = driver(s);
+    for (let i = 0; i < 38; i++) go(0, DY[d]);
+    const [x, y] = feet(s);
+    go(0, 0, true);
+    const lower = d === 1 ? at.cell : link.cell;
+    assert.ok(s.mode === 'air' && s.cell === lower && s.stats.letGos === 1, `dir ${d}: ${s.mode} on ${s.cell}`);
+    assert.equal(feet(s)[0], x);
+    assert.ok(Math.abs(feet(s)[1] - (y - GRAVITY * TICK * TICK / 2)) < 1e-9, `dir ${d}: drops from the feet`);
+    for (let q = 0; s.mode === 'air' && q < 120; q++) go(0, 0);
+    assert.ok(s.mode === 'floor' && s.cell === lower && s.bd === at.bd, `dir ${d}: ${s.mode} on ${s.cell}`);
+  }
+  // Down through a floor door: the let-go crosses the seam.
+  const door = findCell((bd, c) => bd.doorMask[c] & 8);
+  const below = world.step(door.bd, door.cell, 3);
+  const s = simOn(door);
+  const go = driver(s);
+  for (let i = 0; i < 38; i++) go(0, -1);
+  assert.ok(s.mode === 'link' && s.link === 3 && s.bd === door.bd);
+  go(0, 0, true);
+  assert.ok(s.events.includes('seam') && s.bd === below.board && s.cell === below.cell, 'lands on the board below');
+  const masks = new Map();
+  for (let q = 0; s.mode === 'air' && q < 120; q++) {
+    assert.equal(boxRock(world, s, masks), 0, `rock at alt ${s.alt}`);
+    go(0, 0);
+  }
+  assert.ok(s.mode === 'floor' && s.bd === below.board && s.cell === below.cell);
+});
+
+test('after a let-go, held Up grabs nothing until pressed anew; on landing it takes the ladder', () => {
+  const at = ladderCell(1);
+  const climb = () => {
+    const s = simOn(at);
+    const go = driver(s);
+    for (let i = 0; i < 38; i++) go(0, 1);
+    go(0, 1, true);
+    assert.equal(s.mode, 'air');
+    return [s, go];
+  };
+  const [s, go] = climb();
+  for (let q = 0; s.mode === 'air' && q < 120; q++) go(0, 1);
+  assert.ok(s.mode === 'floor' && s.stats.airGrabs === 0, `${s.mode}`);
+  go(0, 1);
+  assert.ok(s.mode === 'link' && s.link === 1, 'held Up takes the ladder from the floor');
+  const [r, again] = climb();
+  again(0, 0);
+  again(0, 1);
+  assert.ok(r.mode === 'link' && r.link === 1 && r.prog > 0 && r.stats.airGrabs === 1, `${r.mode} ${r.prog}`);
+});
+
+test('after a let-go lands, Up held since then grabs a ladder in a later jump', () => {
+  // Let go of L's ladder and land holding Up, which climbs to U; from U a
+  // running jump carries the explorer under V's ladder shaft.
+  const at = findCell((bd, c) => has(bd, c, 1) && noGallery(bd, c) && UP.every((d) => !has(bd, c + 12, d))
+    && (c + 12) % 12 < 11 && bd.links[c + 12] & 1 && has(bd, c + 13, 1));
+  const s = simOn(at);
+  const go = driver(s);
+  for (let i = 0; i < 38; i++) go(0, 1);
+  go(0, 1, true);
+  for (let i = 0; i < 200 && s.cell !== at.cell + 12; i++) go(0, 1);
+  assert.ok(s.mode === 'floor' && s.cell === at.cell + 12, `${s.mode} on ${s.cell}`);
+  go(1, 1, true);
+  for (let i = 0; i < 40 && s.mode === 'air'; i++) go(1, 1);
+  assert.ok(s.mode === 'link' && s.link === 1 && s.cell === at.cell + 13 && s.stats.airGrabs === 1, `${s.mode} on ${s.cell}`);
+});
+
+test('after a let-go above the room, the shaft holds the explorer until its head drops below the ceiling', () => {
+  const at = ladderCell(1);
+  const s = simOn(at);
+  const go = driver(s);
+  for (let i = 0; i < 50; i++) go(0, 1);
+  go(1, 0, true);
+  let high = 0;
+  for (let q = 0; s.mode === 'air' && q < 120; q++) {
+    if (s.alt > ROOM_CLEAR) { high++; assert.ok(Math.abs(s.off) <= SHAFT_REACH, `off ${s.off} at alt ${s.alt}`); }
+    go(1, 0);
+  }
+  assert.ok(high > 5 && s.off > SHAFT_REACH, `${high} ticks high, off ${s.off}`);
+});
+
+test('a jump on a gallery changes nothing, and a side press there moves along it', () => {
+  for (const g of [4, 5]) {
+    const s = simAt(g, 1);
+    const go = driver(s);
+    for (let i = 0; i < 10; i++) go(0, 1);
+    const prog = s.prog;
+    go(0, 1, true);
+    assert.ok(s.mode === 'link' && s.link === g && Math.abs(s.prog - prog - GALLERY_SPEED * TICK) < 1e-9, `dir ${g}: ${s.mode} ${s.prog}`);
+    for (let i = 0; i < 60 && s.mode === 'link'; i++) go(DX[g], 0);
+    assert.ok(s.mode === 'floor' && s.stats.jumps === 0 && s.stats.letGos === 0 && s.stats.dismounts === 0, `dir ${g}`);
+    assert.equal(s.stats.ladderUp, 0, `dir ${g}: a gallery is no ladder`);
+  }
+});
+
+test('on a gallery the explorer faces the way it walks and its frames advance', () => {
+  for (const g of [4, 5]) {
+    const s = simAt(g, 1);
+    const go = driver(s);
+    const frames = new Set();
+    for (let i = 0; i < 20; i++) { go(0, 1); frames.add(pose(s).frame); }
+    assert.ok(s.mode === 'link' && s.facing === DX[g] && frames.size > 2, `dir ${g}: up`);
+    go(0, -1);
+    assert.ok(s.mode === 'link' && s.facing === -DX[g], `dir ${g}: down`);
+  }
+});
+
+test('an engaged link spends a buffered tap in its direction', () => {
+  for (const g of [4, 5]) {
+    const s = simOn(findCell((bd, c) => has(bd, c, g)), 0, DX[g]);
+    step(s, 0, 0, true);
+    for (let i = 1; i < 28; i++) step(s, 0, 0);
+    // An Up tap buffers in the air; a late drift then lands on the stair near its foot.
+    step(s, 0, 0, false, { press: KEY.U, release: KEY.U });
+    for (let i = 0; i < 4 && s.mode === 'air'; i++) step(s, DX[g], 0);
+    assert.ok(s.mode === 'link' && s.link === g && s.stats.stairLandings === 1, `dir ${g}: ${s.mode}`);
+    // Down walks back to the floor while the tap would still be buffered.
+    step(s, 0, -1, false, { press: KEY.D, release: 0 });
+    for (let i = 0; i < 6 && s.mode === 'link'; i++) step(s, 0, -1);
+    assert.equal(s.mode, 'floor', `dir ${g}`);
+    step(s, 0, 0, false, { press: 0, release: KEY.D });
+    step(s, 0, 0);
+    assert.equal(s.mode, 'floor', `dir ${g}: the spent tap engages nothing`);
+  }
+});
+
+test('the explorer never leaves a cell except along a link or door, nor enters rock', () => {
   // Random arrows and jumps from the entries of 7 bands in each of 4 seeds.
   let seed = 7;
   const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed >>> 16; };
-  let moves = 0, jumps = 0, air = 0, bands = 0;
+  let moves = 0, jumps = 0, air = 0, bands = 0, dismounts = 0, letGos = 0, overStair = 0, boxes = 0;
   for (const code of ['00000000', '000001C3', 'K7Q2M9XA', 'ZZZZZZZZ']) {
     const w = createWorld(code);
     for (let b = -3; b <= 3; b++) {
       bands++;
       const s = createSim(w, w.resumePoint(w.tree(b).entryX, 4 * b));
+      const masks = new Map();
       let h = 0, v = 0, ph = 0, pv = 0, prev = [s.bd, s.cell];
       for (let i = 0; i < 3000; i++) {
         if (i % 20 === 0) { h = (rnd() % 3) - 1; v = (rnd() % 3) - 1; }
@@ -412,6 +731,13 @@ test('the explorer never leaves a cell except along a link or door', () => {
         ph = h;
         pv = v;
         s.burn = BURN_S;
+        if (s.mode !== 'link') {
+          boxes++;
+          const rock = boxRock(w, s, masks);
+          assert.equal(rock, 0, `${code}: ${rock} rock px in ${s.mode} on (${s.bd.x},${s.bd.y}):${s.cell} off ${s.off} alt ${s.alt}`);
+          const stair = w.step(s.bd, s.cell, 4) ? 1 : w.step(s.bd, s.cell, 5) ? -1 : 0;
+          if (s.mode === 'air' && s.off * stair > 0) overStair++;
+        }
         if (s.bd === prev[0] && s.cell === prev[1]) continue;
         let ok = false;
         for (let d = 0; d < 8; d++) {
@@ -424,12 +750,18 @@ test('the explorer never leaves a cell except along a link or door', () => {
       }
       jumps += s.stats.jumps;
       air += s.stats.airGrabs + s.stats.stairLandings;
+      dismounts += s.stats.dismounts;
+      letGos += s.stats.letGos;
     }
   }
   assert.ok(bands >= 25);
   assert.ok(moves > 300, `only ${moves} moves`);
   assert.ok(jumps > 500, `only ${jumps} jumps`);
   assert.ok(air > 30, `only ${air} air grabs and stair landings`);
+  assert.ok(dismounts > 10, `only ${dismounts} dismounts`);
+  assert.ok(letGos > 200, `only ${letGos} let-gos`);
+  assert.ok(overStair > 25, `only ${overStair} air ticks over an up-stair`);
+  assert.ok(boxes > 50000, `only ${boxes} boxes checked`);
 });
 
 test('torch radius falls from 96 px to 24 px at 10% burn, then an 8 px ember', () => {
@@ -501,6 +833,16 @@ test('the self-test script runs a corridor, climbs, crosses a seam, touches a fl
 test('the self-test script fails when the autopilot omits jumps or air grabs', () => {
   assert.equal(runScript(createWorld('00000000'), SELFTEST_TICKS, { jumps: false }).reason, 'no jump');
   assert.equal(runScript(createWorld('00000000'), SELFTEST_TICKS, { grabs: false }).reason, 'no air grab or stair landing');
+});
+
+test('both jump frames tuck into rows 8-23 with the torch tip on a drawn row', () => {
+  for (const f of [0, 1]) {
+    const rows = EXPLORER.jump[f];
+    assert.equal(rows.length, 24);
+    for (let y = 0; y < 8; y++) assert.match(rows[y], /^\.+$/, `frame ${f}, row ${y}`);
+    const [, y] = torchTip('jump', f);
+    assert.ok(y >= 8 && /[^.]/.test(rows[y]), `frame ${f}: torch tip row ${y}`);
+  }
 });
 
 test('art strings keep one width per sprite and use palette characters', () => {

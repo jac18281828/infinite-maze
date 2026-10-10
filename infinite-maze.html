@@ -1118,7 +1118,8 @@ const { DX, DY, BW } = __m2;
 // Simulation: the explorer moves along the cell graph, so motion admits
 // exactly the tree's links. A jump is an air state of the current cell: on
 // the ground or in the air, the explorer leaves a cell only along a link or
-// door. Runs on a fixed 60 Hz tick; no DOM.
+// door. A let-go drops from a ladder over its lower cell. Runs on a fixed
+// 60 Hz tick; no DOM.
 
 
 const TICK = 1 / 60;
@@ -1134,14 +1135,16 @@ const R_FULL = 96;
 const R_LOW = 24;
 const R_EMBER = 8;
 const SCONCE_R = 64;
-// A 160 px/s launch under 800 px/s^2 peaks at 16 px after 0.2 s.
-const JUMP_SPEED = 160;
-const GRAVITY = 800;
-// Head room over a room's floor: interior 32 px less the explorer's 24.
-const ROOM_CLEAR = 8;
+// A 128 px/s launch under 512 px/s^2 peaks at 16 px after 0.25 s and lands
+// after 0.5 s; the per-tick integration is exact, so no floor jump rises past
+// ROOM_CLEAR.
+const JUMP_SPEED = 128;
+const GRAVITY = 512;
+// Head room over a room's floor: interior 32 px less the tucked explorer's 16.
+const ROOM_CLEAR = 16;
 // Largest offset that keeps the explorer inside a 16 px ladder shaft.
 const SHAFT_REACH = 3;
-// Held Up engages an up-gallery once the feet come this close to its stair.
+// Held Up engages an up-gallery once its landing point comes this close to the stair.
 const STAIR_REACH = 4;
 // An Up or Down tap stays buffered 150 ms (9 ticks) past its release tick.
 const BUFFER_TICKS = 9;
@@ -1151,6 +1154,8 @@ const NO_EDGES = { press: 0, release: 0 };
 // Floor reach from the cell centre toward a wall: interior half-width 16
 // less the explorer's half-width 5.
 const WALL_REACH = 11;
+// The explorer's half-width: its leading foot sits this far from the feet.
+const HALF_W = 5;
 const TOUCH = 12;
 
 /** World position of a cell's standing point (centre, on the floor). */
@@ -1178,13 +1183,15 @@ function createSim(world, start, carry = null) {
     world, bd: start.board, cell: start.cell,
     mode: 'floor', off: 0, alt: 0, vy: 0, link: -1, to: null, prog: 0, len: 0,
     facing: 1, moving: false, burn: BURN_S, ember: 0,
-    tap: 0, buffer: 0, bufferTicks: 0, queued: 0,
+    tap: 0, buffer: 0, bufferTicks: 0, queued: 0, dismount: 0, letGo: false,
     state: 'play', time: carry ? carry.time : 0,
     startBand: carry ? carry.startBand : start.board.band,
     maxBand: carry ? Math.max(carry.maxBand, start.board.band) : start.board.band,
     lastEntry: start.board.routeIndex === 0 ? start.board.p : (carry ? carry.lastEntry : start.board.p),
     touching: false, walked: 0, climbed: 0, carry: 0,
-    stats: { corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0 },
+    stats: {
+      corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
+    },
     events: [],
   };
   return s;
@@ -1232,6 +1239,7 @@ function engage(s, d, prog = 0) {
   s.tap &= ~(DY[d] > 0 ? KEY.U : KEY.D);
   if (s.buffer === DY[d]) s.buffer = 0;
   s.queued = 0;
+  s.dismount = 0;
 }
 
 function enterBoard(s, bd) {
@@ -1240,6 +1248,13 @@ function enterBoard(s, bd) {
   s.events.push('seam');
   if (bd.band > s.maxBand) { s.maxBand = bd.band; s.events.push('band'); }
   if (bd.routeIndex === 0 && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
+}
+
+/** Moves to the far cell of the current link. */
+function arrive(s) {
+  enterBoard(s, s.to.board);
+  s.bd = s.to.board;
+  s.cell = s.to.cell;
 }
 
 /** Moves through the corridor or door on side h once the offset passes the cell edge. */
@@ -1254,12 +1269,17 @@ function crossCell(s, h) {
 }
 
 /**
- * A Left or Right press turns the explorer at once. An Up or Down press made
- * off a link is a tap until a link engages; its release buffers the intent.
+ * A Left or Right press turns the explorer at once and, on a ladder, commits
+ * a dismount to its nearer end, the far one from len/2; engage clears a
+ * press made off a link. An Up or Down press made off a link is a tap until a
+ * link engages; its release buffers the intent. An Up press ends a let-go's
+ * hold on air grabs.
  */
 function readEdges(s, { press, release }) {
   if (press & KEY.L && !(press & KEY.R)) s.facing = -1;
   else if (press & KEY.R && !(press & KEY.L)) s.facing = 1;
+  if (press & (KEY.L | KEY.R) && s.link < 4) s.dismount = s.prog >= s.len / 2 ? 1 : -1;
+  if (press & KEY.U) s.letGo = false;
   for (const [key, dir] of [[KEY.U, 1], [KEY.D, -1]]) {
     if (press & key && s.mode !== 'link') s.tap |= key;
     if (release & key && s.tap & key) {
@@ -1328,7 +1348,9 @@ function floorMove(s, h, v, dt) {
 
 function linkMove(s, h, v, dt) {
   const d = s.link;
-  const along = d === 1 || d === 3 ? v * DY[d] : Math.sign(h * DX[d] + v * DY[d]);
+  // On a ladder, Up or Down held cancels a dismount.
+  if (v !== 0) s.dismount = 0;
+  const along = d < 4 ? s.dismount || v * DY[d] : Math.sign(h * DX[d] + v * DY[d]);
   if (along === 0) { s.moving = false; return; }
   const speed = d < 4 ? LADDER_SPEED : GALLERY_SPEED;
   s.prog += along * speed * dt;
@@ -1337,18 +1359,15 @@ function linkMove(s, h, v, dt) {
   else { s.walked += speed * dt; s.facing = DX[d] * along; }
   // A link always ends at its node; unspent tick time carries to the next tick.
   if (s.prog >= s.len - 1e-9) {
-    s.carry = Math.max(0, s.prog - s.len) / speed;
+    s.carry = (s.prog - s.len) / speed;
     if (d === 1) s.stats.ladderUp++;
-    enterBoard(s, s.to.board);
-    s.bd = s.to.board;
-    s.cell = s.to.cell;
-    s.mode = 'floor';
-    s.off = 0;
+    arrive(s);
   } else if (s.prog <= 1e-9) {
-    s.carry = Math.max(0, -s.prog) / speed;
-    s.mode = 'floor';
-    s.off = 0;
-  }
+    s.carry = -s.prog / speed;
+  } else return;
+  if (s.dismount) s.stats.dismounts++;
+  s.mode = 'floor';
+  s.off = 0;
 }
 
 function launch(s) {
@@ -1360,9 +1379,29 @@ function launch(s) {
 }
 
 /**
+ * A jump on a ladder. At prog 0 the explorer stands on the floor it engaged
+ * from and jumps from it. Elsewhere it lets go: it drops from its feet's
+ * height, at zero vertical speed, over the ladder's lower cell, reached from
+ * a down-ladder along the link. Held Up then grabs nothing until pressed anew
+ * or the explorer lands.
+ */
+function letGo(s) {
+  if (s.prog <= 0) { launch(s); return; }
+  s.mode = 'air';
+  s.vy = 0;
+  s.letGo = true;
+  s.stats.letGos++;
+  if (DY[s.link] > 0) { s.alt = s.prog; return; }
+  arrive(s);
+  s.alt = s.len - s.prog;
+}
+
+/**
  * Air over the current cell: `alt` is the feet's height over its floor. The
  * floor's side limits hold, except over the cell's up-stair, where the stair
- * bounds the feet from below. The air ends on the floor or on a link.
+ * bounds the landing point from below: the leading foot once it passes the
+ * room wall, where stair rock lies, else the feet. The air ends on the floor
+ * or on a link.
  */
 function airMove(s, h, v, dt) {
   let { up, stair } = upLink(s);
@@ -1383,12 +1422,11 @@ function airMove(s, h, v, dt) {
   }
   s.alt += s.vy * dt - GRAVITY * dt * dt / 2;
   s.vy -= GRAVITY * dt;
-  // The head stops at rock; only the cell's own ladder shaft rises past the room.
-  const ceiling = up === 1 && Math.abs(s.off) <= SHAFT_REACH ? Infinity : ROOM_CLEAR;
-  if (s.alt > ceiling) { s.alt = ceiling; s.vy = 0; }
-  // k: the up-stair's height under the feet, positive over the stair.
+  // k: the up-stair's height under the feet, positive over the stair; land:
+  // the stair's height under the landing point. A landing keeps the feet's x.
   const k = stair ? s.off * stair : -1;
-  if (k > 0 && s.alt <= k) {
+  const land = k > WALL_REACH ? k + HALF_W : k;
+  if (k > 0 && s.alt <= land) {
     s.stats.stairLandings++;
     engage(s, up, k * Math.SQRT2);
     return;
@@ -1397,10 +1435,11 @@ function airMove(s, h, v, dt) {
     s.mode = 'floor';
     s.alt = 0;
     s.vy = 0;
+    s.letGo = false;
     return;
   }
-  if (v <= 0 || up < 0 || (stair && h === -stair)) return;
-  if (k >= 0 && s.alt - k <= STAIR_REACH) {
+  if (v <= 0 || s.letGo || (stair && h === -stair)) return;
+  if (k >= 0 && s.alt - land <= STAIR_REACH) {
     s.stats.airGrabs++;
     engage(s, up, k * Math.SQRT2);
   } else if (up === 1 && Math.abs(s.off) <= SHAFT_REACH) {
@@ -1444,6 +1483,7 @@ function step(s, h, v, jump = false, edges = NO_EDGES) {
   if (s.buffer && --s.bufferTicks < 0) s.buffer = 0;
   readEdges(s, edges);
   if (jump && s.mode === 'floor') launch(s);
+  else if (jump && s.mode === 'link' && s.link < 4) letGo(s);
   if (s.mode === 'floor') floorMove(s, h, v, dt);
   else if (s.mode === 'air') airMove(s, h, v, dt);
   else linkMove(s, h, v, dt);
@@ -1741,28 +1781,53 @@ const LEGS = {
     '....655.........',
     '.....55.........',
   ],
-  // Jump: knees tucked while rising, legs reaching down while falling.
-  tuck: [
-    '.....rrssss.....',
-    '....rrr..sss....',
-    '...rr.....sss...',
-    '...rr....sss....',
-    '....rr..ss......',
-    '...655.655......',
-    '...55..55.......',
-    '................',
+};
+
+// Jump: the explorer tucks into rows 8-23, 16 px tall, knees drawn up while
+// rising and legs reaching down while falling. The torch hand sits at
+// column 12, rows 14-16.
+const TUCK = {
+  rise: [
+    '......6666......',
+    '.....677776.....',
+    '.....655556.....',
+    '...66677777666..',
+    '......uuu0u.....',
+    '......uuuuuu....',
+    '.....sssvuv.v...',
+    '...ssstssstsv...',
+    '...usstssssvu...',
+    '....sstsssss....',
+    '....v555v5sss...',
+    '....rrr.ssss....',
+    '...rrrr.sss.....',
+    '...rr655.655....',
+    '...655...55.....',
+    '...55...........',
   ],
-  reach: [
-    '.....rrssss.....',
-    '.....rr..ss.....',
-    '....rr....ss....',
-    '....rr....ss....',
-    '...rr......ss...',
-    '...rr......ss...',
-    '..655......655..',
-    '..55........55..',
+  fall: [
+    '......6666......',
+    '.....677776.....',
+    '.....655556.....',
+    '...66677777666..',
+    '......uuu0u.....',
+    '......uuuuuu....',
+    '.....ssvuuv.v...',
+    '....sstssstsv...',
+    '....sstssssvu...',
+    '....ssttsss.....',
+    '....v555v5......',
+    '....rr...ss.....',
+    '...rr.....ss....',
+    '...rr.....ss....',
+    '..655.....655...',
+    '..55.......55...',
   ],
 };
+
+function tucked(rows) {
+  return [...Array(8).fill('.'.repeat(16)), ...rows];
+}
 
 function compose(head, torso, legs, bob = 0) {
   const top = [...HEAD[head], ...TORSO[torso]];
@@ -1793,7 +1858,7 @@ const EXPLORER = {
     compose('side', 'hold', 'step3'), compose('side', 'hold', 'step2', 1),
   ],
   gasp: [compose('gasp', 'chest', 'stand', 1), compose('gasp', 'chest', 'stand', 2)],
-  jump: [compose('side', 'swing', 'tuck'), compose('side', 'hold', 'reach')],
+  jump: [tucked(TUCK.rise), tucked(TUCK.fall)],
 };
 
 /** Torch tip (x, y) within a frame, where the flame is drawn. */
@@ -1801,6 +1866,7 @@ function torchTip(anim, frame) {
   let y = 9;
   if (anim === 'climb') y = frame < 2 ? 11 : 9;
   else if (anim === 'gasp') y = 12;
+  else if (anim === 'jump') y = 13;
   return [12, y + EXPLORER_BOB[anim][frame]];
 }
 
