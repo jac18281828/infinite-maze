@@ -119,17 +119,26 @@ function standing(world, bd) {
   return { skeletons: tier1, boostSkeletons: tier2, arrows: arrow };
 }
 
-/** Tier 1, shown at every burn: the junctions whose hash lies in [0, t). */
+/**
+ * Tier 1, shown at every burn: the band members left standing under the
+ * spacing rule, hash in [0, t).
+ */
 export function skeletons(world, bd) {
   return standing(world, bd).skeletons;
 }
 
-/** Tier 2, shown under half the burn: the junctions whose hash lies in [t, 2t). */
+/**
+ * Tier 2, shown under half the burn: the band members left standing under the
+ * spacing rule, hash in [t, 2t).
+ */
 export function boostSkeletons(world, bd) {
   return standing(world, bd).boostSkeletons;
 }
 
-/** The junctions whose hash lies in [2t, 2t + a). */
+/**
+ * The arrows: the band members left standing under the spacing rule, hash in
+ * [2t, 2t + a).
+ */
 export function arrows(world, bd) {
   return standing(world, bd).arrows;
 }

@@ -304,7 +304,7 @@ cell at EASY to ULTIMATE before the rule.
 
 | Level | Sign junctions per tomb | Tier 1 per tomb | Tier 2 per tomb | Arrows per tomb | Arrow share |
 |---|---|---|---|---|---|
-| EASY | 10.84 | 0.975 | 0.834 | 0.855 | 0.0789 |
+| EASY | 10.84 | 0.975 | 0.834 | 0.855 | 0.0788 |
 | MEDIUM | 34.10 | 1.080 | 0.970 | 2.009 | 0.0589 |
 | HARD | 60.08 | 0.939 | 0.991 | 2.591 | 0.0431 |
 | ULTIMATE | 90.64 | 1.059 | 0.873 | 2.775 | 0.0306 |
