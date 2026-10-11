@@ -6,12 +6,23 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X, textWidth,
+  FIRE_FRAC, FIRE_MIN, padSide, titleFeet,
 } from '../src/game/touch.mjs';
 import { build } from '../tools/build.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
 
 const PORTRAIT = { w: 393, h: 852, dpr: 3, insets: { top: 59, bottom: 34, left: 0, right: 0 }, touch: true };
 const LANDSCAPE = { w: 852, h: 393, dpr: 3, insets: { top: 0, bottom: 21, left: 59, right: 59 }, touch: true };
+// A 360 px tall landscape phone: seven 44 px keys fit one column only at 6 px gaps.
+const SHORT = { w: 640, h: 360, dpr: 2, insets: {}, touch: true };
+const IPAD = { w: 820, h: 1180, dpr: 2, insets: {}, touch: true };
+const PHONE = { w: 320, h: 568, dpr: 2, insets: {}, touch: true };
+const LAND_375 = { ...LANDSCAPE, w: 667, h: 375, insets: {} };
+const DESKTOP = { w: 1024, h: 768, dpr: 2, insets: {}, touch: true };
+const BIG = { w: 1366, h: 1024, dpr: 2, insets: {}, touch: true };
+const WIDE_320 = { w: 568, h: 320, dpr: 2, insets: {}, touch: true };
+const FIXTURES = [PORTRAIT, LANDSCAPE, SHORT, LAND_375, DESKTOP, IPAD, PHONE, BIG, WIDE_320];
+const GAP = 8;
 
 test('keyboard mode scales by the largest whole multiple of CSS pixels', () => {
   for (const [w, h, k] of [[1280, 720, 4], [1000, 700, 3], [300, 200, 1]]) {
@@ -58,7 +69,7 @@ test('touch mode fills the limiting dimension and the backing is the CSS size ti
   }
 });
 
-test('the pad maps the centre to a jump and the dominant axis to an arm', () => {
+test('the pad maps the centre to a dead zone and the dominant axis to an arm', () => {
   const D = 120;
   assert.equal(padZone(0, 0, D), 'c');
   assert.equal(padZone(19, 0, D), 'c');
@@ -84,11 +95,14 @@ test('a pointer sliding across the pad swaps the held arrow and never jumps', ()
   assert.deepEqual(codes(p.up(1)), []);
 });
 
-test('a pointer down in the centre jumps, then an arm presses when the thumb rolls', () => {
+test('a pointer down in the centre sends nothing, and a slide through it never sends Space', () => {
   const p = createPad(), D = 120;
-  assert.deepEqual(codes(p.down(1, 0, 0, D)), ['keydown:Space', 'keyup:Space']);
+  assert.deepEqual(codes(p.down(1, 0, 0, D)), []);
   assert.deepEqual(codes(p.move(1, 40, 0, D)), ['keydown:ArrowRight']);
-  assert.deepEqual(codes(p.up(1)), ['keyup:ArrowRight']);
+  assert.deepEqual(codes(p.move(1, 0, 0, D)), ['keyup:ArrowRight']);
+  assert.deepEqual(codes(p.move(1, 0, -40, D)), ['keydown:ArrowUp']);
+  assert.deepEqual(codes(p.up(1)), ['keyup:ArrowUp']);
+  assert.deepEqual(codes(p.up(1)), []);
 });
 
 test('a direction stays down while any pointer holds it', () => {
@@ -196,14 +210,18 @@ test('the title\'s four level names lie right of L and inside the 248 text margi
 
 test('soft keys follow the game state', () => {
   const ids = (st) => softKeys(st).map((k) => k.id);
-  assert.deepEqual(ids({ screen: 'title', typing: false, resume: false }), ['begin', 'reset', 'type', 'difficulty', 'copy', 'sound']);
-  assert.deepEqual(ids({ screen: 'title', typing: false, resume: true }), ['resume', 'begin', 'reset', 'type', 'difficulty', 'copy', 'sound']);
+  assert.deepEqual(ids({ screen: 'title', typing: false, resume: false }), ['begin', 'reset', 'type', 'difficulty', 'copy', 'sound', 'pad']);
+  assert.deepEqual(ids({ screen: 'title', typing: false, resume: true }), ['resume', 'begin', 'reset', 'type', 'difficulty', 'copy', 'sound', 'pad']);
   assert.deepEqual(ids({ screen: 'title', typing: true, resume: true }), ['accept', 'cancel']);
   assert.deepEqual(ids({ screen: 'play' }), ['pause']);
   assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'copy', 'sound', 'title']);
   assert.deepEqual(ids({ screen: 'over' }), ['continue', 'copy', 'title']);
   assert.deepEqual(ids({ screen: 'splash' }), ['continue', 'home']);
   assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
+  // The pad key reads the side in force.
+  for (const [side, text] of [['left', 'PAD LEFT'], ['right', 'PAD RIGHT'], [undefined, 'PAD LEFT']]) {
+    assert.equal(softKeys({ screen: 'title', side }).find((k) => k.id === 'pad').text, text);
+  }
   // The difficulty key reads the setting, as SOUND reads mute.
   for (const d of ['easy', 'medium', 'hard', 'ultimate']) {
     const keys = softKeys({ screen: 'title', difficulty: d, muted: true });
@@ -212,23 +230,26 @@ test('soft keys follow the game state', () => {
   }
 });
 
+// Rectangles at least GAP apart on some axis.
+const apart = (a, b) => a.x + a.w + GAP <= b.x + 1e-9 || b.x + b.w + GAP <= a.x + 1e-9 || a.y + a.h + GAP <= b.y + 1e-9 || b.y + b.h + GAP <= a.y + 1e-9;
+const sq = (o) => ({ x: o.x, y: o.y, w: o.s, h: o.s });
 const inside = (r, o) => r.x >= o.x - 1e-9 && r.y >= o.y - 1e-9 && r.x + r.w <= o.x + o.w + 1e-9 && r.y + r.h <= o.y + o.h + 1e-9;
 
-// A 360 px tall landscape phone: seven 44 px keys fit one column only at 6 px gaps.
-const SHORT = { w: 640, h: 360, dpr: 2, insets: {}, touch: true };
-
 test('soft keys are at least 44 px, in the safe area, and clear of the panel in overlay mode', () => {
-  for (const spec of [PORTRAIT, LANDSCAPE, { ...LANDSCAPE, w: 667, h: 375, insets: {} }, { w: 1024, h: 768, dpr: 2, insets: {}, touch: true }, SHORT]) {
+  for (const spec of [PORTRAIT, LANDSCAPE, LAND_375, DESKTOP, SHORT, BIG, WIDE_320]) {
     const lay = layout(spec);
     for (const sid of ['title', 'typing', 'pause', 'over', 'splash', 'play']) {
       const state = { screen: sid === 'typing' ? 'title' : sid, typing: sid === 'typing', resume: true, difficulty: 'medium' };
       const labels = softKeys(state).map((k) => k.text);
       const rects = keyRects(lay, sid, labels);
       assert.equal(rects.length, labels.length);
-      if (sid === 'title') assert.equal(labels.length, 7, 'the title shows seven keys');
+      if (sid === 'title') assert.equal(labels.length, 8, 'the title shows eight keys');
       if (spec === SHORT && sid === 'title') {
         assert.equal(lay.mode, 'overlay');
-        assert.equal(new Set(rects.map((r) => r.x)).size, 1, '640x360: the title keys stand in one column');
+        assert.equal(new Set(rects.map((r) => r.x)).size, 2, '640x360: the title keys stand one column per strip');
+        assert.deepEqual(rects.map((r) => r.x < lay.safe.x + lay.safe.w / 2), [true, true, true, true, false, false, false, false]);
+        const sevenLabels = ['RESUME', 'BEGIN', 'RESET', 'TYPE CODE', 'MEDIUM', 'COPY', 'SOUND'];
+        assert.equal(new Set(keyRects(lay, 'title', sevenLabels).map((r) => r.x)).size, 1, '640x360: seven keys keep one column');
       }
       assert.ok(new Set(rects.map((r) => r.scale)).size <= 1, `${lay.mode} ${sid}: one label scale`);
       rects.forEach((r, i) => assert.ok(textWidth(labels[i]) * r.scale + 8 <= r.w, `${lay.mode} ${sid}: ${labels[i]} fits its key`));
@@ -248,16 +269,14 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
           assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, 'keys do not overlap');
         }
       }
-      if (lay.mode === 'band' && sid === 'play') {
-        for (const r of rects) assert.ok(r.x >= lay.pad.x + lay.pad.s || r.x + r.w <= lay.pad.x, 'play key clear of the pad');
+      if (sid === 'play') {
+        for (const r of rects) assert.ok(apart(r, sq(lay.pad)) && apart(r, sq(lay.fire)), 'play key clear of the pad and the fire button');
       }
     }
   }
 });
 
 test('in band mode the pad sits a quarter of the safe width in, never closer than the margin', () => {
-  const IPAD = { w: 820, h: 1180, dpr: 2, insets: {}, touch: true };
-  const PHONE = { w: 320, h: 568, dpr: 2, insets: {}, touch: true };
   for (const spec of [PORTRAIT, IPAD, PHONE]) {
     const lay = layout(spec);
     const { pad, safe, view, D } = lay;
@@ -271,7 +290,7 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
     const rects = keyRects(lay, 'play', labels);
     assert.ok(rects.length > 0, `${tag}: play keys exist`);
     for (const r of rects) {
-      assert.ok(r.x >= pad.x + pad.s, `${tag}: play key right of the pad`);
+      assert.ok(apart(r, sq(pad)), `${tag}: play key clear of the pad`);
       assert.ok(inside(r, safe), `${tag}: play key in the safe area`);
     }
     if (spec === IPAD) {
@@ -281,9 +300,124 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
   }
 });
 
+test('in band mode the pad centre sits a quarter of the way down the band, MARGIN below the view at most', () => {
+  for (const spec of [PORTRAIT, IPAD, PHONE]) {
+    const { pad, band } = layout(spec);
+    assert.ok(Math.abs(pad.y + pad.s / 2 - (band.y + band.h / 4)) <= 1, `${spec.w}x${spec.h}: a quarter down`);
+  }
+  assert.ok(Math.abs(layout(PORTRAIT).pad.y + 80 - 414.5) <= 1e-9, 'the iPhone centre rises from 549 to 414.5');
+  for (const spec of [BIG, DESKTOP]) {
+    const lay = layout(spec);
+    assert.equal(lay.mode, 'band');
+    assert.ok(Math.abs(lay.pad.y - (lay.band.y + MARGIN)) <= 1e-9, `${spec.w}x${spec.h}: the clamp binds`);
+  }
+  const { pad, band } = layout(BIG), centre = pad.y + pad.s / 2;
+  for (const f of [1 / 4, 1 / 3, 1 / 2]) assert.ok(Math.abs(centre - (band.y + band.h * f)) > 1, `1366x1024: not ${f} of the band`);
+});
+
+test('the fire button stands opposite the pad at its height, sized by FIRE_FRAC with a floor', () => {
+  const half = (o) => o.x + o.s / 2;
+  for (const spec of FIXTURES) {
+    const tag = `${spec.w}x${spec.h}`;
+    const lay = layout(spec), flipped = layout({ ...spec, swap: true });
+    const c = lay.safe.x + lay.safe.w / 2;
+    for (const l of [lay, flipped]) {
+      assert.ok(Math.abs(half(l.fire) - (2 * c - half(l.pad))) <= 1e-9, `${tag}: fire mirrors the pad across the centre line`);
+      assert.ok(Math.abs(l.fire.y + l.fire.s / 2 - (l.pad.y + l.pad.s / 2)) <= 1e-9, `${tag}: fire and pad share a centre y`);
+      assert.equal(l.fire.s, Math.max(FIRE_MIN, Math.floor(FIRE_FRAC * l.D)), `${tag}: fire size`);
+    }
+    assert.ok(half(lay.pad) < c && half(flipped.pad) > c, `${tag}: the swap moves the pad to the right`);
+    assert.ok(Math.abs(half(flipped.pad) - (2 * c - half(lay.pad))) <= 1e-9, `${tag}: the swapped pad is the default reflected`);
+    assert.ok(Math.abs(half(flipped.fire) - (2 * c - half(lay.fire))) <= 1e-9, `${tag}: the swapped fire is the default reflected`);
+    assert.equal(flipped.pad.y, lay.pad.y);
+    assert.equal(flipped.pad.s, lay.pad.s);
+    assert.equal(flipped.fire.s, lay.fire.s);
+  }
+  assert.equal(layout(PORTRAIT).fire.s, 64);
+  assert.equal(layout({ w: 300, h: 300, dpr: 2, insets: {}, touch: true }).fire.s, 50);
+  for (const swap of [false, true]) {
+    const lay = layout({ w: 1280, h: 720, dpr: 2, touch: false, swap });
+    assert.equal(lay.fire, null);
+    assert.equal(lay.pad, null);
+  }
+});
+
+test('padSide reads right only for the stored string right', () => {
+  assert.equal(padSide('right'), 'right');
+  for (const v of [null, undefined, '', 'RIGHT', 'left', 'x']) assert.equal(padSide(v), 'left');
+});
+
+test('PAUSE stands at the bottom centre at every fixture and on either side', () => {
+  for (const spec of FIXTURES) {
+    for (const swap of [false, true]) {
+      const lay = layout({ ...spec, swap });
+      const [r] = keyRects(lay, 'play', ['PAUSE']);
+      const tag = `${spec.w}x${spec.h} swap ${swap}`;
+      assert.ok(Math.abs(r.x + r.w / 2 - (lay.safe.x + lay.safe.w / 2)) <= 1, `${tag}: PAUSE centred`);
+      assert.ok(Math.abs(r.y + r.h - (lay.safe.y + lay.safe.h - GAP)) <= 1e-9, `${tag}: PAUSE GAP above the safe bottom`);
+      assert.equal(r.w, 96);
+      assert.equal(r.h, 44);
+    }
+  }
+});
+
+// Every viewport from 300 to 1,400 CSS px in 2 px steps: 607,202 layouts per run.
+test('the pad, the fire button and PAUSE stay GAP apart in the safe area at every viewport', () => {
+  const started = performance.now();
+  let count = 0;
+  for (let w = 300; w <= 1400; w += 2) {
+    for (let h = 300; h <= 1400; h += 2) {
+      for (const swap of [false, true]) {
+        const lay = layout({ w, h, dpr: 2, insets: {}, touch: true, swap });
+        const [pause] = keyRects(lay, 'play', ['PAUSE']);
+        const parts = [sq(lay.pad), sq(lay.fire), pause];
+        count++;
+        const ok = parts.every((r) => inside(r, lay.safe))
+          && apart(parts[0], parts[1]) && apart(parts[0], parts[2]) && apart(parts[1], parts[2])
+          && (lay.mode !== 'band' || parts.every((r) => r.y >= lay.view.y + lay.view.h - 1e-9));
+        if (!ok) assert.fail(`${w}x${h} swap ${swap} ${lay.mode}: ${JSON.stringify(parts)}`);
+      }
+    }
+  }
+  assert.equal(count, 607202);
+  console.log(`# sweep: ${count} layouts in ${Math.round(performance.now() - started)} ms`);
+  // The fallback: PAUSE over the fire button where the bottom centre is too near a control.
+  for (const [w, h, mode] of [[400, 420, 'band'], [400, 400, 'overlay']]) {
+    const lay = layout({ w, h, dpr: 2, insets: {}, touch: true });
+    const [pause] = keyRects(lay, 'play', ['PAUSE']);
+    assert.equal(lay.mode, mode);
+    assert.ok(Math.abs(pause.x + pause.w / 2 - (lay.fire.x + lay.fire.s / 2)) <= 1, `${w}x${h}: PAUSE centred on the fire button`);
+    if (w === 400 && h === 400) assert.ok(Math.abs(pause.y + pause.h + GAP - lay.fire.y) <= 1e-9, '400x400: PAUSE just above the fire button');
+  }
+});
+
+// The 16x24 sprite box, in CSS px, of the preview explorer on the title.
+const explorerBox = (lay) => {
+  const [fx, fy] = titleFeet(lay), k = lay.scale;
+  return { x: lay.view.x + (fx - 8) * k, y: lay.view.y + (fy - 24) * k, w: 16 * k, h: 24 * k };
+};
+
+for (const spec of [LANDSCAPE, LAND_375, SHORT, WIDE_320]) {
+  test(`the title explorer stands clear of every title key at ${spec.w}x${spec.h}`, () => {
+    const lay = layout(spec);
+    assert.equal(lay.mode, 'overlay');
+    assert.deepEqual(titleFeet(lay), [42, 176]);
+    const labels = softKeys({ screen: 'title', typing: false, resume: true }).map((k) => k.text);
+    assert.equal(labels.length, 8);
+    const box = explorerBox(lay);
+    for (const r of keyRects(lay, 'title', labels)) assert.ok(apart(box, r), `explorer clear of ${JSON.stringify(r)}`);
+  });
+}
+
+test('the title explorer keeps its spot in band and keyboard modes', () => {
+  assert.deepEqual(titleFeet(layout(PORTRAIT)), [42, 108]);
+  assert.deepEqual(titleFeet(layout({ w: 1280, h: 720, dpr: 2, touch: false })), [42, 108]);
+  assert.deepEqual(titleFeet(null), [42, 108]);
+});
+
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty, pause-key, coin and splash rule broken.
+// zoom guard dropped and each difficulty, pause-key, coin, splash, oil, pad-side and fire rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -300,7 +434,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, splash or oil rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, splash, oil, pad-side or fire rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -313,7 +447,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     const zoomable = html.replace('stopDoubleTapZoom();', '');
     assert.equal(html.split('stopDoubleTapZoom();').length, 2);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
-    // Each difficulty, pause-key, coin, splash and oil rule broken in turn: [from, to, the leg's first miss].
+    // Each difficulty, pause-key, coin, splash, oil, pad-side and fire rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
@@ -344,6 +478,9 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['g.splash = null;\n    leaveOpen(g);', "g.splash = null;\n    g.screen = 'title';\n    titleCam(g);", /^fail: touch Q reaches the title with the run open/],
       ["if (kind !== 'oil') continue;", 'continue;', /^fail: touch touching the first oil jar at 100 s adds 60 s/],
       ['s.burn = Math.min(BURN_S, s.burn + JAR_S);', 's.burn += JAR_S;', /^fail: touch touching the second oil jar at 280 s caps the burn at full/],
+      ['side: padSide(load(KEY_PAD)),', 'side: padSide(null),', /^fail: touch boot reads the stored pad side/],
+      ['store(KEY_PAD, g.side);', 'void g;', /^fail: touch PAD stores the side and mirrors the layout/],
+      ['tap(SPACE.code, SPACE.key);', "tap('KeyX', 'x');", /^fail: touch FIRE jumps/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

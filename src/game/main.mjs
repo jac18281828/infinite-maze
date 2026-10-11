@@ -14,7 +14,7 @@ import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
   COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
 } from './wallet.mjs';
-import { createTouch, layout, viewport, difficultyLabel, PANEL_X, textWidth } from './touch.mjs';
+import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
@@ -28,6 +28,8 @@ const KEY_SAVE = 'infinite-maze.plane.save';
 const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
+// The d-pad's side, 'left' or 'right'; anything else reads 'left'.
+const KEY_PAD = 'infinite-maze.pad';
 const KEY_BEST = 'infinite-maze.plane.best';
 // Coins. The wallet depends on no world layout, so it keeps a plain key; the
 // collected set and the payout record hold board positions, so they take the
@@ -192,9 +194,11 @@ function planeLeg(world) {
  */
 function touchLeg() {
   // The leg writes the save, its difficulty, the setting, the best score, the
-  // stacked world's save difficulty and the coin keys; it restores the player's own.
+  // stacked world's save difficulty, the coin keys and the pad's side; it
+  // restores the player's own.
   const kept = [
     KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST, KEY_STACKED_SAVE_DIFFICULTY, KEY_WALLET, KEY_COINS, KEY_PAID,
+    KEY_PAD,
   ].map((k) => [k, load(k)]);
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
@@ -220,6 +224,8 @@ function driveTouch(copied) {
   store(KEY_WALLET, '7');
   store(KEY_COINS, JSON.stringify({ [coinKey(SELFTEST_CODE, 'medium')]: ['0,0,21'] }));
   store(KEY_PAID, '{not json');
+  // Boot reads the pad's side.
+  store(KEY_PAD, 'right');
   const g = boot();
   need(g.wallet === 7 && (g.coins.get(coinKey(SELFTEST_CODE, 'medium')) || new Set()).has('0,0,21') && g.paid.size === 0,
     'boot reads the wallet and the collected set, and a malformed record as empty');
@@ -286,6 +292,10 @@ function driveTouch(copied) {
   need(touch.on, 'a touch pointerdown turns touch mode on');
   live(touch.soft('title', 'begin'), 'title/begin');
   const lay = layout({ ...viewport(), touch: true });
+  // The preview's feet as the scene draws them, in view px.
+  const [fx, fy] = feet(g.preview), [wantX, wantY] = titleFeet(lay);
+  need(Math.abs(fx - Math.round(g.cam.x) + VIEW_W / 2 - wantX) <= 1 && Math.abs(Math.round(g.cam.y) - fy + VIEW_H / 2 - wantY) <= 1,
+    'the title explorer stands at its spot');
   need(display.width === lay.backing.w && display.height === lay.backing.h, 'canvas backing size follows the layout');
   // Layout rounds to 1/64 CSS px, so the laid-out box matches within that.
   const box = display.getBoundingClientRect();
@@ -326,6 +336,9 @@ function driveTouch(copied) {
   need(g.typing !== null, 'KeyT opens typing');
   press('KeyP', 'p');
   need(g.screen === 'title' && g.typing === 'P', 'P types a letter in the code field');
+  const side = g.side;
+  press('KeyH', 'h');
+  need(g.typing === 'PH' && g.side === side, 'H types a letter in the code field');
   click('typing', 'cancel');
   need(g.typing === null, 'CANCEL closes typing');
   press('KeyT', 't');
@@ -340,6 +353,12 @@ function driveTouch(copied) {
   const pad = touch.padEl;
   const r = live(pad, 'pad');
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2, d = r.width / 3;
+  // The placed controls say which side the pad stands on: its centre minus the fire button's.
+  const padAhead = () => {
+    const p = live(touch.padEl, 'pad'), f = live(touch.fireEl, 'fire');
+    return p.left + p.width / 2 - (f.left + f.width / 2);
+  };
+  need(padAhead() > 0, 'boot reads the stored pad side');
   pointer('pointerdown', pad, cx + d, cy);
   pointer('pointercancel', pad, cx + d, cy);
   need(!g.keys.has('r') && (g.release & KEY.R) !== 0, 'pointercancel releases Right');
@@ -352,8 +371,12 @@ function driveTouch(copied) {
   pointer('pointerup', pad, cx, cy - d);
   need(!g.keys.has('u') && (g.release & KEY.U) !== 0, 'lifting releases Up');
   pointer('pointerdown', pad, cx, cy);
-  need(g.jump, 'the centre jumps');
+  need(!g.jump && g.keys.size === 0, 'the centre holds nothing');
   pointer('pointerup', pad, cx, cy);
+  const fr = live(touch.fireEl, 'fire');
+  pointer('pointerdown', touch.fireEl, fr.left + fr.width / 2, fr.top + fr.height / 2);
+  need(g.jump, 'FIRE jumps');
+  pointer('pointerup', touch.fireEl, fr.left + fr.width / 2, fr.top + fr.height / 2);
   g.press = 0;
   g.release = 0;
   g.jump = false;
@@ -405,10 +428,12 @@ function driveTouch(copied) {
   need(g.world !== runWorld && g.difficulty !== runWorld.difficulty, 'the difficulty key rebuilds the preview');
   click('title', 'reset');
   need(g.code !== runCode, 'RESET changes the preview\'s seed');
+  click('title', 'pad');
   click('title', 'resume');
   need(g.screen === 'play' && g.sim === run && g.world === runWorld && g.code === runCode, 'pause, TITLE and RESUME return to the same run');
   need(run.burn === BURN_S / 2 && run.time === 77, 'the resumed run keeps its torch and time');
   need(g.difficulty === runWorld.difficulty, 'RESUME moves the setting to the run\'s');
+  need(load(KEY_PAD) === 'left' && padAhead() < 0, 'PAD stores the side and mirrors the layout');
 
   // P pauses and resumes; Esc does the same as the alias.
   press('KeyP', 'p');
@@ -942,6 +967,8 @@ function createGame() {
     // Key edges since the last tick: KEY bits pressed and released, and a jump press.
     press: 0, release: 0, jump: false,
     code: parseCode((readSave() || {}).code || '') || rollCode(),
+    // The side of the d-pad: 'left' or 'right'.
+    side: padSide(load(KEY_PAD)),
     // The title's setting; `world` is always built at it.
     difficulty: storedDifficulty(KEY_DIFFICULTY, 'medium'),
     world: null, renderer: null, sim: null, preview: null,
@@ -955,10 +982,12 @@ function createGame() {
   };
 }
 
-// Title camera: the explorer stands 118 px left of the view centre, clear of the menu panel.
+// Title camera: the explorer's feet stand at titleFeet of the layout in force,
+// clear of the menu panel and the key columns.
 function titleCam(g) {
-  snapCam(g.cam, g.preview);
-  g.cam.x += 118;
+  const [x, y] = feet(g.preview), [fx, fy] = titleFeet(touch && touch.lay);
+  g.cam.x = x + VIEW_W / 2 - fx;
+  g.cam.y = y + fy - VIEW_H / 2;
 }
 
 function useCode(g, code) {
@@ -1061,6 +1090,12 @@ function titleKey(g, e) {
   else if (e.code === 'KeyR') { useCode(g, rollCode()); g.note = ''; }
   else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
   else if (e.code === 'KeyL') setDifficulty(g, DIFFICULTIES[(at + 1) % DIFFICULTIES.length]);
+  else if (e.code === 'KeyH') {
+    if (!e.repeat) {
+      g.side = g.side === 'left' ? 'right' : 'left';
+      store(KEY_PAD, g.side);
+    }
+  }
   else if (SETTING_STEP[e.code]) {
     setDifficulty(g, DIFFICULTIES[Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))]);
   } else if (e.code === 'KeyK') {
@@ -1253,7 +1288,7 @@ function drawTitle(g, t) {
     r.text(best === null ? 'NO TOMB REACHED YET' : `BEST TOMB  ${best}`, VIEW_W / 2, saved ? 136 : 124, 'p', { align: 'center' });
   }
   if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
-  r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  P PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+  r.text(touch && touch.on ? 'D-PAD MOVE  RED BUTTON JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  P PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
 /**
@@ -1369,12 +1404,17 @@ function runLoop(g) {
 
 function boot() {
   const g = createGame();
+  // A layout change moves the title's explorer with it.
+  const refit = () => {
+    fit();
+    if (g.screen === 'title' && g.preview) titleCam(g);
+  };
   touch = createTouch({
     state: () => ({
-      screen: g.screen, typing: g.typing !== null, muted: g.audio.muted, difficulty: g.difficulty,
+      screen: g.screen, typing: g.typing !== null, muted: g.audio.muted, difficulty: g.difficulty, side: g.side,
       resume: g.screen === 'title' && (g.open !== null || readSave() !== null),
     }),
-    onMode: fit,
+    onMode: refit,
   });
   window.addEventListener('keydown', (e) => onKeyDown(g, e));
   window.addEventListener('keyup', (e) => {
@@ -1386,8 +1426,8 @@ function boot() {
   window.addEventListener('blur', () => g.keys.clear());
   // A tap grants activation on pointerup and click; pointerdown grants none.
   window.addEventListener('pointerup', () => g.audio.start());
-  window.addEventListener('resize', fit);
-  window.addEventListener('orientationchange', fit);
+  window.addEventListener('resize', refit);
+  window.addEventListener('orientationchange', refit);
   fit();
   useCode(g, g.code);
   runLoop(g);

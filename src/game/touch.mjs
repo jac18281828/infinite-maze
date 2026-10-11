@@ -9,28 +9,35 @@ import { VIEW_W, VIEW_H } from './render.mjs';
 export const MARGIN = 16;
 export const PAD_MAX = 160;
 export const PAD_FRAC = 0.42;
+// The fire button's diameter: a fraction of the pad's, never under Apple's
+// 44 px hit target.
+export const FIRE_FRAC = 0.4;
+export const FIRE_MIN = 44;
 const GAP = 8;
 // A key column's row gap may close to this before the keys wrap.
 const MIN_GAP = 6;
 const KEY_H = 44;
 const KEY_MIN_W = 44;
+const PAUSE_W = 96;
 const DOUBLE_TAP_MS = 350;
 
 const mid = (a, size, inner) => a + (size - inner) / 2;
 
 /**
- * Where the view, the d-pad and the soft-key areas go. Keyboard mode scales
- * by the largest whole multiple of CSS pixels. Touch mode fills the safe
- * area at a fractional scale: 'band' puts the view at the top with the
- * controls below; 'overlay' fits the view and floats the controls over it.
+ * Where the view, the d-pad, the fire button and the soft-key areas go.
+ * Keyboard mode scales by the largest whole multiple of CSS pixels. Touch
+ * mode fills the safe area at a fractional scale: 'band' puts the view at the
+ * top with the controls below; 'overlay' fits the view and floats the
+ * controls over it. The fire button stands opposite the pad at the pad's
+ * height; `swap` reflects both across the safe area's vertical centre line.
  * The backing store is in device pixels and the CSS size is backing / dpr.
  */
-export function layout({ w, h, dpr = 1, insets = {}, touch }) {
+export function layout({ w, h, dpr = 1, insets = {}, touch, swap = false }) {
   if (!touch) {
     const k = Math.max(1, Math.floor(Math.min(w / VIEW_W, h / VIEW_H)));
     const vw = VIEW_W * k, vh = VIEW_H * k;
     return {
-      mode: 'keyboard', scale: k, D: 0, pad: null, band: null,
+      mode: 'keyboard', scale: k, D: 0, pad: null, fire: null, band: null,
       safe: { x: 0, y: 0, w, h },
       view: { x: Math.floor((w - vw) / 2), y: Math.floor((h - vh) / 2), w: vw, h: vh },
       backing: { w: vw, h: vh },
@@ -53,21 +60,47 @@ export function layout({ w, h, dpr = 1, insets = {}, touch }) {
   const vw = bw / dpr, vh = bh / dpr;
   const snap = (v) => Math.round(v * dpr) / dpr;
   const vx = snap(mid(safe.x, safe.w, vw));
+  // The pad's left edge and top, then both controls by `swap`.
+  const controls = (x, y) => {
+    const s = Math.max(FIRE_MIN, Math.floor(FIRE_FRAC * D));
+    const c2 = 2 * safe.x + safe.w;
+    const padCx = swap ? c2 - (x + D / 2) : x + D / 2;
+    const fireCx = c2 - padCx;
+    return {
+      pad: { x: padCx - D / 2, y, s: D },
+      fire: { x: fireCx - s / 2, y: y + D / 2 - s / 2, s },
+    };
+  };
   if (band) {
     const rest = { x: safe.x, y: safe.y + vh, w: safe.w, h: safe.h - vh };
+    // The pad's centre rests a quarter in, where a left thumb sits on a
+    // controller, and a quarter of the way down the band, within thumb reach.
+    // Its top stays MARGIN below the view and its left MARGIN inside the edge.
+    const top = Math.max(rest.y + MARGIN, rest.y + rest.h / 4 - D / 2);
     return {
       mode: 'band', D, safe, band: rest, scale: vw / VIEW_W,
       view: { x: vx, y: safe.y, w: vw, h: vh }, backing: { w: bw, h: bh },
-      // The pad's centre rests a quarter in, where a left thumb sits on a
-      // controller, and never nearer the edge than MARGIN.
-      pad: { x: rest.x + Math.max(MARGIN, rest.w / 4 - D / 2), y: mid(rest.y, rest.h, D), s: D },
+      ...controls(rest.x + Math.max(MARGIN, rest.w / 4 - D / 2), top),
     };
   }
   return {
     mode: 'overlay', D, safe, band: null, scale: vw / VIEW_W,
     view: { x: vx, y: snap(mid(safe.y, safe.h, vh)), w: vw, h: vh }, backing: { w: bw, h: bh },
-    pad: { x: safe.x + MARGIN, y: safe.y + safe.h - MARGIN - D, s: D },
+    ...controls(safe.x + MARGIN, safe.y + safe.h - MARGIN - D),
   };
+}
+
+/** The side the d-pad stands on for a stored value: 'right' only for 'right'. */
+export function padSide(value) {
+  return value === 'right' ? 'right' : 'left';
+}
+
+/**
+ * The preview explorer's feet on the title, in view px. In overlay mode the
+ * key columns hold the left strip, so he stands below them.
+ */
+export function titleFeet(lay) {
+  return lay && lay.mode === 'overlay' ? [42, 176] : [42, 108];
 }
 
 /** Next touch mode after an input event. */
@@ -82,7 +115,7 @@ export function touchAtBoot({ maxTouchPoints = 0, coarse = false, hash = '' }) {
   return maxTouchPoints > 0 || coarse || hash === '#touch';
 }
 
-/** The pad zone of an offset from its centre: 'c' (jump) or an arm 'l', 'r', 'u', 'd'. */
+/** The pad zone of an offset from its centre: 'c' (neutral, sends nothing) or an arm 'l', 'r', 'u', 'd'. */
 export function padZone(dx, dy, D) {
   if (dx * dx + dy * dy <= (D / 6) * (D / 6)) return 'c';
   if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'l' : 'r';
@@ -98,7 +131,7 @@ const SPACE = { code: 'Space', key: ' ' };
 /**
  * Pointer bookkeeping for the pad. Each call returns the key events to send,
  * as { type: 'keydown' | 'keyup', code, key }. A direction is down while any
- * pointer holds it.
+ * pointer holds it; the centre holds none.
  */
 export function createPad() {
   const zones = new Map();
@@ -125,7 +158,6 @@ export function createPad() {
       drop(id, out);
       const zone = padZone(dx, dy, D);
       grab(id, zone, out);
-      if (zone === 'c') out.push(op('keydown', SPACE), op('keyup', SPACE));
       return out;
     },
     move(id, dx, dy, D) {
@@ -149,7 +181,6 @@ export function createPad() {
     },
     has: (id) => zones.has(id),
     held: () => new Set(Object.keys(holders).filter((z) => holders[z].size > 0)),
-    centre: () => [...zones.values()].includes('c'),
   };
 }
 
@@ -157,7 +188,8 @@ const K = (code, key) => ({ code, key });
 /**
  * Soft keys per screen, each a key that screen's handler accepts. `when`
  * gates a key on the game's state; `alt` is its label when muted; a key with
- * `setting` reads the difficulty setting as its label.
+ * `setting` reads the difficulty setting as its label and one with `side` the
+ * d-pad's side.
  */
 export const SOFT = {
   title: [
@@ -168,6 +200,7 @@ export const SOFT = {
     { id: 'difficulty', label: 'MEDIUM', setting: true, ...K('KeyL', 'l') },
     { id: 'copy', label: 'COPY', ...K('KeyK', 'k') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
+    { id: 'pad', label: 'PAD LEFT', side: true, ...K('KeyH', 'h') },
   ],
   typing: [
     { id: 'accept', label: 'ACCEPT', ...K('Enter', 'Enter') },
@@ -205,7 +238,11 @@ export function difficultyLabel(difficulty) {
 
 /** The soft keys shown for a game state, with labels resolved. */
 export function softKeys(state) {
-  const text = (k) => (k.setting && state.difficulty ? difficultyLabel(state.difficulty) : state.muted && k.alt ? k.alt : k.label);
+  const text = (k) => (
+    k.setting && state.difficulty ? difficultyLabel(state.difficulty)
+      : k.side && state.side ? `PAD ${state.side.toUpperCase()}`
+        : state.muted && k.alt ? k.alt : k.label
+  );
   return (SOFT[screenId(state)] || [])
     .filter((k) => !k.when || state[k.when])
     .map((k) => ({ ...k, text: text(k) }));
@@ -220,51 +257,86 @@ export function textWidth(str) {
 // never cover the panel, the title's note line or its footer.
 export const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280], splash: [50, 270] };
 
-function keyRegion(lay, sid) {
+// The PAUSE key stands at the bottom centre, between the controls like a
+// console's START. Where that comes within GAP of the pad or the fire button
+// (a narrow safe area) it moves over the fire button, just above it.
+function pauseSpot(lay) {
+  const { safe, pad, fire } = lay;
+  const home = { x: safe.x + safe.w / 2 - PAUSE_W / 2, y: safe.y + safe.h - GAP - KEY_H };
+  const near = (o) => home.x < o.x + o.s + GAP && home.x + PAUSE_W > o.x - GAP
+    && home.y < o.y + o.s + GAP && home.y + KEY_H > o.y - GAP;
+  if (!near(pad) && !near(fire)) return home;
+  const x = Math.min(Math.max(fire.x + fire.s / 2 - PAUSE_W / 2, safe.x + GAP), safe.x + safe.w - GAP - PAUSE_W);
+  const above = fire.y - GAP - KEY_H;
+  return { x, y: lay.mode === 'band' ? Math.min(lay.band.y + GAP, above) : above };
+}
+
+// Overlay keys stand in the strips beside the panel, outside it.
+function overlayStrips(lay, sid) {
   const { safe } = lay;
+  const [px0, px1] = PANEL_X[sid];
+  const edge = (x, w) => ({ x, y: safe.y + GAP, w, h: safe.h - 2 * GAP, cap: 140, align: 'center' });
+  const l = safe.x + GAP, r = lay.view.x + px1 * lay.scale + GAP;
+  return [edge(l, lay.view.x + px0 * lay.scale - GAP - l), edge(r, safe.x + safe.w - GAP - r)];
+}
+
+function keyRegion(lay, sid) {
+  if (sid === 'play') {
+    const at = pauseSpot(lay);
+    return { x: at.x, y: at.y, w: PAUSE_W, h: KEY_H, cap: PAUSE_W, align: 'start' };
+  }
   if (lay.mode === 'band') {
-    if (sid === 'play') {
-      const x = lay.pad.x + lay.pad.s + GAP;
-      return { x, y: lay.band.y + GAP, w: safe.x + safe.w - GAP - x, h: lay.band.h - 2 * GAP, cap: 96, align: 'start' };
-    }
     return { x: lay.band.x + MARGIN, y: lay.band.y + GAP, w: lay.band.w - 2 * MARGIN, h: lay.band.h - 2 * GAP, cap: 240, align: 'center' };
   }
-  if (sid === 'play') {
-    return { x: safe.x + safe.w - GAP - 96, y: safe.y + GAP, w: 96, h: safe.h - 2 * GAP, cap: 96, align: 'end' };
-  }
-  const [px0, px1] = PANEL_X[sid];
-  const left = { x: safe.x + GAP, w: lay.view.x + px0 * lay.scale - GAP - (safe.x + GAP) };
-  const right = { x: lay.view.x + px1 * lay.scale + GAP, w: safe.x + safe.w - GAP - (lay.view.x + px1 * lay.scale + GAP) };
-  const side = right.w >= left.w ? right : left;
-  return { x: side.x, y: safe.y + GAP, w: side.w, h: safe.h - 2 * GAP, cap: 140, align: 'center' };
+  const [left, right] = overlayStrips(lay, sid);
+  return right.w >= left.w ? right : left;
+}
+
+// `count` keys in region `r`: columns by MIN_GAP, then the key width, row gap
+// and top left of the grid. Rows sit GAP apart, closing to MIN_GAP before the
+// keys wrap to another column.
+function grid(r, count) {
+  const rowGap = (cols) => {
+    const rows = Math.ceil(count / cols);
+    return rows < 2 ? GAP : Math.min(GAP, Math.floor((r.h - rows * KEY_H) / (rows - 1)));
+  };
+  let cols = 1;
+  while (cols < count && rowGap(cols) < MIN_GAP) cols++;
+  const rows = Math.ceil(count / cols), gap = rowGap(cols);
+  const w = Math.max(KEY_MIN_W, Math.min(r.cap, Math.floor((r.w - (cols - 1) * GAP) / cols)));
+  const gridW = cols * w + (cols - 1) * GAP, gridH = rows * KEY_H + (rows - 1) * gap;
+  const y0 = r.align === 'start' ? r.y : r.align === 'end' ? r.y + r.h - gridH : mid(r.y, r.h, gridH);
+  return { cols, gap, w, x0: mid(r.x, r.w, gridW), y0 };
 }
 
 /**
  * Rectangles for the soft keys of screen `sid`, one per label, in order.
  * Each carries one label scale (3, 2 or 1), the largest that fits every label.
  * Rows sit GAP apart, closing to MIN_GAP before the keys wrap to another
- * column; a layout that fits at GAP keeps it.
+ * column; a layout that fits at GAP keeps it. In overlay mode a screen whose
+ * keys do not fit one column in one strip stands one column in each strip,
+ * the first half of the keys left and the rest right.
  */
 export function keyRects(lay, sid, labels) {
   const n = labels.length;
   if (n === 0 || lay.mode === 'keyboard') return [];
-  const r = keyRegion(lay, sid);
-  const rowGap = (cols) => {
-    const rows = Math.ceil(n / cols);
-    return rows < 2 ? GAP : Math.min(GAP, Math.floor((r.h - rows * KEY_H) / (rows - 1)));
-  };
-  let cols = 1;
-  while (cols < n && rowGap(cols) < MIN_GAP) cols++;
-  const rows = Math.ceil(n / cols), gap = rowGap(cols);
-  const w = Math.max(KEY_MIN_W, Math.min(r.cap, Math.floor((r.w - (cols - 1) * GAP) / cols)));
-  const gridW = cols * w + (cols - 1) * GAP, gridH = rows * KEY_H + (rows - 1) * gap;
-  const x0 = mid(r.x, r.w, gridW);
-  const y0 = r.align === 'start' ? r.y : r.align === 'end' ? r.y + r.h - gridH : mid(r.y, r.h, gridH);
-  // Keys share a width, so they share the largest scale the longest label fits.
-  const scale = [3, 2, 1].find((s) => labels.every((t) => textWidth(t) * s + 8 <= w)) || 1;
-  return labels.map((text, i) => (
-    { x: x0 + (i % cols) * (w + GAP), y: y0 + Math.floor(i / cols) * (KEY_H + gap), w, h: KEY_H, scale }
-  ));
+  const one = grid(keyRegion(lay, sid), n);
+  let spots;
+  if (lay.mode === 'overlay' && sid !== 'play' && one.cols > 1) {
+    const half = Math.ceil(n / 2), [left, right] = overlayStrips(lay, sid);
+    const gl = grid(left, half), gr = grid(right, n - half);
+    const w = Math.min(gl.w, gr.w);
+    const col = (g, r, count) => Array.from({ length: count }, (_, i) => (
+      { x: mid(r.x, r.w, w), y: g.y0 + i * (KEY_H + g.gap), w }));
+    spots = [...col(gl, left, half), ...col(gr, right, n - half)];
+  } else {
+    spots = labels.map((_, i) => (
+      { x: one.x0 + (i % one.cols) * (one.w + GAP), y: one.y0 + Math.floor(i / one.cols) * (KEY_H + one.gap), w: one.w }));
+  }
+  // Keys share a width, so they share the largest scale the narrowest label fits.
+  const w = Math.min(...spots.map((q) => q.w));
+  const scale = [3, 2, 1].find((sc) => labels.every((t) => textWidth(t) * sc + 8 <= w)) || 1;
+  return spots.map((q) => ({ x: q.x, y: q.y, w: q.w, h: KEY_H, scale }));
 }
 
 // ---- DOM binding ----
@@ -284,7 +356,7 @@ export function viewport() {
 }
 
 const rgba = (i, a) => `rgba(${RGB[i].join(',')},${a})`;
-const INK = 0xc, EDGE = 0xa, PLATE = 2, LIT = 4, GOLD = 0x16;
+const INK = 0xc, EDGE = 0xa, PLATE = 2, LIT = 4, GOLD = 0x16, TORCH_RED = 0x17, TORCH_ORANGE = 0x18;
 
 function charCode(ch) {
   if (/[A-Za-z]/.test(ch)) return `Key${ch.toUpperCase()}`;
@@ -334,8 +406,9 @@ function stopDoubleTapZoom() {
 
 /**
  * The controls. `state()` reports what the game shows: { screen, typing,
- * resume, muted, difficulty }. `onMode()` runs when touch mode changes, so the caller can
- * refit the canvas through `relayout`.
+ * resume, muted, difficulty, side }, `side` being the d-pad's. `onMode()` runs
+ * when touch mode changes, so the caller can refit the canvas through
+ * `relayout`.
  */
 export function createTouch({ state, onMode }) {
   const root = document.getElementById('touch');
@@ -344,14 +417,21 @@ export function createTouch({ state, onMode }) {
   const padCv = document.createElement('canvas');
   padEl.append(padCv);
   root.append(padEl);
+  const fireEl = document.createElement('div');
+  fireEl.id = 'fire';
+  const fireCv = document.createElement('canvas');
+  fireEl.append(fireCv);
+  root.append(fireEl);
   const pad = createPad();
+  // Pointers holding the fire button. They never enter the pad's bookkeeping.
+  const fireHeld = new Set();
   const buttons = new Map();
   let on = touchAtBoot({
     maxTouchPoints: navigator.maxTouchPoints,
     coarse: Boolean(globalThis.matchMedia && matchMedia('(any-pointer: coarse)').matches),
     hash: location.hash,
   });
-  let lay = null, sig = null, padSig = null;
+  let lay = null, laySide = null, sig = null, padSig = null, fireSig = null;
 
   function send(type, code, key) {
     window.dispatchEvent(new KeyboardEvent(type, { code, key, repeat: false, bubbles: true, cancelable: true }));
@@ -409,8 +489,18 @@ export function createTouch({ state, onMode }) {
     run(pad.move(e.pointerId, dx, dy, D));
   });
   for (const t of ['pointerup', 'pointercancel']) {
-    window.addEventListener(t, (e) => { if (pad.has(e.pointerId)) run(pad.up(e.pointerId)); });
+    window.addEventListener(t, (e) => {
+      if (pad.has(e.pointerId)) run(pad.up(e.pointerId));
+      if (fireHeld.delete(e.pointerId)) refresh();
+    });
   }
+  // A jump fires on press, so the fire button takes `pointerdown`, not a click.
+  fireEl.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { fireEl.setPointerCapture(e.pointerId); } catch { /* a dispatched pointer cannot be captured */ }
+    fireHeld.add(e.pointerId);
+    tap(SPACE.code, SPACE.key);
+  });
   const releaseAll = () => run(pad.releaseAll());
   window.addEventListener('blur', releaseAll);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
@@ -427,7 +517,7 @@ export function createTouch({ state, onMode }) {
   window.addEventListener('pointerdown', (e) => setOn(nextTouchMode(on, e)), true);
   window.addEventListener('keydown', (e) => setOn(nextTouchMode(on, e)), true);
 
-  function drawPad(held, centre) {
+  function drawPad(held) {
     const s = lay.pad.s, dpr = lay.backing.w / lay.view.w;
     padCv.width = Math.round(s * dpr);
     padCv.height = padCv.width;
@@ -450,13 +540,26 @@ export function createTouch({ state, onMode }) {
       c.closePath(); c.fill();
     };
     arm('l', -1, 0); arm('r', 1, 0); arm('u', 0, -1); arm('d', 0, 1);
-    c.fillStyle = centre ? PALETTE[GOLD] : rgba(LIT, 1);
+    // A plain hub: the centre is a dead zone and never lights.
+    c.fillStyle = rgba(LIT, 1);
     c.strokeStyle = PALETTE[EDGE];
     c.lineWidth = 1.5;
     c.beginPath(); c.arc(r, r, s / 6, 0, Math.PI * 2); c.fill(); c.stroke();
-    c.strokeStyle = centre ? PALETTE[0] : PALETTE[INK];
+  }
+
+  // A red arcade button; a held pointer lights it torch orange with a gold rim.
+  function drawFire(down) {
+    const s = lay.fire.s, dpr = lay.backing.w / lay.view.w;
+    fireCv.width = Math.round(s * dpr);
+    fireCv.height = fireCv.width;
+    fireCv.style.width = fireCv.style.height = `${s}px`;
+    const c = fireCv.getContext('2d');
+    c.scale(dpr, dpr);
+    const r = s / 2;
+    c.fillStyle = rgba(down ? TORCH_ORANGE : TORCH_RED, lay.mode === 'overlay' ? 0.6 : 1);
+    c.strokeStyle = PALETTE[down ? GOLD : EDGE];
     c.lineWidth = 2;
-    c.beginPath(); c.moveTo(r - s * 0.06, r + s * 0.03); c.lineTo(r, r - s * 0.04); c.lineTo(r + s * 0.06, r + s * 0.03); c.stroke();
+    c.beginPath(); c.arc(r, r, r - 1, 0, Math.PI * 2); c.fill(); c.stroke();
   }
 
   function place() {
@@ -479,10 +582,15 @@ export function createTouch({ state, onMode }) {
       Object.assign(b.el.style, { display: 'flex', left: `${q.x}px`, top: `${q.y}px`, width: `${q.w}px`, height: `${q.h}px` });
     });
     if (sid === 'play' && lay.pad) {
-      Object.assign(padEl.style, { display: 'block', left: `${lay.pad.x}px`, top: `${lay.pad.y}px`, width: `${lay.pad.s}px`, height: `${lay.pad.s}px` });
+      const box = (o) => ({ display: 'block', left: `${o.x}px`, top: `${o.y}px`, width: `${o.s}px`, height: `${o.s}px` });
+      Object.assign(padEl.style, box(lay.pad));
+      Object.assign(fireEl.style, box(lay.fire));
       padSig = null;
+      fireSig = null;
     } else {
       padEl.style.display = 'none';
+      fireEl.style.display = 'none';
+      fireHeld.clear();
       releaseIdle();
     }
   }
@@ -496,26 +604,38 @@ export function createTouch({ state, onMode }) {
     // A layout from before a mode change waits for `relayout`.
     if (!lay || (lay.mode !== 'keyboard') !== on) return;
     const st = state();
-    const next = `${on}|${screenId(st)}|${st.resume}|${st.muted}|${st.difficulty}`;
+    if (st.side !== laySide) compute();
+    const next = `${on}|${screenId(st)}|${st.resume}|${st.muted}|${st.difficulty}|${st.side}`;
     if (next !== sig) { sig = next; place(); }
     if (on && padEl.style.display === 'block') {
-      const held = pad.held(), centre = pad.centre();
-      const ps = `${[...held].sort().join('')}|${centre}`;
-      if (ps !== padSig) { padSig = ps; drawPad(held, centre); }
+      const held = pad.held();
+      const ps = [...held].sort().join('');
+      if (ps !== padSig) { padSig = ps; drawPad(held); }
+      const fs = String(fireHeld.size > 0);
+      if (fs !== fireSig) { fireSig = fs; drawFire(fireHeld.size > 0); }
     }
+  }
+
+  // The layout for the page as it stands and the side the game reports.
+  function compute() {
+    laySide = state().side;
+    lay = layout({ ...viewport(), touch: on, swap: laySide === 'right' });
+    sig = null;
   }
 
   return {
     get on() { return on; },
     /** Recomputes the layout from the page, places the controls and returns it. */
     relayout() {
-      lay = layout({ ...viewport(), touch: on });
-      sig = null;
+      compute();
       refresh();
       return lay;
     },
     refresh,
+    /** The layout in force; null before the first `relayout`. */
+    get lay() { return lay; },
     padEl,
+    fireEl,
     soft: (sid, id) => buttons.get(`${sid}/${id}`).el,
   };
 }

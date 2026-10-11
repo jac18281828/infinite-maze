@@ -30,9 +30,10 @@ and no assets.
   a browser keeps Esc for itself. The arrows (or WASD) pan the map one tomb
   per press. **C** there copies the save code. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
-  run, climb and descend, and its centre jumps. Soft keys cover every screen:
-  RESUME, BEGIN, RESET, TYPE CODE (a prompt that takes a pasted save code),
-  the difficulty, COPY, SOUND, PAUSE, CONTINUE, HOME and TITLE. Pressing a key
+  run, climb and descend, and a red fire button opposite it jumps. Soft keys
+  cover every screen: RESUME, BEGIN, RESET, TYPE CODE (a prompt that takes a
+  pasted save code), the difficulty, COPY, SOUND, PAD (swaps the d-pad and
+  the fire button), PAUSE, CONTINUE, HOME and TITLE. Pressing a key
   switches back to the keyboard layout; `#touch` on the URL forces touch on a
   desktop. The pause map shows the explorer's tomb; panning needs a keyboard.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a

@@ -386,6 +386,7 @@ a score. The wallet depends on no world layout and keeps a plain key:
 | `infinite-maze.plane.save.difficulty` | the save's difficulty |
 | `infinite-maze.plane.best` | the best per seed and difficulty |
 | `infinite-maze.difficulty` | the title setting |
+| `infinite-maze.pad` | the d-pad's side, `left` or `right`, one per device |
 | `infinite-maze.wallet` | the wallet, a decimal integer, one per device |
 | `infinite-maze.plane.coins` | the coins taken, JSON `{"<code>:<LEVEL>": ["x,y,cell", …]}` |
 | `infinite-maze.plane.coins.paid` | the payout record, JSON `{"<code>:<LEVEL>": n}` |
@@ -702,10 +703,11 @@ lands would otherwise skip the screen. The splash ignores every auto-repeated
 keydown, so a held key cannot skip it. M mutes, as on every screen.
 
 On the title, Enter begins the shown seed at tomb 0, R rolls a new seed and
-keeps the save, and T opens code entry. L cycles the difficulty EASY, MEDIUM,
-HARD, ULTIMATE and round again; Left and Right, or A and D, step it and stop
-at EASY and ULTIMATE. A change rebuilds the title's world. P (or Esc)
-resumes:
+keeps the save, and T opens code entry. H swaps the sides of the touch d-pad
+and fire button and stores the side (§5), and the title ignores an
+auto-repeated H. L cycles the difficulty EASY, MEDIUM, HARD, ULTIMATE and
+round again; Left and Right, or A and D, step it and stop at EASY and
+ULTIMATE. A change rebuilds the title's world. P (or Esc) resumes:
 
 - A title reached from pause by Q leaves the run open, and P returns to it
   unchanged: torch, time, trail and difficulty. The open run keeps its own
@@ -717,7 +719,7 @@ resumes:
 
 C on the pause and end screens writes the save code shown to the clipboard.
 On the title K copies the save code it shows, or the seed code when it shows
-none; during code entry A, D, K, L and P type letters. Each screen then
+none; during code entry A, D, H, K, L and P type letters. Each screen then
 reads COPIED, or COPY FAILED when the clipboard is absent or refuses. The copy
 uses `navigator.clipboard.writeText`, which browsers allow from a key press
 in a secure context, https and `file://` alike.
@@ -728,22 +730,37 @@ it on and a trusted keydown turns it off, so the page follows the last input
 type. Every control dispatches the keyboard's own `keydown` and `keyup` events
 on `window`, so the key handlers serve touch unchanged. The page never
 scrolls, zooms or selects.
-- **D-pad.** In play, a 4-way pad sits at the bottom left in overlay mode and
-  in the band otherwise a quarter of the safe width in, never closer than the
-  margin to the left edge. Its centre jumps on `pointerdown`. An arm
-  holds its arrow key while a pointer is on it, a slide from arm to arm swaps
-  the key, and a pointer that left the pad keeps mapping by angle until it
-  lifts. The pad has no diagonals.
+- **D-pad.** In play, a 4-way pad sits at the bottom left in overlay mode. In
+  the band its centre lies a quarter of the safe width in, never closer than
+  the margin to the left edge, and a quarter of the way down the band, never
+  closer than the margin to the view. Its centre is neutral: a pointer there
+  holds no direction and sends nothing, and a slide from an arm into it
+  releases the arm. An arm holds its arrow key while a pointer is on it, a
+  slide from arm to arm swaps the key, and a pointer that left the pad keeps
+  mapping by angle until it lifts. The pad has no diagonals. With the title's
+  PAD key set to `right`, the pad stands where its mirror across the safe
+  area's vertical centre line would, and the fire button where the pad stood.
+- **Fire button.** In play, a red circle (palette index `0x17`) stands
+  opposite the pad at the pad's centre height, 0.4 of the pad's diameter and
+  at least 44 px across; in overlay mode it draws at the pad's alpha. A
+  `pointerdown` on it sends Space, so a jump fires on press, and it shows
+  pressed while a pointer holds it. Its pointers and the pad's are separate,
+  so two thumbs work at once.
 - **Soft keys.** Each is 44 px tall and acts on `click`:
 
   | Screen | Keys |
   |---|---|
-  | title | RESUME (P, with a save or an open run), BEGIN (Enter), RESET (R), TYPE CODE, the difficulty (L, labelled with the setting), COPY (K), SOUND (M) |
+  | title | RESUME (P, with a save or an open run), BEGIN (Enter), RESET (R), TYPE CODE, the difficulty (L, labelled with the setting), COPY (K), SOUND (M), PAD (H, labelled `PAD LEFT` or `PAD RIGHT`) |
   | title, typing | ACCEPT (Enter), CANCEL (Esc) |
-  | play | PAUSE (P) |
+  | play | PAUSE (P), 96 px wide at the bottom centre, its bottom 8 px above the safe area's, in both modes and on either side; where that comes within 8 px of the pad or the fire button, it moves over the fire button, just above it |
   | pause | RESUME (P), COPY (C), SOUND (M), TITLE (Q) |
   | over | CONTINUE (Enter), COPY (C), TITLE (Q) |
   | splash | CONTINUE (Enter), HOME (Q) |
+
+  In overlay mode a screen's keys stand in one column beside its panel; where
+  one column cannot hold them, as the title's eight, the first half stand in
+  the left strip and the rest in the right. The title's preview explorer then
+  stands lower, below the left column.
 
   Each P key has Esc as its keyboard alias. CANCEL sends Esc, because P types
   a letter during code entry.
