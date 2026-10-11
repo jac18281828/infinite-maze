@@ -226,6 +226,32 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
   }
 });
 
+test('in band mode the pad sits a quarter of the safe width in, never closer than the margin', () => {
+  const IPAD = { w: 820, h: 1180, dpr: 2, insets: {}, touch: true };
+  const PHONE = { w: 320, h: 568, dpr: 2, insets: {}, touch: true };
+  for (const spec of [PORTRAIT, IPAD, PHONE]) {
+    const lay = layout(spec);
+    const { pad, safe, view, D } = lay;
+    const tag = `${spec.w}x${spec.h}`;
+    assert.equal(lay.mode, 'band', `${tag} is band mode`);
+    const want = safe.x + Math.max(MARGIN + D / 2, safe.w / 4);
+    assert.ok(Math.abs(pad.x + pad.s / 2 - want) <= 1, `${tag}: pad centre at a quarter, clamped by the margin`);
+    assert.ok(inside({ x: pad.x, y: pad.y, w: pad.s, h: pad.s }, safe), `${tag}: pad in the safe area`);
+    assert.ok(pad.y >= view.y + view.h, `${tag}: pad below the view`);
+    const labels = softKeys({ screen: 'play', typing: false, resume: false, difficulty: 'medium' }).map((k) => k.text);
+    const rects = keyRects(lay, 'play', labels);
+    assert.ok(rects.length > 0, `${tag}: play keys exist`);
+    for (const r of rects) {
+      assert.ok(r.x >= pad.x + pad.s, `${tag}: play key right of the pad`);
+      assert.ok(inside(r, safe), `${tag}: play key in the safe area`);
+    }
+    if (spec === IPAD) {
+      assert.ok(pad.x + pad.s / 2 <= safe.x + safe.w / 2 - safe.w / 5, 'iPad: pad centre well left of the band midpoint');
+    }
+    if (spec === PHONE) assert.equal(pad.x, safe.x + MARGIN, '320x568: the margin clamp binds');
+  }
+});
+
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
 // zoom guard dropped and each difficulty and pause-key rule broken.

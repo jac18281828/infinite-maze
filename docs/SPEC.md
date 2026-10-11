@@ -415,7 +415,8 @@ type. Every control dispatches the keyboard's own `keydown` and `keyup` events
 on `window`, so the key handlers serve touch unchanged. The page never
 scrolls, zooms or selects.
 - **D-pad.** In play, a 4-way pad sits at the bottom left in overlay mode and
-  centred in the band otherwise. Its centre jumps on `pointerdown`. An arm
+  in the band otherwise a quarter of the safe width in, never closer than the
+  margin to the left edge. Its centre jumps on `pointerdown`. An arm
   holds its arrow key while a pointer is on it, a slide from arm to arm swaps
   the key, and a pointer that left the pad keeps mapping by angle until it
   lifts. The pad has no diagonals.

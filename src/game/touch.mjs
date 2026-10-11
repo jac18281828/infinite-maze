@@ -58,7 +58,9 @@ export function layout({ w, h, dpr = 1, insets = {}, touch }) {
     return {
       mode: 'band', D, safe, band: rest, scale: vw / VIEW_W,
       view: { x: vx, y: safe.y, w: vw, h: vh }, backing: { w: bw, h: bh },
-      pad: { x: mid(rest.x, rest.w, D), y: mid(rest.y, rest.h, D), s: D },
+      // The pad's centre rests a quarter in, where a left thumb sits on a
+      // controller, and never nearer the edge than MARGIN.
+      pad: { x: rest.x + Math.max(MARGIN, rest.w / 4 - D / 2), y: mid(rest.y, rest.h, D), s: D },
     };
   }
   return {
