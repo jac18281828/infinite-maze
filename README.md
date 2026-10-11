@@ -58,12 +58,13 @@ and no assets.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
 - Coins lie on the floors of dead ends, about one dead end in twenty. Touch one
-  to take it. Each tomb the run solves past its best on that seed and level
-  pays 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE, and a
-  replay pays only past its best. The wallet shows under `TOMB n`; the end
-  screen shows the coins earned this run. The game keeps the wallet, one per
-  device, and the coins taken and payout record, per seed and level, in
-  `localStorage`. Nothing buys with coins yet.
+  to take it. Each tomb pays once on this device, the first time a run solves
+  it: 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE. A replay pays
+  nothing. The wallet shows under `TOMB n`; the end screen shows the coins
+  earned this run. The game keeps the wallet, one per device, and the coins
+  taken, the tombs paid and the payout record, per seed and level, in
+  `localStorage`, and merges every write with what storage holds, so two tabs
+  lose nothing. Nothing buys with coins yet.
 - In some dead ends, more often the longer ones, the dust drifts back toward the
   way in while the explorer stands inside, a hint that the branch leads
   nowhere.
@@ -73,8 +74,8 @@ and no assets.
 - The score counts tombs solved: a tomb is solved when the explorer leaves it
   through its exit door, if it lies on the way on from the run's start tomb:
   that tomb, the tomb its exit leads to, and so on. A tomb off that way on
-  never counts. Each tomb counts once, and Continue keeps the count and the
-  start tomb.
+  never counts. Each tomb counts once. Continue, and RESUME of the stored
+  save, keep the count and the start tomb.
 
 The title screen shows the seed code. **Enter** begins at tomb (0, 0)'s
 first entry. **R** rolls a new world. **T** takes a typed seed or save code.
@@ -82,8 +83,9 @@ first entry. **R** rolls a new world. **T** takes a typed seed or save code.
 left by pause, or the last save at its own difficulty. Esc is its alias
 outside full screen. **K** copies the save code shown, or the seed code. The
 end screen's **C** copies its save code. The game keeps that save with its
-difficulty, the setting and the most tombs solved per seed and difficulty in
-`localStorage`, and runs without them where storage is blocked.
+difficulty, the run's solved tombs, so RESUME continues `TOMB n`, the setting
+and the most tombs solved per seed and difficulty in `localStorage`, and runs
+without them where storage is blocked.
 
 ## Save codes
 

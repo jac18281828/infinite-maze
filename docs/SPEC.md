@@ -368,6 +368,18 @@ title, and the code reads at the difficulty in force:
   before the four levels resumes in the 4×4 world, as a typed code would.
 - RESUME plays the stored save at its own difficulty, and the title setting
   moves to match. A typed save code plays at the title setting.
+- A save code holds a seed and a board, not a tomb count, so every save also
+  stores the run behind it under `infinite-maze.plane.save.run`: the save
+  code as stored, the run's start tomb and its solved tombs. The game
+  rewrites it with each save: each tomb entry, PAUSE, the splash and the end
+  of a run. RESUME with no run open, when the stored run's save equals the
+  stored save code, begins with that start tomb and solved set, so `TOMB n`
+  continues. The clock, the trail and the coins earned this run start fresh.
+  A typed save code continues the stored run only when it names the stored
+  save's seed and board and the title setting equals the stored save's
+  difficulty. Any other typed code starts at `TOMB 0`, as does a save with no
+  stored run or a stored run that names another save, such as one from before
+  this rule.
 
 Resuming lights the torch to full. Flames never run out, so the save carries
 no pickup state. It carries none of the coins taken, which live under a key of
@@ -384,12 +396,14 @@ a score. The wallet depends on no world layout and keeps a plain key:
 |---|---|
 | `infinite-maze.plane.save` | the save code |
 | `infinite-maze.plane.save.difficulty` | the save's difficulty |
+| `infinite-maze.plane.save.run` | the run behind the save, JSON `{"save": "<save code>", "start": "u,v", "solved": ["u,v", …]}` |
 | `infinite-maze.plane.best` | the best per seed and difficulty |
 | `infinite-maze.difficulty` | the title setting |
 | `infinite-maze.pad` | the d-pad's side, `left` or `right`, one per device |
 | `infinite-maze.wallet` | the wallet, a decimal integer, one per device |
 | `infinite-maze.plane.coins` | the coins taken, JSON `{"<code>:<LEVEL>": ["x,y,cell", …]}` |
 | `infinite-maze.plane.coins.paid` | the payout record, JSON `{"<code>:<LEVEL>": n}` |
+| `infinite-maze.plane.coins.tombs` | the tombs paid, JSON `{"<code>:<LEVEL>": ["u,v", …]}` |
 
 **Coins.** Touching a coin of §4, the feet within 12 px of its floor point in
 x and in y, as for a flame, adds one coin to the wallet and its key `x,y,cell`
@@ -398,17 +412,35 @@ later run of that seed and level. A key holds a board's coordinates and a
 cell, never `p`, so it holds in any world layout. `<code>` is the seed code
 unformatted and `<LEVEL>` the difficulty label, as in `K7Q2M9XA:MEDIUM`.
 
-A run also earns coins for tombs. The record holds the highest tomb count
-already paid for a seed and level, 0 when absent. When the run's tomb count
-(the score of §8) rises above it, the wallet gains the rate times the rise and
-the record becomes the count. The rate is 1 per tomb at EASY, 2 at MEDIUM, 5
-at HARD and 10 at ULTIMATE, set by the world's difficulty alone. A replay pays
-only past its record, and a resumed save counts from 0 and pays once its run
-climbs past the record. A milestone pays on top: for each k with `record < 100k ≤ count`, the
-wallet gains 100 × k, once per seed and level because the record passes it. A
-record already past 100k counts as paid. The game holds the three values in
-memory from boot and writes each through on every change. Absent, blocked or
-malformed storage reads as empty, and the game plays on.
+A run also earns coins for tombs. The tombs key holds, per seed and level, the
+tombs this device has been paid for, each as `u,v`; it starts empty. When a
+run solves a tomb (§8) that the set lacks, the wallet gains the rate and the
+set gains the tomb. The run's tomb count and the record play no part: a tomb
+pays its rate the first time this device solves it, at any count, and a replay
+of a solved tomb pays nothing. The rate is 1 per tomb at EASY, 2 at MEDIUM, 5
+at HARD and 10 at ULTIMATE, set by the world's difficulty alone. Only tombs a
+run solves pay: those a Continue or a RESUME carries were paid when first
+solved. The set has no cap, because an evicted tomb would pay again. No coin
+is credited for tombs paid under the earlier rule, which counted past a
+record, so each pays once more.
+
+The record holds the highest tomb count already paid for a seed and level, 0
+when absent, and serves the milestone alone. A milestone pays on top: for each
+k with `record < 100k ≤ count`, the wallet gains 100 × k, and the record
+becomes the larger of itself and the count, so each k pays once per seed and
+level. A record already past 100k counts as paid.
+
+Every coin write merges with storage. It re-reads the four coin keys, merges
+them into the game (the wallet and the record by maximum, the collected set
+and the solved tombs by union), decides the pay on the merged state, adds it
+to the wallet and rewrites all four keys. Two tabs that take the same coin,
+solve the same tomb or cross the same milestone are paid once, and neither
+loses the other's coins. A coin credits one only when storage did not already
+list it, so blocked storage never credits a coin twice and never lowers the
+wallet. A tab shows its own last wallet until its next write, and there is no
+lock and no `storage` listener. Absent, blocked or malformed storage reads as
+empty, and the game plays on. The `#selftest` page keeps its storage in memory
+and never reads or writes the player's.
 
 ## 6. Movement
 
@@ -585,10 +617,11 @@ door, and only if it lies on the run's way on: the run's start tomb, the tomb
 its exit leads to, and so on along the generator's exits. A tomb off that way
 on never counts, whatever door the explorer used, so an upstream basin cannot
 be farmed. Each tomb counts once. Continue carries the run's start tomb and
-its solved set, so the run keeps one way on; resuming a save or typing a code
-starts a new run with its own start tomb. The HUD's `TOMB n`, the pause
-header's `TOMB n`, the title's `BEST TOMB` and the end screen's `TOMBS
-CLIMBED` show that count.
+its solved set, so the run keeps one way on. RESUME of the stored save, or a
+typed copy of it at its difficulty, continues them from the stored run (§5);
+any other save or typed code starts a new run with its own start tomb. The
+HUD's `TOMB n`, the pause header's `TOMB n`, the title's `BEST TOMB` and the
+end screen's `TOMBS CLIMBED` show that count.
 
 **Oil jars.** A jar is a sprite at most 7×8 px in umber and ochre with a dark
 mouth. It rests on the floor at the same point as a coin: 12 px from its
