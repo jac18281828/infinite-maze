@@ -685,6 +685,15 @@ measured on node 26.7.0 and an Apple M3 Max.
 Audio starts on the first key press or touch, as browser autoplay policy
 requires.
 
+**Frame timing.** `infinite-maze.html#perf`, read once at boot, turns on a
+probe. Its overlay sits at the view's upper left, below the torch bar, and
+shows the animation-frame interval histogram in 2 ms bins with a last bin for
+40 ms and over, the count of frames that ran 0, 1, 2 and 3 or more ticks, and
+the draw cost, mean and maximum. `data-perf` on `<body>` holds the same
+figures as JSON, refreshed about once a second. Without the hash the page
+draws no overlay, sets no attribute and does no probe work per frame. The
+probe sends nothing anywhere.
+
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
 mute and P to pause and show the save code. P returns the player to where
 they were: from pause or the title it goes back to the game. Esc is the alias

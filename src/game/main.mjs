@@ -10,6 +10,7 @@ import {
 } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
+import { createProbe } from './perf.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
   COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
@@ -18,7 +19,7 @@ import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PAN
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
-import { RGB, idx } from './art.mjs';
+import { RGB, PALETTE, idx } from './art.mjs';
 
 // Saves and bests of the tomb plane keep keys of their own, so a stacked-world
 // value never reads as a position or a score.
@@ -1377,6 +1378,24 @@ function drawSplash(g) {
   r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
 }
 
+// The #perf probe; null unless the page loaded with that hash.
+let probe = null;
+
+/** The probe's overlay: interval bars, tick counts and draw cost, below the torch bar. */
+function drawProbe(r, s) {
+  const lines = [`0:${s.ticks[0]} 1:${s.ticks[1]}`, `2:${s.ticks[2]} 3UP:${s.ticks[3]}`, `DRAW ${s.drawMeanMs.toFixed(2)} MAX ${s.drawMaxMs.toFixed(2)}`];
+  const w = Math.max(66, 2 + 6 * Math.max(...lines.map((l) => l.length)));
+  r.ctx.fillStyle = shade(0.8);
+  r.ctx.fillRect(4, 15, w, 46);
+  const peak = Math.max(1, ...s.bins);
+  s.bins.forEach((n, i) => {
+    const h = n ? Math.max(1, Math.round((16 * n) / peak)) : 0;
+    r.ctx.fillStyle = PALETTE[idx(i === s.bins.length - 1 ? 'o' : 'p')];
+    r.ctx.fillRect(5 + 3 * i, 33 - h, 2, h);
+  });
+  lines.forEach((l, i) => r.text(l, 5, 36 + 8 * i, 'c'));
+}
+
 function draw(g, t) {
   if (g.screen === 'title') {
     drawTitle(g, t);
@@ -1387,18 +1406,31 @@ function draw(g, t) {
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
   }
+  if (probe) drawProbe(g.renderer, probe.summary());
   present();
   if (touch) touch.refresh();
 }
 
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
-  let last = performance.now(), acc = 0;
+  if (location.hash === '#perf') probe = createProbe();
+  let last = performance.now(), acc = 0, published = 0;
   function frame(now) {
-    acc += Math.min(0.25, (now - last) / 1000);
+    const interval = now - last;
+    acc += Math.min(0.25, interval / 1000);
     last = now;
-    while (acc >= TICK) { tick(g); acc -= TICK; }
+    let ran = 0;
+    while (acc >= TICK) { tick(g); acc -= TICK; ran++; }
+    const began = probe ? performance.now() : 0;
     draw(g, now / 1000);
+    if (probe) {
+      probe.frame(interval, ran, performance.now() - began);
+      // About once a second, so the DOM write stays out of the frames measured.
+      if (now - published >= 1000) {
+        published = now;
+        document.body.dataset.perf = JSON.stringify(probe.summary());
+      }
+    }
     requestAnimationFrame(frame);
   }
   draw(g, 0);

@@ -4546,8 +4546,51 @@ function createAudio() {
 return { createAudio };
 })();
 
-// src/game/autopilot.mjs
+// src/game/perf.mjs
 const __m19 = (() => {
+
+// Frame-timing probe behind `#perf`: the rAF interval histogram, the ticks each
+// frame ran and the draw cost. DOM-free; main.mjs feeds it and shows it.
+
+const BINS = 21;
+const BIN_MS = 2;
+const TICK_BINS = 4;
+
+const hundredths = (ms) => Math.round(ms * 100) / 100;
+
+function createProbe() {
+  const bins = new Array(BINS).fill(0);
+  const ticks = new Array(TICK_BINS).fill(0);
+  let frames = 0, drawSum = 0, drawMax = 0;
+  return {
+    /** Records one animation frame: rAF interval, ticks run and draw time, in ms. */
+    frame(intervalMs, ran, drawMs) {
+      frames++;
+      bins[Math.min(BINS - 1, Math.max(0, Math.floor(intervalMs / BIN_MS)))]++;
+      ticks[Math.min(TICK_BINS - 1, ran)]++;
+      drawSum += drawMs;
+      if (drawMs > drawMax) drawMax = drawMs;
+    },
+    /**
+     * Bin i counts intervals in [2i, 2i + 2) ms and bin 20 those of 40 ms and
+     * over. `ticks` counts frames that ran 0, 1, 2 and 3 or more ticks.
+     */
+    summary() {
+      return {
+        frames,
+        bins: bins.slice(),
+        ticks: ticks.slice(),
+        drawMeanMs: frames ? hundredths(drawSum / frames) : 0,
+        drawMaxMs: hundredths(drawMax),
+      };
+    },
+  };
+}
+return { createProbe };
+})();
+
+// src/game/autopilot.mjs
+const __m20 = (() => {
 const { DX, DY } = __m2;
 const { createSim, step, inputEdges } = __m10;
 // Scripted input for the self-test: walks the explorer along tomb (0, 0)'s
@@ -4654,7 +4697,7 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/touch.mjs
-const __m20 = (() => {
+const __m21 = (() => {
 const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m11;
 const { VIEW_W, VIEW_H } = __m17;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
@@ -5315,7 +5358,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, layout, padSide, titleF
 })();
 
 // src/game/clipboard.mjs
-const __m21 = (() => {
+const __m22 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -5343,7 +5386,7 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m22 = (() => {
+const __m23 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
@@ -5352,15 +5395,17 @@ const { floorItems, itemSpot } = __m7;
 const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
 const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m17;
 const { createAudio } = __m18;
-const { runScript, createAutopilot, SELFTEST_CODE } = __m19;
+const { createProbe } = __m19;
+const { runScript, createAutopilot, SELFTEST_CODE } = __m20;
 const { COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid } = __m9;
-const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m20;
+const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m21;
 const { MILESTONE, rankName } = __m8;
-const { copyWithStatus, saveLabel } = __m21;
+const { copyWithStatus, saveLabel } = __m22;
 const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m16;
-const { RGB, idx } = __m11;
+const { RGB, PALETTE, idx } = __m11;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
 // milestone splash screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -6734,6 +6779,24 @@ function drawSplash(g) {
   r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
 }
 
+// The #perf probe; null unless the page loaded with that hash.
+let probe = null;
+
+/** The probe's overlay: interval bars, tick counts and draw cost, below the torch bar. */
+function drawProbe(r, s) {
+  const lines = [`0:${s.ticks[0]} 1:${s.ticks[1]}`, `2:${s.ticks[2]} 3UP:${s.ticks[3]}`, `DRAW ${s.drawMeanMs.toFixed(2)} MAX ${s.drawMaxMs.toFixed(2)}`];
+  const w = Math.max(66, 2 + 6 * Math.max(...lines.map((l) => l.length)));
+  r.ctx.fillStyle = shade(0.8);
+  r.ctx.fillRect(4, 15, w, 46);
+  const peak = Math.max(1, ...s.bins);
+  s.bins.forEach((n, i) => {
+    const h = n ? Math.max(1, Math.round((16 * n) / peak)) : 0;
+    r.ctx.fillStyle = PALETTE[idx(i === s.bins.length - 1 ? 'o' : 'p')];
+    r.ctx.fillRect(5 + 3 * i, 33 - h, 2, h);
+  });
+  lines.forEach((l, i) => r.text(l, 5, 36 + 8 * i, 'c'));
+}
+
 function draw(g, t) {
   if (g.screen === 'title') {
     drawTitle(g, t);
@@ -6744,18 +6807,31 @@ function draw(g, t) {
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
   }
+  if (probe) drawProbe(g.renderer, probe.summary());
   present();
   if (touch) touch.refresh();
 }
 
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
-  let last = performance.now(), acc = 0;
+  if (location.hash === '#perf') probe = createProbe();
+  let last = performance.now(), acc = 0, published = 0;
   function frame(now) {
-    acc += Math.min(0.25, (now - last) / 1000);
+    const interval = now - last;
+    acc += Math.min(0.25, interval / 1000);
     last = now;
-    while (acc >= TICK) { tick(g); acc -= TICK; }
+    let ran = 0;
+    while (acc >= TICK) { tick(g); acc -= TICK; ran++; }
+    const began = probe ? performance.now() : 0;
     draw(g, now / 1000);
+    if (probe) {
+      probe.frame(interval, ran, performance.now() - began);
+      // About once a second, so the DOM write stays out of the frames measured.
+      if (now - published >= 1000) {
+        published = now;
+        document.body.dataset.perf = JSON.stringify(probe.summary());
+      }
+    }
     requestAnimationFrame(frame);
   }
   draw(g, 0);
