@@ -28,6 +28,9 @@ const KEY_SAVE = 'infinite-maze.plane.save';
 // The difficulty of the run that wrote KEY_SAVE; absent means ULTIMATE, the
 // 6x4 world and the only size before difficulties.
 const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';
+// The run behind KEY_SAVE: JSON { save, start: "u,v", solved: ["u,v", ...] }. A save
+// code holds a seed and a board, so the run's tomb count lives here.
+const KEY_SAVE_RUN = 'infinite-maze.plane.save.run';
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
 // The d-pad's side, 'left' or 'right'; anything else reads 'left'.
@@ -61,7 +64,7 @@ function unstore(key) {
 
 /** The real localStorage's coin and save keys, as stored, for the self-test's guard. */
 function realKeys() {
-  return [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_WALLET, KEY_COINS, KEY_PAID, KEY_TOMBS].map((k) => {
+  return [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_SAVE_RUN, KEY_WALLET, KEY_COINS, KEY_PAID, KEY_TOMBS].map((k) => {
     try { return globalThis.localStorage.getItem(k); } catch { return null; }
   });
 }
@@ -102,10 +105,25 @@ function readSave() {
   return s && { ...s, difficulty };
 }
 
-/** Stores a save of the current run with the run's difficulty. */
+/** Stores a save of the current run with the run's difficulty, start tomb and solved tombs. */
 function writeSave(g, text) {
+  const { start, solved } = g.sim;
   store(KEY_SAVE, text);
   store(KEY_SAVE_DIFFICULTY, g.world.difficulty);
+  store(KEY_SAVE_RUN, JSON.stringify({ save: text, start: `${start.u},${start.v}`, solved: [...solved] }));
+}
+
+const TOMB_ID = /^-?\d+,-?\d+$/;
+
+/** The run stored with the stored save, as { start: { u, v }, solved: Set }, or null when absent, malformed or another save's. */
+function storedRun() {
+  let run;
+  try { run = JSON.parse(load(KEY_SAVE_RUN)); } catch { return null; }
+  if (!run || typeof run !== 'object') return null;
+  if (run.save !== load(KEY_SAVE)) return null;
+  if (!TOMB_ID.test(run.start) || !Array.isArray(run.solved) || !run.solved.every((id) => typeof id === 'string' && TOMB_ID.test(id))) return null;
+  const [u, v] = run.start.split(',').map(Number);
+  return { start: { u, v }, solved: new Set(run.solved) };
 }
 
 function present() {
@@ -495,6 +513,7 @@ function driveTouch(copied, fake) {
   difficultyLeg(g, { need, click, press, offEntry });
   coinLeg(g, { need, click });
   splashLeg(g, { need, click, press });
+  resumeLeg(g, { need, click });
   oilLeg(g, { need, click });
   gamepadLeg(g, { need, click, fake });
 
@@ -640,24 +659,35 @@ function runTicks(g, drive, done, budget, what, seen = () => {}) {
   if (!done()) throw new Error(`touch ${what}`);
 }
 
+/** Tomb (0, 0)'s exit board, where the self-test starts its runs. */
+function exitBoard(world) {
+  const at = boardCoords(0, 0, world.tomb(0, 0).X, world.size);
+  return world.board(at.x, at.y);
+}
+
+/** The `n` fake tombs below row 0 that a self-test run starts with, keyed "u,v". */
+const fakeSolved = (n) => Array.from({ length: n }, (_, i) => `0,${-1 - i}`);
+
 /**
  * Scores one tomb along the forward chain: starts a run on the game's world at
  * the first primary cell of tomb (0, 0)'s exit board, with `n` tombs below its
- * row already solved, and walks the exit to the downstream entry's flame until
- * the tomb count reaches n + 1. Throws `touch ...` when the walk takes a coin or
- * runs out of ticks. It returns the ticks run. With `doomAt` > 0, the torch is an
- * ember that goes out on that tick. It is the only coin code that names a run's
- * `solved` and `start`.
+ * row already solved, and walks it out (`walkOut`). It returns the ticks run.
  */
 function oneTombOn(g, n, doomAt = 0) {
-  const { world } = g;
-  const t = world.tomb(0, 0);
-  const at = boardCoords(0, 0, t.X, world.size);
-  const X = world.board(at.x, at.y);
-  const chain = world.tombFlames(0, 0).chains[0];
-  const solved = new Set(Array.from({ length: n }, (_, i) => `0,${-1 - i}`));
-  begin(g, X.p, { time: 0, solved, lastEntry: X.p, trail: createTrail(), start: { u: 0, v: 0 } });
-  const auto = createAutopilot(world, [chain[chain.length - 1]]);
+  const X = exitBoard(g.world);
+  begin(g, X.p, { time: 0, solved: new Set(fakeSolved(n)), lastEntry: X.p, trail: createTrail(), start: { u: 0, v: 0 } });
+  return walkOut(g, n, doomAt);
+}
+
+/**
+ * Walks the run of `n` tombs solved at tomb (0, 0)'s exit board to the
+ * downstream entry's flame until the tomb count reaches n + 1. Throws
+ * `touch ...` when the walk takes a coin or runs out of ticks. It returns the
+ * ticks run. With `doomAt` > 0, the torch is an ember that goes out on that tick.
+ */
+function walkOut(g, n, doomAt = 0) {
+  const chain = g.world.tombFlames(0, 0).chains[0];
+  const auto = createAutopilot(g.world, [chain[chain.length - 1]]);
   let taken = 0, ticks = 0;
   const drive = (s) => {
     if (++ticks === doomAt) { s.burn = 0; s.ember = TICK / 2; }
@@ -1012,6 +1042,70 @@ function splashLeg(g, { need, click, press }) {
   draw(g, 0);
 }
 
+/**
+ * The RESUME steps of the touch leg, from the title with no run open. Each
+ * `reload` is a fresh game over the same storage, as after a page reload.
+ */
+function resumeLeg(g, { need, click }) {
+  const level = 'medium', key = coinKey(SELFTEST_CODE, level);
+  const reload = () => {
+    const h = createGame();
+    useCode(h, h.code);
+    return h;
+  };
+  setDifficulty(g, level);
+  useCode(g, SELFTEST_CODE);
+  g.screen = 'title';
+  draw(g, 0);
+  click('title', 'begin');
+  oneTombOn(g, 1);
+  const count = tombCount(g.sim);
+  draw(g, 0);
+  click('play', 'pause');
+  const saved = load(KEY_SAVE);
+
+  // The count survives a reload through the stored run.
+  const resumed = reload();
+  resume(resumed);
+  need(count >= 2 && resumed.screen === 'play' && tombCount(resumed.sim) === count, `RESUME after a reload continues at TOMB ${count}`);
+  need(resumed.sim.start.u === 0 && resumed.sim.start.v === 0 && resumed.earned === 0, 'a resumed run keeps its start tomb and earns afresh');
+
+  // A typed copy of the stored save continues it; another code does not, as it carries no count.
+  const typed = (text) => {
+    const h = reload();
+    h.typing = text;
+    submitTyped(h);
+    return tombCount(h.sim);
+  };
+  const elsewhere = encodeSave(SELFTEST_CODE, g.sim.bd.x + 1, g.sim.bd.y);
+  need(typed(saved) === count, `a typed copy of the stored save continues at TOMB ${count}`);
+  need(typed(elsewhere) === 0, 'another save code starts at TOMB 0');
+
+  // The stored run names its save.
+  store(KEY_SAVE, elsewhere);
+  const other = reload();
+  resume(other);
+  need(tombCount(other.sim) === 0, 'a stored run naming another save resumes at TOMB 0');
+  store(KEY_SAVE, saved);
+  unstore(KEY_SAVE_RUN);
+  const bare = reload();
+  resume(bare);
+  need(tombCount(bare.sim) === 0, 'a save without a stored run resumes at TOMB 0');
+
+  // A run resumed at TOMB 99 crosses 100 under a record of 100: the splash shows unpaid and only the tomb pays.
+  const exit = exitBoard(g.world), at = encodeSave(SELFTEST_CODE, exit.x, exit.y);
+  store(KEY_SAVE, at);
+  store(KEY_SAVE_RUN, JSON.stringify({ save: at, start: '0,0', solved: fakeSolved(99) }));
+  forgetTomb(g, level, 100);
+  const late = reload();
+  resume(late);
+  need(tombCount(late.sim) === 99 && late.paid.get(key) === 100, 'RESUME after a reload continues at TOMB 99');
+  const was = late.wallet;
+  walkOut(late, 99);
+  need(late.screen === 'splash' && late.splash.k === 1 && !late.splash.paid && late.wallet - was === COIN_RATE[level],
+    'a resumed run crossing tomb 100 below the record pays no milestone');
+}
+
 const DIRS = {
   ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
 };
@@ -1159,6 +1253,12 @@ function begin(g, p = null, carry = null) {
   play(g);
 }
 
+/** Begins at save position p; with the stored `run`, its tomb count and start tomb carry over. */
+function beginSaved(g, p, run) {
+  begin(g, p, run && { time: 0, solved: run.solved, start: run.start, lastEntry: p });
+  g.earned = 0;
+}
+
 /**
  * RESUME: back to the open run unchanged, or with none open, the save rebuilt
  * at its own difficulty. Either way the setting follows the run.
@@ -1176,7 +1276,7 @@ function resume(g) {
   if (!s) return;
   keepSetting(g, s.difficulty);
   if (s.code !== g.code || g.world.difficulty !== s.difficulty) useCode(g, s.code);
-  begin(g, s.p);
+  beginSaved(g, s.p, storedRun());
 }
 
 function hereCode(g) {
@@ -1193,7 +1293,10 @@ function submitTyped(g) {
   if (save) {
     if (save.code !== g.code) useCode(g, save.code);
     g.typing = null;
-    begin(g, save.p);
+    // A code carries no count: only a copy of the stored save, at its difficulty, continues the stored run.
+    const kept = readSave();
+    const same = kept && kept.code === save.code && kept.p === save.p && kept.difficulty === g.difficulty;
+    beginSaved(g, save.p, same ? storedRun() : null);
     return;
   }
   const c = parseCode(g.typing);

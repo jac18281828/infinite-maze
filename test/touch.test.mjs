@@ -506,6 +506,9 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch the title ignores an auto-repeated H/],
       ['for (const o of gamepad.poll()) {', 'for (const o of []) {', /^fail: touch gamepad d-pad left holds Left/],
       ['  state.wallet = Math.max(state.wallet, stored.wallet);\n  unionInto(state.coins, stored.coins);\n  unionInto(state.tombs, stored.tombs);\n  for (const [key, n] of stored.paid) state.paid.set(key, Math.max(state.paid.get(key) || 0, n));\n', '', /^fail: touch two games on one storage keep both coins/],
+      ['beginSaved(g, s.p, storedRun());', 'beginSaved(g, s.p, null);', /^fail: touch RESUME after a reload continues at TOMB/],
+      ['beginSaved(g, save.p, same ? storedRun() : null);', 'beginSaved(g, save.p, storedRun());', /^fail: touch another save code starts at TOMB 0/],
+      ['  if (run.save !== load(KEY_SAVE)) return null;\n', '', /^fail: touch a stored run naming another save resumes at TOMB 0/],
       ['const memory = SELFTEST ? new Map() : null;', 'const memory = null;', /^fail: touch the self-test leaves the real wallet untouched/],
     ]) {
       const broken = html.replace(from, to);
