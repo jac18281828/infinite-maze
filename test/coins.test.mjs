@@ -1,0 +1,161 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { DIFFICULTIES } from '../src/world/band.mjs';
+import { worlds, sample } from './sample.mjs';
+import { DX, DY } from '../src/world/board.mjs';
+import { floorItems, itemSpot } from '../src/world/floor.mjs';
+import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
+import { createAutopilot } from '../src/game/autopilot.mjs';
+import {
+  COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
+} from '../src/game/wallet.mjs';
+
+test('the payout is the level rate times the tombs past the record, and 0 at or under it', () => {
+  assert.deepEqual(COIN_RATE, { easy: 1, medium: 2, hard: 5 });
+  for (const d of DIFFICULTIES) {
+    for (const [record, count] of [[0, 1], [0, 3], [1, 2], [4, 9], [7, 7], [7, 3], [0, 0]]) {
+      assert.equal(tombPayout(d, record, count), count > record ? COIN_RATE[d] * (count - record) : 0, `${d} ${record} ${count}`);
+    }
+  }
+  assert.equal(tombPayout('easy', 0, 1), 1);
+  assert.equal(tombPayout('medium', 0, 1), 2);
+  assert.equal(tombPayout('hard', 0, 1), 5);
+  assert.equal(tombPayout('hard', 2, 2), 0);
+});
+
+test('the wallet, the collected set and the payout record read absent or malformed storage as empty', () => {
+  assert.equal(parseWallet('12'), 12);
+  for (const bad of [null, '', 'x', '-3', '1.5', '1e3', '9007199254740993']) assert.equal(parseWallet(bad), 0, String(bad));
+  const set = parseCollected('{"K7Q2M9XA:MEDIUM":["0,0,21","-1,2,5","junk",7],"A:EASY":"no"}');
+  assert.deepEqual([...set.get('K7Q2M9XA:MEDIUM')], ['0,0,21', '-1,2,5']);
+  assert.deepEqual([...set.get('A:EASY') ?? []], []);
+  for (const bad of [null, '', '{', '[]', '3', 'null']) assert.equal(parseCollected(bad).size, 0, String(bad));
+  const paid = parsePaid('{"K7Q2M9XA:HARD":4,"B:EASY":-1,"C:EASY":"2","D:EASY":1.5}');
+  assert.deepEqual([...paid], [['K7Q2M9XA:HARD', 4]]);
+  for (const bad of [null, '', '{not json', '[1]']) assert.equal(parsePaid(bad).size, 0, String(bad));
+  assert.deepEqual(parseCollected(serializeCollected(set)).get('K7Q2M9XA:MEDIUM'), set.get('K7Q2M9XA:MEDIUM'));
+  assert.deepEqual([...parsePaid(serializePaid(paid))], [...paid]);
+  assert.equal(coinKey('K7Q2M9XA', 'medium'), 'K7Q2M9XA:MEDIUM');
+});
+
+test('a sim climbing two tombs along the way on counts 2, and a sim built from its carry counts 2', () => {
+  const world = worlds.easy;
+  const away = world.exit(0, 0);
+  const next = { u: DX[away], v: DY[away] };
+  const first = world.tombFlames(0, 0).chains[0];
+  const last = first[first.length - 1];
+  const second = world.tombFlames(next.u, next.v).chains.find((c) => c[0].x === last.x && c[0].y === last.y && c[0].cell === last.cell);
+  assert.ok(second, 'the downstream tomb has a chain from the flame that ends the first');
+  const sim = createSim(world, world.startPoint());
+  assert.equal(tombCount(sim), 0);
+  const drive = createAutopilot(world, [...first, ...second]);
+  let ph = 0, pv = 0, ticks = 0, afterOne = -1;
+  while (tombCount(sim) < 2 && ticks < 30000) {
+    const [h, v, jump] = drive(sim);
+    step(sim, h, v, jump, inputEdges(ph, pv, h, v));
+    ph = h;
+    pv = v;
+    ticks++;
+    if (afterOne < 0 && tombCount(sim) === 1) afterOne = ticks;
+  }
+  assert.equal(sim.state, 'play');
+  assert.equal(tombCount(sim), 2);
+  assert.deepEqual([...sim.solved], ['0,0', `${next.u},${next.v}`], 'the two tombs of the way on');
+  assert.ok(afterOne > 0 && afterOne < ticks, 'the first exit scores one tomb before the second');
+  assert.ok(ticks > 5000 && ticks < 20000, `${ticks} ticks`);
+  const carried = createSim(world, world.resumePoint(sim.bd.x, sim.bd.y), runCarry(sim));
+  assert.equal(tombCount(carried), 2);
+});
+
+/** Standing coins of tomb sample boards, up to `per` for each link direction. */
+function coinsByLink(d, per) {
+  const count = new Map(), out = [];
+  for (const bd of sample(d, 3)) {
+    for (const { cell } of floorItems(worlds[d], bd)) {
+      const link = Math.log2(bd.links[cell]);
+      if ((count.get(link) || 0) >= per) continue;
+      count.set(link, (count.get(link) || 0) + 1);
+      out.push({ bd, cell, link });
+    }
+  }
+  return out;
+}
+
+/**
+ * Walks a sim from the neighbour across the coin's cell's link to the cell,
+ * then toward the coin's spot, and then to and fro for 60 ticks. Returns the
+ * tick of each 'coin' event and the first tick the feet were within 12 px.
+ */
+function walkPast(world, { bd, cell, link }, collected) {
+  const to = world.step(bd, cell, link);
+  const [sx, sy] = itemSpot(bd, cell);
+  const side = Math.sign(sx - nodeXY(bd, cell)[0]);
+  const sim = createSim(world, { board: to.board, cell: to.cell }, null, { collected });
+  const auto = createAutopilot(world, [{ x: bd.x, y: bd.y, cell }]);
+  const events = [];
+  let near = -1, ph = 0, pv = 0, back = 0;
+  for (let i = 0; i < 1500 && back < 60; i++) {
+    const arrived = sim.bd === bd && sim.cell === cell && sim.mode === 'floor';
+    // Once the feet are on the coin, walk away and back.
+    const [h, v, jump] = near >= 0 ? [back++ < 30 ? -side : side, 0, false] : arrived ? [side, 0, false] : auto(sim);
+    step(sim, h, v, jump, inputEdges(ph, pv, h, v));
+    ph = h;
+    pv = v;
+    const [fx, fy] = feet(sim);
+    if (near < 0 && Math.abs(fx - sx) <= 12 && Math.abs(fy - sy) <= 12) near = i;
+    for (const ev of sim.events) if (ev === 'coin') events.push(i);
+  }
+  return { events, near, sim };
+}
+
+test('a sim walked to a coin takes it once, on the tick its feet come within 12 px of the spot, and never again', () => {
+  const world = worlds.medium;
+  const sample8 = coinsByLink('medium', 1);
+  assert.equal(sample8.length, 8, 'a coin at the end of each link direction');
+  for (const coin of sample8) {
+    const set = new Set();
+    const { events, near, sim } = walkPast(world, coin, set);
+    assert.ok(near >= 0, `the feet reach the coin on cell ${coin.cell} of board (${coin.bd.x},${coin.bd.y})`);
+    assert.deepEqual(events, [near], 'one pickup, on the first tick within reach');
+    assert.deepEqual([...set], [coinId(coin.bd, coin.cell)]);
+    assert.ok(sim.collected === set, 'the sim fills the set it was handed');
+    // A key already in the set takes nothing.
+    assert.deepEqual(walkPast(world, coin, new Set([coinId(coin.bd, coin.cell)])).events, []);
+  }
+});
+
+test('a run that never nears a coin takes none', () => {
+  const world = worlds.hard;
+  const sim = createSim(world, world.startPoint());
+  const drive = createAutopilot(world, world.tombFlames(0, 0).chains[0]);
+  let ph = 0, pv = 0;
+  for (let i = 0; i < 3000; i++) {
+    const [h, v, jump] = drive(sim);
+    step(sim, h, v, jump, inputEdges(ph, pv, h, v));
+    ph = h;
+    pv = v;
+    assert.ok(!sim.events.includes('coin'));
+  }
+  assert.equal(sim.collected.size, 0);
+});
+
+// The end screen's row sits inside its panel and 4 px clear of every other row.
+test('drawOver draws a COINS row inside its panel, 11 px from the y of every other row', () => {
+  const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
+  const fn = src.match(/function drawOver\([^)]*\) \{[\s\S]*?\n\}\n/);
+  assert.ok(fn, 'drawOver found');
+  const panel = fn[0].match(/r\.panel\((\d+), (\d+), (\d+), (\d+)\)/);
+  assert.ok(panel, 'drawOver draws a panel');
+  const [px, py, pw, ph] = panel.slice(1).map(Number);
+  const rows = [...fn[0].matchAll(/r\.text\(([^\n]*?), VIEW_W \/ 2, (\d+), [^\n]*/g)].map((m) => ({
+    text: m[1], y: +m[2], h: /scale: 2/.test(m[0]) ? 14 : 7,
+  }));
+  const coins = rows.filter((r) => r.text.startsWith('`COINS'));
+  assert.equal(coins.length, 1, 'one COINS row');
+  const y = coins[0].y;
+  // The panel's inner rules sit 2 px in at the top and 3 px up from the bottom.
+  for (const r of rows) assert.ok(r.y >= py + 3 && r.y + r.h <= py + ph - 3, `${r.text} at ${r.y} lies inside the panel ${py}..${py + ph}`);
+  assert.ok(px <= 40 && px + pw >= 280, 'the panel keeps its x extents');
+  for (const other of rows.filter((r) => r !== coins[0])) assert.ok(Math.abs(other.y - y) >= 11, `${other.text} at ${other.y}`);
+});

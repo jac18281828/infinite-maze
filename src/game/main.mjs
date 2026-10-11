@@ -4,10 +4,16 @@ import { createWorld, boardOfPos, boardCoords } from '../world/world.mjs';
 import { DIFFICULTY, DIFFICULTIES } from '../world/band.mjs';
 import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
-import { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY } from './sim.mjs';
+import { floorItems, itemSpot } from '../world/floor.mjs';
+import {
+  createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
+} from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
-import { runScript, SELFTEST_CODE } from './autopilot.mjs';
+import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
+import {
+  tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
+} from './wallet.mjs';
 import { createTouch, layout, viewport, difficultyLabel, PANEL_X } from './touch.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
@@ -22,6 +28,12 @@ const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
 const KEY_BEST = 'infinite-maze.plane.best';
+// Coins. The wallet depends on no world layout, so it keeps a plain key; the
+// collected set and the payout record hold board positions, so they take the
+// plane's key style.
+const KEY_WALLET = 'infinite-maze.wallet';
+const KEY_COINS = 'infinite-maze.plane.coins';
+const KEY_PAID = 'infinite-maze.plane.coins.paid';
 // The stacked world's save difficulty, which a plane save never reads.
 const KEY_STACKED_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
 // A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
@@ -178,9 +190,11 @@ function planeLeg(world) {
  * `touch <what>` on the first miss.
  */
 function touchLeg() {
-  // The leg writes the save, its difficulty, the setting, the best score and
-  // the stacked world's save difficulty; it restores the player's own.
-  const kept = [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST, KEY_STACKED_SAVE_DIFFICULTY].map((k) => [k, load(k)]);
+  // The leg writes the save, its difficulty, the setting, the best score, the
+  // stacked world's save difficulty and the coin keys; it restores the player's own.
+  const kept = [
+    KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST, KEY_STACKED_SAVE_DIFFICULTY, KEY_WALLET, KEY_COINS, KEY_PAID,
+  ].map((k) => [k, load(k)]);
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
@@ -201,7 +215,13 @@ function driveTouch(copied) {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
   // Boot reads the player's setting; with none stored, a new player starts at MEDIUM.
   unstore(KEY_DIFFICULTY);
+  // Boot reads the coin keys: a wallet of 7, one collected coin and a record that is not JSON.
+  store(KEY_WALLET, '7');
+  store(KEY_COINS, JSON.stringify({ [coinKey(SELFTEST_CODE, 'medium')]: ['0,0,21'] }));
+  store(KEY_PAID, '{not json');
   const g = boot();
+  need(g.wallet === 7 && (g.coins.get(coinKey(SELFTEST_CODE, 'medium')) || new Set()).has('0,0,21') && g.paid.size === 0,
+    'boot reads the wallet and the collected set, and a malformed record as empty');
   need(g.difficulty === 'medium' && g.world.difficulty === 'medium', 'a new player starts at MEDIUM');
   need(touch && !touch.on, 'starts in keyboard mode');
   need(touch.soft('title', 'begin').getBoundingClientRect().width === 0, 'controls hidden in keyboard mode');
@@ -422,6 +442,7 @@ function driveTouch(copied) {
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
 
   difficultyLeg(g, { need, click, press, offEntry });
+  coinLeg(g, { need, click });
 
   // Leave the self-test script's run paused on screen for the screenshot.
   setDifficulty(g, 'hard');
@@ -530,6 +551,168 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   draw(g, 0);
 }
 
+/**
+ * Runs the game's own tick, steered by `drive`, until `done()`. Throws
+ * `touch <what>` when `budget` ticks pass first. `seen` runs after each tick.
+ */
+function runTicks(g, drive, done, budget, what, seen = () => {}) {
+  let ph = 0, pv = 0;
+  for (let i = 0; i < budget; i++) {
+    if (done()) return;
+    const [h, v, jump] = drive(g.sim);
+    g.keys.clear();
+    if (h < 0) g.keys.add('l');
+    if (h > 0) g.keys.add('r');
+    if (v > 0) g.keys.add('u');
+    if (v < 0) g.keys.add('d');
+    const edges = inputEdges(ph, pv, h, v);
+    g.press = edges.press;
+    g.release = edges.release;
+    g.jump = jump;
+    tick(g);
+    seen();
+    ph = h;
+    pv = v;
+  }
+  if (!done()) throw new Error(`touch ${what}`);
+}
+
+/**
+ * Scores one tomb along the forward chain: starts a run on the game's world at
+ * the first primary cell of tomb (0, 0)'s exit board, with `n` tombs below its
+ * row already solved, and walks the exit to the downstream entry's flame until
+ * the tomb count reaches n + 1. Throws `touch ...` when the walk takes a coin or
+ * runs out of ticks. It is the only coin code that names a run's `solved` and
+ * `start`.
+ */
+function oneTombOn(g, n) {
+  const { world } = g;
+  const t = world.tomb(0, 0);
+  const at = boardCoords(0, 0, t.X, world.size);
+  const X = world.board(at.x, at.y);
+  const chain = world.tombFlames(0, 0).chains[0];
+  const solved = new Set(Array.from({ length: n }, (_, i) => `0,${-1 - i}`));
+  begin(g, X.p, { time: 0, solved, lastEntry: X.p, trail: createTrail(), start: { u: 0, v: 0 } });
+  let taken = 0;
+  runTicks(g, createAutopilot(world, [chain[chain.length - 1]]), () => tombCount(g.sim) >= n + 1, 4000,
+    `the walk out of tomb (0, 0) reaches tomb count ${n + 1}`, () => { if (g.sim.events.includes('coin')) taken++; });
+  if (taken) throw new Error('touch the walk out of tomb (0, 0) takes no coin');
+}
+
+/** The first coin of tomb (0, 0), board by board in index order, as { bd, cell }, or null. */
+function firstCoin(world) {
+  for (let i = 0; i < world.size.w * world.size.h; i++) {
+    const { x, y } = boardCoords(0, 0, i, world.size);
+    const bd = world.board(x, y);
+    const item = floorItems(world, bd).find((it) => it.kind === 'coin');
+    if (item) return { bd, cell: item.cell };
+  }
+  return null;
+}
+
+/**
+ * Walks the run to the dead-end cell of `coin`, then toward its spot until the
+ * feet come within 12 px of it, as the sim tests contact. Throws `touch ...`
+ * when the walk runs out of ticks.
+ */
+function walkToCoin(g, { bd, cell }) {
+  const [sx, sy] = itemSpot(bd, cell);
+  const side = Math.sign(sx - nodeXY(bd, cell)[0]);
+  const auto = createAutopilot(g.world, [{ x: bd.x, y: bd.y, cell }]);
+  const here = (s) => s.bd.x === bd.x && s.bd.y === bd.y && s.cell === cell && s.mode === 'floor';
+  const near = () => { const [fx, fy] = feet(g.sim); return Math.abs(fx - sx) <= 12 && Math.abs(fy - sy) <= 12; };
+  runTicks(g, (s) => (here(s) ? [side, 0, false] : auto(s)), near, 20000, 'the walk reaches the coin');
+}
+
+/** The coin steps of the touch leg, from the title with no run open. */
+function coinLeg(g, { need, click }) {
+  const rates = { easy: 1, medium: 2, hard: 5 };
+  const keep = () => {
+    store(KEY_WALLET, String(g.wallet));
+    store(KEY_COINS, serializeCollected(g.coins));
+    store(KEY_PAID, serializePaid(g.paid));
+  };
+  const onLevel = (d) => {
+    setDifficulty(g, d);
+    useCode(g, SELFTEST_CODE);
+  };
+  const clearCoins = () => {
+    g.wallet = 0;
+    g.coins = new Map();
+    g.paid = new Map();
+    keep();
+  };
+
+  // Step 1: the first coin of tomb (0, 0) at MEDIUM.
+  clearCoins();
+  onLevel('medium');
+  g.screen = 'title';
+  draw(g, 0);
+  click('title', 'begin');
+  need(g.screen === 'play' && g.earned === 0, 'BEGIN starts a run with no coins earned');
+  const coin = firstCoin(g.world);
+  need(coin !== null, 'tomb (0, 0) holds a coin at MEDIUM');
+  const key = coinKey(SELFTEST_CODE, 'medium'), id = coinId(coin.bd, coin.cell);
+  walkToCoin(g, coin);
+  need(g.sim.events.includes('coin') && g.wallet === 1, 'touching the first coin adds one to the wallet');
+  need(g.earned === 1, 'a coin counts as one earned this run');
+  need(load(KEY_WALLET) === '1', 'a touched coin stores the wallet');
+  need((JSON.parse(load(KEY_COINS))[key] || []).includes(id), 'a touched coin stores the collected set under the seed and level');
+
+  // Step 2: a new run on the same seed and level.
+  begin(g);
+  walkToCoin(g, coin);
+  let held = 0;
+  runTicks(g, () => [0, 0, false], () => held >= 30, 100, 'the explorer stands on the coin', () => { held++; });
+  need(g.wallet === 1 && g.earned === 0, 'a collected coin credits nothing on a new run');
+  need(g.coins.get(key).has(id), 'the collected set keeps the coin');
+
+  // Step 3: a new best tomb pays its rate.
+  for (const d of ['easy', 'medium', 'hard']) {
+    onLevel(d);
+    g.paid.delete(coinKey(SELFTEST_CODE, d));
+    keep();
+    const was = g.wallet;
+    oneTombOn(g, 0);
+    need(g.wallet - was === rates[d], `a new best tomb pays ${rates[d]} at ${difficultyLabel(d)}`);
+    need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[coinKey(SELFTEST_CODE, d)] === 1,
+      `the ${difficultyLabel(d)} payout stores the wallet and the record`);
+  }
+
+  // Step 4: a replay pays only past the record.
+  for (const d of ['easy', 'medium', 'hard']) {
+    onLevel(d);
+    g.paid.set(coinKey(SELFTEST_CODE, d), 1);
+    keep();
+    const was = g.wallet;
+    oneTombOn(g, 0);
+    need(g.wallet === was, `a replay at the record pays nothing at ${difficultyLabel(d)}`);
+    oneTombOn(g, 1);
+    need(g.wallet - was === rates[d], `a tomb past the record pays ${rates[d]} once at ${difficultyLabel(d)}`);
+    need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[coinKey(SELFTEST_CODE, d)] === 2,
+      `the ${difficultyLabel(d)} replay stores the wallet and the record`);
+  }
+
+  // Step 5: the coins earned this run equal the wallet's gain since BEGIN.
+  clearCoins();
+  onLevel('medium');
+  g.screen = 'title';
+  draw(g, 0);
+  click('title', 'begin');
+  const start = g.wallet;
+  walkToCoin(g, firstCoin(g.world));
+  oneTombOn(g, 0);
+  need(g.earned > 0 && g.earned === g.wallet - start, 'the coins earned this run equal the wallet\'s gain');
+  endRun(g);
+  draw(g, 0);
+  need(g.earned === g.wallet - start, 'the end screen keeps the coins earned');
+  click('over', 'continue');
+  need(g.screen === 'play' && g.earned === g.wallet - start, 'CONTINUE keeps the coins earned this run');
+  oneTombOn(g, 1);
+  need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
+  draw(g, 0);
+}
+
 const DIRS = {
   ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
 };
@@ -555,9 +738,53 @@ function writeBest(code, difficulty, solved) {
   if (all[key] === undefined || solved > all[key]) { all[key] = solved; store(KEY_BEST, JSON.stringify(all)); }
 }
 
+/** The wallet, the collected set and the payout record as stored; absent or malformed reads as empty. */
+function readCoinState() {
+  return { wallet: parseWallet(load(KEY_WALLET)), coins: parseCollected(load(KEY_COINS)), paid: parsePaid(load(KEY_PAID)) };
+}
+
+/** The collected set of the game's seed and level, which a run's sim fills as it takes coins. */
+function collectedSet(g) {
+  const key = coinKey(g.code, g.world.difficulty);
+  let set = g.coins.get(key);
+  if (!set) {
+    set = new Set();
+    g.coins.set(key, set);
+  }
+  return set;
+}
+
+/** Adds n coins to the wallet and to the coins earned this run, and stores the wallet. */
+function earn(g, n) {
+  g.wallet += n;
+  g.earned += n;
+  store(KEY_WALLET, String(g.wallet));
+}
+
+/** A touched coin: the sim already holds its key in the collected set. */
+function collectCoin(g) {
+  earn(g, 1);
+  store(KEY_COINS, serializeCollected(g.coins));
+}
+
+/** Pays the tombs the run has climbed past the highest count already paid on this seed and level. */
+function payTombs(g) {
+  const key = coinKey(g.code, g.world.difficulty);
+  const record = g.paid.get(key) || 0;
+  const count = tombCount(g.sim);
+  const due = tombPayout(g.world.difficulty, record, count);
+  if (due === 0) return;
+  g.paid.set(key, count);
+  earn(g, due);
+  store(KEY_PAID, serializePaid(g.paid));
+}
+
 /** State shared by input, tick and draw. */
 function createGame() {
   return {
+    ...readCoinState(),
+    // The coins the wallet has gained since the run began; Continue carries them.
+    earned: 0,
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
     // Key edges since the last tick: KEY bits pressed and released, and a jump press.
     press: 0, release: 0, jump: false,
@@ -583,7 +810,7 @@ function useCode(g, code) {
   g.code = code;
   g.world = createWorld(code, { difficulty: g.difficulty });
   g.renderer = createRenderer(view, g.world);
-  g.preview = createSim(g.world, g.world.startPoint());
+  g.preview = createSim(g.world, g.world.startPoint(), null, { collected: collectedSet(g) });
   titleCam(g);
 }
 
@@ -616,7 +843,8 @@ function begin(g, p = null, carry = null) {
     const { x, y } = boardOfPos(p);
     start = g.world.resumePoint(x, y);
   }
-  g.sim = createSim(g.world, start, carry);
+  g.sim = createSim(g.world, start, carry, { collected: collectedSet(g) });
+  if (!carry) g.earned = 0;
   g.open = null;
   play(g);
 }
@@ -759,6 +987,7 @@ function handleEvents(g) {
     else if (ev === 'ember' || ev === 'over') g.audio.play(ev);
     if (ev === 'solved') { g.audio.play('band'); writeBest(g.code, g.world.difficulty, s.solved.size); }
     if (ev === 'entry') writeSave(g, entryCode(g));
+    if (ev === 'coin') collectCoin(g);
     if (ev === 'seam') g.world.retain(s.bd.u, s.bd.v);
   }
 }
@@ -787,6 +1016,7 @@ function tick(g) {
   if (g.screen !== 'play') return;
   stepSim(g);
   handleEvents(g);
+  payTombs(g);
   soundCues(g);
   followCam(g.cam, g.sim);
   if (g.sim.state === 'over') endRun(g);
@@ -886,13 +1116,14 @@ function drawPause(g, t = 0) {
 
 function drawOver(g) {
   const r = g.renderer, s = g.sim;
-  r.panel(40, 34, 240, 112);
+  r.panel(40, 34, 240, 124);
   r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
   r.text(`TOMBS CLIMBED  ${s.solved.size}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
-  r.text(saveLabel(g.copied), VIEW_W / 2, 96, 'a', { align: 'center' });
-  r.text(`${entryCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 108, 'i', { align: 'center' });
-  r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 126, 'b', { align: 'center' });
+  r.text(`COINS  ${g.earned}`, VIEW_W / 2, 92, 'c', { align: 'center' });
+  r.text(saveLabel(g.copied), VIEW_W / 2, 108, 'a', { align: 'center' });
+  r.text(`${entryCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 120, 'i', { align: 'center' });
+  r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 138, 'b', { align: 'center' });
 }
 
 function draw(g, t) {
@@ -900,7 +1131,7 @@ function draw(g, t) {
     drawTitle(g, t);
   } else {
     g.renderer.scene(g.sim, g.cam, t);
-    g.renderer.hud(g.sim);
+    g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
   }

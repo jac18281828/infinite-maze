@@ -41,6 +41,13 @@ and no assets.
   about 1 in 6 at EASY, 1 in 8 at MEDIUM and 1 in 12 at HARD.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
+- Coins lie on the floors of dead ends, about one dead end in twenty. Touch one
+  to take it. Each tomb the run solves past its best on that seed and level
+  pays 1 coin at EASY, 2 at MEDIUM and 5 at HARD, and a replay pays only past
+  its best. The wallet shows under `TOMB n`; the end screen shows the coins
+  earned this run. The game keeps the wallet, one per device, and the coins
+  taken and payout record, per seed and level, in `localStorage`. Nothing buys
+  with coins yet.
 - The score counts tombs solved: a tomb is solved when the explorer leaves it
   through its exit door, if it lies on the way on from the run's start tomb:
   that tomb, the tomb its exit leads to, and so on. A tomb off that way on

@@ -2,12 +2,14 @@
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
-  BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS,
+  BRAZIER, COIN, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS,
 } from './art.mjs';
 import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
 import { BW, BH, DX, DY } from '../world/board.mjs';
 import { signs, signSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
+import { floorItems, itemSpot } from '../world/floor.mjs';
+import { coinId } from './wallet.mjs';
 import { boardMask, MASK_W } from './mask.mjs';
 import { fixtureSets, dustMotes, maskRow, signSpot, ROLE } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
@@ -77,6 +79,7 @@ export function createRenderer(canvas, world) {
   const signGlyphs = SIGNS.map((rows) => spriteCanvas(rows));
   const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
   const brazier = spriteCanvas(BRAZIER);
+  const coin = spriteCanvas(COIN);
   const flames = FLAME.map((f) => spriteCanvas(f));
   const torches = TORCH.map((f) => spriteCanvas(f));
   const ember = spriteCanvas(['.n.', 'nop', '.n.']);
@@ -294,6 +297,18 @@ export function createRenderer(canvas, world) {
     return lit;
   }
 
+  /** Draws the coins of the lit boards that `collected` (a set of coin keys) lacks, resting on the floor. */
+  function drawItems(lit, sx, sy, collected) {
+    for (const [bx, by] of lit) {
+      const bd = world.board(bx, by);
+      for (const { cell, kind } of floorItems(world, bd)) {
+        if (kind !== 'coin' || (collected && collected.has(coinId(bd, cell)))) continue;
+        const [x, y] = itemSpot(bd, cell);
+        ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
+      }
+    }
+  }
+
   function drawFlames(lit, sx, sy, t) {
     for (const [bx, by, art] of lit) {
       const wx = bx * BOARD_W, wy = by * BOARD_H;
@@ -363,6 +378,7 @@ export function createRenderer(canvas, world) {
     acc.fill(0);
     drawBackground(cx, cy);
     const lit = drawBoards(cx, cy, sx, sy);
+    drawItems(lit, sx, sy, sim ? sim.collected : null);
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
@@ -383,7 +399,8 @@ export function createRenderer(canvas, world) {
     }
   }
 
-  function hud(sim) {
+  /** The torch bar, TOMB n, and under it the wallet: the coin sprite, then the count growing leftward. */
+  function hud(sim, wallet = 0) {
     const frac = sim.burn / BURN_S;
     ctx.fillStyle = pal('0');
     ctx.fillRect(5, 5, 62, 7);
@@ -401,6 +418,9 @@ export function createRenderer(canvas, world) {
       text('EMBER', 70, 5, 'o');
     }
     text(`TOMB ${sim.solved.size}`, VIEW_W - 5, 5, 'm', { align: 'right' });
+    const count = String(wallet);
+    text(count, VIEW_W - 5, 14, 'm', { align: 'right' });
+    ctx.drawImage(coin, VIEW_W - 5 - (count.length * (FONT_W + 1) - 1) - 2 - 6, 14);
   }
 
   /** Draws board outline `o` in the current fill, open at each crossed door. */

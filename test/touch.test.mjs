@@ -265,7 +265,7 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty and pause-key rule broken.
+// zoom guard dropped and each difficulty, pause-key and coin rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -282,7 +282,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty or pause-key rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key or coin rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -295,7 +295,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     const zoomable = html.replace('stopDoubleTapZoom();', '');
     assert.equal(html.split('stopDoubleTapZoom();').length, 2);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
-    // Each difficulty and pause-key rule broken in turn: [from, to, the leg's first miss].
+    // Each difficulty, pause-key and coin rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
@@ -309,6 +309,12 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["if (e.code === 'KeyP' || e.key === 'Escape') {\n    g.screen = 'pause';", "if (e.key === 'Escape') {\n    g.screen = 'pause';", /^fail: touch PAUSE reaches pause and stores a save/],
       ["if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", "if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", /^fail: touch RESUME returns to play/],
       ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
+      ['function readCoinState() {\n', 'function readCoinState() {\n  return { wallet: 0, coins: new Map(), paid: new Map() };\n', /^fail: touch boot reads the wallet and the collected set/],
+      ["if (ev === 'coin') collectCoin(g);", "if (ev === 'coin') void g;", /^fail: touch touching the first coin adds one to the wallet/],
+      ['if (s.collected.has(id)) continue;', 'if (false) continue;', /^fail: touch a collected coin credits nothing on a new run/],
+      ['const COIN_RATE = { easy: 1, medium: 2, hard: 5 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1 };', /^fail: touch a new best tomb pays 5 at HARD/],
+      ['const record = g.paid.get(key) || 0;', 'const record = 0;', /^fail: touch a replay at the record pays nothing at EASY/],
+      ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

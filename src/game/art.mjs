@@ -661,6 +661,16 @@ export const BRAZIER = [
   '...kkkkkkkkkk...',
 ];
 
+// Floor coin and wallet icon, 6x6 in gold.
+export const COIN = [
+  '..kk..',
+  '.kmmk.',
+  'kmmlmk',
+  'kmllmk',
+  '.klmk.',
+  '..kk..',
+];
+
 export const FLAME = [
   [
     '......j.....',
@@ -784,7 +794,7 @@ export function artSets() {
   return {
     explorer: Object.values(EXPLORER).flat(),
     rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
-    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], flame: FLAME, torch: TORCH,
+    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], coin: [COIN], flame: FLAME, torch: TORCH,
     font: Object.values(FONT_ROWS),
   };
 }

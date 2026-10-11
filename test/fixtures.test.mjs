@@ -4,13 +4,14 @@ import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import { createSim, nodeXY } from '../src/game/sim.mjs';
-import { RGB, idx, SIGNS, SCONCE_FLAME } from '../src/game/art.mjs';
+import { RGB, idx, SIGNS, SCONCE_FLAME, COIN } from '../src/game/art.mjs';
+import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import {
   fixtureSets, ladderPixels, sconcePixels, signPixels, signSpot, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
 } from '../src/game/fixtures.mjs';
 import { junctions, signs, signSide } from '../src/world/signs.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
-import { createRenderer } from '../src/game/render.mjs';
+import { createRenderer, spriteCanvas } from '../src/game/render.mjs';
 
 const world = createWorld('00000000');
 const NE = 16, NW = 32;
@@ -426,5 +427,50 @@ test('the renderer draws the motes of its world position, whatever the explorer 
       const wx = x + cx - 160, wy = cy + 90 - y;
       assert.ok(all.some((m) => Math.abs(m.x - wx) <= 0.51 && Math.abs(m.y - wy) <= 0.51), `mote at ${wx}, ${wy} is not in the world`);
     }
+  }
+});
+
+// Floor coins and the wallet.
+const coinSprite = spriteCanvas(COIN);
+const isCoin = ([src]) => src.width === 6 && src.height === 6 && Buffer.from(src.data).equals(Buffer.from(coinSprite.data));
+const coinBoard = boards.find(({ bd }) => floorItems(world, bd).length > 1);
+
+test('a scene draws the coin sprite at each uncollected coin\'s floor point, and none for a collected one', () => {
+  assert.ok(coinBoard, 'the sample holds a board with coins');
+  const { bd } = coinBoard;
+  for (const { cell } of floorItems(world, bd)) {
+    const [wx, wy] = itemSpot(bd, cell);
+    const cam = { x: wx, y: wy + 18 };
+    const cx = Math.round(cam.x), cy = Math.round(cam.y);
+    // The 6x6 sprite rests on the floor point: bottom row at the point's pixel row.
+    const want = [Math.round(wx) - cx + 160 - 3, cy - Math.round(wy) + 90 - 6];
+    const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isCoin).map(([, x, y]) => [x, y]); };
+    const taken = new Set();
+    const sim = createSim(world, { board: bd, cell: bd.a }, null, { collected: taken });
+    assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `coin at cell ${cell} drawn at ${want}`);
+    assert.ok(drawn(null).some(([x, y]) => x === want[0] && y === want[1]), 'a scene with no explorer draws it too');
+    // The light map multiplies the scene last, so a coin drawn after it would stay bright in the dark.
+    renderBoard(bd, sim, cam, 0);
+    const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
+    const coin = view.draws.findIndex(isCoin);
+    assert.ok(coin >= 0 && lit > coin, `coin draw ${coin} precedes the light map draw ${lit}`);
+    taken.add(`${bd.x},${bd.y},${cell}`);
+    assert.ok(!drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `collected coin at cell ${cell} is gone`);
+  }
+});
+
+test('hud draws the wallet under TOMB n: the coin sprite, then the count right-aligned at x 315 with its top row at y 14', () => {
+  const { bd } = coinBoard;
+  const sim = createSim(world, { board: bd, cell: bd.a });
+  for (const wallet of [0, 7, 123, 40500]) {
+    view.draws.length = 0;
+    renderer.hud(sim, wallet);
+    const coins = view.draws.filter(isCoin);
+    const width = String(wallet).length * 6 - 1;
+    assert.equal(coins.length, 1);
+    assert.deepEqual(coins[0].slice(1), [315 - width - 2 - 6, 14]);
+    // One glyph per digit, 6 px apart, the last ending at x 315.
+    const glyphs = view.draws.filter((d) => d.length === 5 && d[2] === 14).map((d) => d[1]);
+    assert.deepEqual(glyphs, Array.from(String(wallet), (_, i) => 315 - width + 6 * i));
   }
 });

@@ -4,6 +4,8 @@
 // door. A let-go drops from a ladder over its lower cell. Runs on a fixed
 // 60 Hz tick; no DOM.
 import { DX, DY, BW, NCELL } from '../world/board.mjs';
+import { floorItems, itemSpot } from '../world/floor.mjs';
+import { coinId } from './wallet.mjs';
 
 export const TICK = 1 / 60;
 export const CELL = 48;
@@ -121,8 +123,20 @@ function onWayOn(s, u, v) {
   return w.tombs.has(`${u},${v}`);
 }
 
-/** A run from `start` = { board, cell }, standing on the door's cell. */
-export function createSim(world, start, carry = null) {
+/**
+ * The run's tomb count: the tombs solved on its way on, which the HUD shows as
+ * TOMB n. Coin code reads the count here and nowhere else.
+ */
+export function tombCount(s) {
+  return s.solved.size;
+}
+
+/**
+ * A run from `start` = { board, cell }, standing on the door's cell. `collected`
+ * is the game's set of "x,y,cell" keys of the coins already taken on this seed
+ * and level; the sim adds a key on each pickup and touches no storage.
+ */
+export function createSim(world, start, carry = null, { collected = new Set() } = {}) {
   const s = {
     world, bd: start.board, cell: start.cell,
     mode: 'floor', off: 0, alt: 0, vy: 0, link: -1, to: null, prog: 0, len: 0,
@@ -139,6 +153,7 @@ export function createSim(world, start, carry = null) {
     stats: {
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
     },
+    collected,
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
@@ -428,16 +443,37 @@ export function feet(s) {
   return [nx + DX[s.link] * k, ny + DY[s.link] * k];
 }
 
+/** The boards the feet touch: the current one, and the far one while a link crosses a seam. */
+function touchBoards(s) {
+  return s.mode === 'link' && s.to.board !== s.bd ? [s.bd, s.to.board] : [s.bd];
+}
+
 function flameTouch(s) {
   const [fx, fy] = feet(s);
-  const boards = s.mode === 'link' && s.to.board !== s.bd ? [s.bd, s.to.board] : [s.bd];
-  for (const bd of boards) {
+  for (const bd of touchBoards(s)) {
     for (const cell of s.world.flamesAt(bd.x, bd.y)) {
       const [x, y] = nodeXY(bd, cell);
       if (Math.abs(fx - x) <= TOUCH && Math.abs(fy - y) <= TOUCH) return true;
     }
   }
   return false;
+}
+
+/** Takes each uncollected coin the feet touch, once, pushing 'coin' for it. */
+function coinTouch(s) {
+  const [fx, fy] = feet(s);
+  for (const bd of touchBoards(s)) {
+    for (const { cell, kind } of floorItems(s.world, bd)) {
+      if (kind !== 'coin') continue;
+      const id = coinId(bd, cell);
+      if (s.collected.has(id)) continue;
+      const [x, y] = itemSpot(bd, cell);
+      if (Math.abs(fx - x) <= TOUCH && Math.abs(fy - y) <= TOUCH) {
+        s.collected.add(id);
+        s.events.push('coin');
+      }
+    }
+  }
 }
 
 /** Records the one link or door that joins the cell the tick began on to the current cell. */
@@ -487,6 +523,7 @@ export function step(s, h, v, jump = false, edges = NO_EDGES) {
     if (s.ember <= 0) { s.ember = 0; s.state = 'over'; s.events.push('over'); }
   }
   s.touching = touch;
+  coinTouch(s);
   return s;
 }
 

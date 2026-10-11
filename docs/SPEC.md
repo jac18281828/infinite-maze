@@ -106,6 +106,7 @@ the same world on every engine.
 | Flame cell | `H("flame", x, y)` u32 at bytes 4–7 mod 84 | any of the 84 cells |
 | Sign at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 48 | carved when under 8 (EASY), 6 (MEDIUM), 4 (HARD) or 3 (ULTIMATE) |
 | Corner of a sign | `H("sign", x, y, cell)` u32 bit 31 | left, right |
+| Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
 
 Both boards on a shared wall read the same door key, and both tombs on a
 shared tomb wall read the same crossing key, so door positions match across
@@ -263,6 +264,19 @@ Generation is lazy. The game holds the tombs within one of the explorer's in
 both axes, and builds a board when it first comes within one board of the
 camera.
 
+**Floor items.** A dead-end cell is a carved cell of a tree board with exactly
+one tree link, no door and no flame, where a flame is any in the board's flame
+set: gap flames and a dead-end board's deepest-cell flame included. The flame
+cell of §2, which the carve protects whether or not it burns, stays eligible.
+A rock board has none. An ordered item list names each kind, its hash tag and
+its percentage, and a dead-end cell takes the first kind whose
+`u32(H(tag, x, y, cell)) mod 100` falls below its percentage, so two items
+never share a cell. One kind ships, the coin, at 5 under the tag `coin`. Items
+are read off a built board and built into none, and the difficulty enters no
+tag and no percentage, so every pinned digest stands. On seed `0000-0000`,
+tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`, a tree board holds 6.5 to 6.6 dead-end
+cells and 4.4% to 5.2% of them hold a coin, by level.
+
 ## 5. Save code
 
 A position is one integer that pairs the board's signed coordinates. With
@@ -292,12 +306,14 @@ title, and the code reads at the difficulty in force:
   moves to match. A typed save code plays at the title setting.
 
 Resuming lights the torch to full. Flames never run out, so the save carries
-no pickup state. The game separately keeps the most tombs solved, as the
-score, per seed and difficulty; HARD keeps the bare seed code as its key.
+no pickup state, and it carries none of the coins taken: those live under a
+key of their own per seed and level, below. The game separately keeps the most
+tombs solved, as the score, per seed and difficulty; HARD keeps the bare seed
+code as its key.
 
 Browser storage holds the plane's values under keys of their own, so a
 value from the stacked world that came before never reads as a position or
-a score:
+a score. The wallet depends on no world layout and keeps a plain key:
 
 | Key | Holds |
 |---|---|
@@ -305,6 +321,26 @@ a score:
 | `infinite-maze.plane.save.difficulty` | the save's difficulty |
 | `infinite-maze.plane.best` | the best per seed and difficulty |
 | `infinite-maze.difficulty` | the title setting |
+| `infinite-maze.wallet` | the wallet, a decimal integer, one per device |
+| `infinite-maze.plane.coins` | the coins taken, JSON `{"<code>:<LEVEL>": ["x,y,cell", …]}` |
+| `infinite-maze.plane.coins.paid` | the payout record, JSON `{"<code>:<LEVEL>": n}` |
+
+**Coins.** Touching a coin of §4, the feet within 12 px of its floor point in
+x and in y, as for a flame, adds one coin to the wallet and its key `x,y,cell`
+to the collected set of the seed and level. The coin is then gone from every
+later run of that seed and level. A key holds a board's coordinates and a
+cell, never `p`, so it holds in any world layout. `<code>` is the seed code
+unformatted and `<LEVEL>` the difficulty label, as in `K7Q2M9XA:MEDIUM`.
+
+A run also earns coins for tombs. The record holds the highest tomb count
+already paid for a seed and level, 0 when absent. When the run's tomb count
+(the score of §8) rises above it, the wallet gains the rate times the rise and
+the record becomes the count. The rate is 1 per tomb at EASY, 2 at MEDIUM and
+5 at HARD, set by the world's difficulty alone. A replay pays only past its
+record, and a resumed save counts from 0 and pays once its run climbs past the
+record. The game holds the three values in memory from boot and writes each
+through on every change. Absent, blocked or malformed storage reads as empty,
+and the game plays on.
 
 ## 6. Movement
 
@@ -464,6 +500,19 @@ its solved set, so the run keeps one way on; resuming a save or typing a code
 starts a new run with its own start tomb. The HUD's `TOMB n`, the pause
 header's `TOMB n`, the title's `BEST TOMB` and the end screen's `TOMBS
 CLIMBED` show that count.
+
+**Coins.** A coin is a gold sprite at most 6×6 px. It rests on the floor 12 px
+from its cell's standing point, on the side away from the cell's one link, or
+east of a ladder, which keeps it off the corridor mouth, the ladder shaft and
+the stair. The scene draws it after the boards and before the light map, so
+the torch, sconces and flames light it and it is dark where they are. It is
+never baked into the board art, and a collected coin is not drawn. The HUD
+shows the wallet under `TOMB n` at the top right: the coin sprite, then the
+count right-aligned at x 315 with its top row at y 14, growing leftward. The
+end screen has a row `COINS n` inside its panel: every coin the wallet gained
+during the run, from the floor and from tombs. The count carries through
+Continue and through pause, title and resume of the open run, and restarts on
+BEGIN, on RESUME from a stored save and on a typed code.
 
 **Labels.** The title's panel holds a difficulty row naming EASY, MEDIUM and
 HARD with the setting lit, and its save line names the save's difficulty. Its
