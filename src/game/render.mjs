@@ -2,17 +2,17 @@
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
-  BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS,
+  BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS,
 } from './art.mjs';
 import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
 import { BW, BH, DX, DY } from '../world/board.mjs';
-import { signs, signSide } from '../world/signs.mjs';
+import { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { floorItems, itemSpot } from '../world/floor.mjs';
 import { windDir } from '../world/wind.mjs';
 import { coinId } from './wallet.mjs';
 import { boardMask, MASK_W } from './mask.mjs';
-import { fixtureSets, dustMotes, maskRow, signSpot, ROLE } from './fixtures.mjs';
+import { fixtureSets, dustMotes, maskRow, arrowSpot, skeletonSpot, skeletonPose, ROLE } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
 
 export const VIEW_W = 320;
@@ -24,6 +24,13 @@ const AMBIENT = [12, 9, 22];
 // Palette character of each stair role.
 const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 export const MAP_SCALE = 3;
+// Seconds of burn below half over which tier-2 skeletons fade in.
+export const BOOST_FADE_S = 10;
+
+/** Opacity of the tier-2 skeletons at `burn`: 0 at half the torch, 1 BOOST_FADE_S below it. */
+export function boostAlpha(burn) {
+  return Math.min(1, Math.max(0, (BURN_S / 2 - burn) / BOOST_FADE_S));
+}
 // Dust drift in a windy branch (spec section 8): world px/s, reached and
 // shed within a second, and the longest frame step the game loop allows.
 export const WIND_SPEED = 12;
@@ -81,7 +88,9 @@ export function createRenderer(canvas, world) {
   }
   const ladder = spriteCanvas(LADDER);
   const sconce = spriteCanvas(SCONCE);
-  const signGlyphs = SIGNS.map((rows) => spriteCanvas(rows));
+  const arrowGlyphs = ARROWS.map((rows) => spriteCanvas(rows));
+  const skeletonSprites = SKELETONS.map((rows) => [spriteCanvas(rows), spriteCanvas(rows, true)]);
+  const boostCache = new WeakMap();
   const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
   const brazier = spriteCanvas(BRAZIER);
   const coin = spriteCanvas(COIN);
@@ -127,11 +136,17 @@ export function createRenderer(canvas, world) {
     return c;
   }
 
-  /** Ladders, stairs, sconces, signs and braziers of board `bd`, in board pixels. */
+  /** Skeleton spots of the junctions `list` of board `bd`. */
+  function skeletonSpots(bd, list) {
+    return list.map(({ cell, dir }) => skeletonSpot(cell, skeletonSide(world, bd, cell, dir), dir));
+  }
+
+  /** Ladders, stairs, sconces, arrows, tier-1 skeletons and braziers of board `bd`, in board pixels. */
   function boardFixtures(bd, mask) {
-    if (!bd) return { flights: [], stairs: null, ledge: null, ladders: [], sconces: [], signs: [], braziers: [] };
+    if (!bd) return { flights: [], stairs: null, ledge: null, ladders: [], sconces: [], arrows: [], skeletons: [], braziers: [] };
     const fx = fixtureSets(bd, mask);
-    fx.signs = signs(world, bd).map(({ cell, dir }) => signSpot(cell, signSide(world, bd, cell), dir));
+    fx.arrows = arrows(world, bd).map(({ cell, dir }) => arrowSpot(cell, arrowSide(world, bd, cell), dir));
+    fx.skeletons = skeletonSpots(bd, skeletons(world, bd));
     fx.braziers = world.flamesAt(bd.x, bd.y).map((cell) => nodeXY({ x: 0, y: 0 }, cell));
     return fx;
   }
@@ -176,6 +191,22 @@ export function createRenderer(canvas, world) {
     g.putImageData(img, 0, 0);
   }
 
+  /** Sprite canvas of a skeleton spot [x, yTop, dir, side]. */
+  function skeletonSprite([, , dir, side]) {
+    const { pose, flip } = skeletonPose(side, dir);
+    return skeletonSprites[pose][flip ? 1 : 0];
+  }
+
+  /** The tier-2 skeleton spots of board `bd`, built once per board object. */
+  function boostSpots(bd) {
+    let spots = boostCache.get(bd);
+    if (!spots) {
+      spots = skeletonSpots(bd, boostSkeletons(world, bd));
+      boostCache.set(bd, spots);
+    }
+    return spots;
+  }
+
   function drawFixtures(g, fx) {
     const toY = (y) => BOARD_H - y;
     for (const [x, y0, y1] of fx.ladders) {
@@ -198,7 +229,8 @@ export function createRenderer(canvas, world) {
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
-    for (const [x, yTop, dir] of fx.signs) g.drawImage(signGlyphs[dir], x, toY(yTop + 1));
+    for (const [x, yTop, dir] of fx.arrows) g.drawImage(arrowGlyphs[dir], x, toY(yTop + 1));
+    for (const spot of fx.skeletons) g.drawImage(skeletonSprite(spot), spot[0], toY(spot[1] + 1));
   }
 
   function buildBoardCanvas(bd) {
@@ -324,6 +356,18 @@ export function createRenderer(canvas, world) {
     }
   }
 
+  /** Draws the tier-2 skeletons of the lit boards at opacity `alpha`; they sit under the light map like the walls. */
+  function drawBoost(lit, sx, sy, alpha) {
+    if (alpha <= 0) return;
+    ctx.globalAlpha = alpha;
+    for (const [bx, by] of lit) {
+      for (const spot of boostSpots(world.board(bx, by))) {
+        ctx.drawImage(skeletonSprite(spot), sx(bx * BOARD_W + spot[0]), sy(by * BOARD_H + spot[1] + 1));
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawFlames(lit, sx, sy, t) {
     for (const [bx, by, art] of lit) {
       const wx = bx * BOARD_W, wy = by * BOARD_H;
@@ -394,6 +438,7 @@ export function createRenderer(canvas, world) {
     drawBackground(cx, cy);
     const lit = drawBoards(cx, cy, sx, sy);
     drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
+    if (sim) drawBoost(lit, sx, sy, boostAlpha(sim.burn));
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();

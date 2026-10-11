@@ -51,10 +51,14 @@ and no assets.
   them hold a coin and 9.2%, 6.9%, 4.6% and 3.9% a jar, measured. Touch a jar
   to add 60 s of burn, up to a full torch, or to relight an ember. Jars return
   on every new run.
-- Some junctions on a route carry a carved arrow in the upper corner of the
-  room, pointing along the link toward the way on; they are always on and
-  about 1 in 6 at EASY, 1 in 8 at MEDIUM, 1 in 12 at HARD and 1 in 16 at
-  ULTIMATE.
+- Occasional hints mark the way on at a junction with a real choice; a link
+  into a one-room dead end is none. A carved arrow in the upper corner of the
+  room points along the link: about 1 junction in 12 at EASY, 1 in 16 at
+  MEDIUM, 1 in 24 at HARD and 1 in 32 at ULTIMATE. A skeleton slumped in a
+  lower corner points with its arm, at about one per tomb. A second set, about
+  as many again, shows only while the torch burns under half, fading in between
+  150 s and 140 s; a flame or a jar that lifts the torch to half or above hides
+  it. A junction holds at most one pointer, and all are always on.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
 - Coins lie on the floors of dead ends, about one dead end in twenty. Touch one

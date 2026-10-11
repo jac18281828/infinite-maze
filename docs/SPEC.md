@@ -105,8 +105,9 @@ the same world on every engine.
 | Board cell maze | sfc32 of `H("board", x, y, k)`, k = reroll | — |
 | Flame in a dead-end board | `H("flame", x, y)` byte 0 < 128 | 50% |
 | Flame cell | `H("flame", x, y)` u32 at bytes 4–7 mod 84 | any of the 84 cells |
-| Sign at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 48 | carved when under 8 (EASY), 6 (MEDIUM), 4 (HARD) or 3 (ULTIMATE) |
-| Corner of a sign | `H("sign", x, y, cell)` u32 bit 31 | left, right |
+| Pointer at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 1024 | tier-1 skeleton when under `t`, tier-2 skeleton when in `[t, 2t)`, arrow when in `[2t, 2t + a)`, with `t` 94 (EASY), 30 (MEDIUM), 17 (HARD) or 11 (ULTIMATE) and `a` 85, 64, 43 or 32 |
+| Corner of an arrow | `H("sign", x, y, cell)` u32 bit 31 | upper left, upper right |
+| Corner of a skeleton | `H("sign", x, y, cell)` u32 bit 31 | lower left, lower right: the corner of an up or down way; a way to the right prefers the left corner and a way to the left the right, and a gallery's side gives way (§8) |
 | Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
 | Oil jar | `H("oil", x, y, cell)` u32 mod 100 < 10, 7, 5 or 4 | on a dead-end cell (§4) with no coin; 10 at EASY, 7 at MEDIUM, 5 at HARD, 4 at ULTIMATE |
 | Wind | `H("wind", x, y, cell)` u32 mod 64 at a branch's first cell | windy when under `min(n, 18)` for a branch of `n` cells (§4) |
@@ -253,35 +254,58 @@ room only for a cell that holds a link or a door. Over the §10 window, boards
 average 40.7 carved cells and 4.59 galleries at EASY, 45.8 and 4.72 at
 MEDIUM, 50.6 and 5.03 at HARD and 50.7 and 5.02 at ULTIMATE.
 
-**Signs.** A sign junction is a cell of a route board (§3) on the tree path
-from an in-cell to the out-door's cell `o`, `o` excepted, with three or more
-real ways out. A way out is a tree link or a door. A tree link into a **stub**
-is no real way out: a stub is a carved cell with exactly one tree link and no
-door, and a source board's flame cell is never a stub, because the player
-arrives from it and does not see it as a closed room. Only a one-room stub
-drops out, and a longer dead end still counts. The out-door is the door in the
-board's route-exit direction, which leads toward the tomb's exit. The in-cells
-are where routes enter: the cell of each door whose far board is a route board
-leading back through it, which covers a route's predecessor, a tributary
-merging here and the upstream tomb's exit board beyond an in-door, and the
-flame cell of a source board `S`. These differ from the junctions above, which
-count cells on the primary path with a tree link off it, `b` included and doors
-not counted. Paths run from every in-cell, `o` has no sign because a sconce
-already marks its door, and doors count as ways out. A route board holds 3.9
-sign junctions on average at EASY, 5.7 at MEDIUM and 5.6 at HARD and ULTIMATE.
-The stub rule changes where signs stand and never the board: over tombs
+**Sign junctions.** A sign junction is a cell of a route board (§3) on the tree
+path from an in-cell to the out-door's cell `o`, `o` excepted, with three or
+more real ways out. A way out is a tree link or a door. A tree link into a
+**stub** is no real way out: a stub is a carved cell with exactly one tree link
+and no door, and a source board's flame cell is never a stub, because the player
+arrives from it and does not see it as a closed room. Only a one-room stub drops
+out, and a longer dead end still counts. The out-door is the door in the board's
+route-exit direction, which leads toward the tomb's exit. The in-cells are where
+routes enter: the cell of each door whose far board is a route board leading
+back through it, which covers a route's predecessor, a tributary merging here
+and the upstream tomb's exit board beyond an in-door, and the flame cell of a
+source board `S`. These differ from the junctions above, which count cells on
+the primary path with a tree link off it, `b` included and doors not counted.
+Paths run from every in-cell, `o` has no pointer because a sconce already marks
+its door, and doors count as ways out. A route board holds 3.9 sign junctions on
+average at EASY, 5.7 at MEDIUM and 5.6 at HARD and ULTIMATE. The stub rule
+changes where pointers stand and never the board: over tombs
 `u ∈ [−2, 2]` by `v ∈ [0, 19]` of seed `0000-0000` it removes 7, 4, 6 and 5
 cells out of 1158, 3478, 5844 and 9507 at EASY to ULTIMATE.
 
-A sign junction carries a sign when `u32(H("sign", x, y, cell)) mod 48` is
-under the level's threshold: 8 at EASY, 6 at MEDIUM, 4 at HARD and 3 at
-ULTIMATE, about 1 junction in 6, 8, 12 and 16. The level selects the threshold
-and enters no hash. A sign points along the tree link from its junction to the
-next cell of its path toward `o`: one of the eight link directions,
-galleries included. It names the link to take, not the distant door, and so
-points the way on. Dead-end boards carry no sign, because the route does not
-pass through them. Signs read the built board and enter no board, band or
-digest.
+**Pointers.** A sign junction holds at most one pointer, an arrow or a
+skeleton, by one hash. With `h = u32(H("sign", x, y, cell)) mod 1024`, the
+level's skeleton threshold `t` and its arrow width `a`, a junction holds:
+
+| Band | Pointer |
+|---|---|
+| `h < t` | tier-1 skeleton |
+| `t <= h < 2t` | tier-2 skeleton |
+| `2t <= h < 2t + a` | arrow |
+
+The thresholds `t` are 94 at EASY, 30 at MEDIUM, 17 at HARD and 11 at ULTIMATE,
+so each skeleton tier averages about one per tomb. The widths `a` are 85, 64, 43
+and 32, `round(1024 / N)` for an arrow at 1 junction in `N` = 12, 16, 24 and 32.
+The bands are disjoint, so no junction holds two pointers, and the arrow share
+stays at `a / 1024` of junctions whatever the skeletons do.
+
+| Level | Sign junctions per tomb | Tier 1 per tomb | Tier 2 per tomb | Arrows per tomb | Arrow share |
+|---|---|---|---|---|---|
+| EASY | 10.84 | 1.000 | 0.927 | 0.900 | 0.0830 |
+| MEDIUM | 34.10 | 1.086 | 1.030 | 2.100 | 0.0616 |
+| HARD | 60.08 | 0.939 | 1.020 | 2.620 | 0.0436 |
+| ULTIMATE | 90.64 | 1.064 | 0.893 | 2.816 | 0.0311 |
+
+Measured over the 440 tombs `u` −5..5 by `v` 0..39 of seed `0000-0000`. Each
+junction draws independently, so 36% to 42% of tombs hold no tier-1 skeleton
+and the most in one tomb is 4 to 6. The level selects the bands and enters no
+hash; tier 1 is the same set with or without tier 2 or the arrows. A pointer
+points along the tree link from its junction to the next cell of its path
+toward `o`: one of the eight link directions, galleries included. It names the
+link to take, not the distant door, and so points the way on. Dead-end boards
+carry no pointer, because the route does not pass through them. Pointers read
+the built board and enter no board, band or digest.
 
 Generation is lazy. The game holds the tombs within one of the explorer's in
 both axes, and builds a board when it first comes within one board of the
@@ -557,6 +581,10 @@ battery.
   A taken jar stays taken for the rest of its run and lies back on every new
   run: BEGIN, RESUME from a stored save, a typed code and Continue. Pause,
   title and resume of the open run keep its jars taken.
+- **Tier-2 skeletons:** §4's second tier shows only under half the burn. Its
+  opacity is `clamp((150 − burn) / 10, 0, 1)` with `burn` in seconds: 0 at 150
+  s, 1 at 140 s and in the ember. A flame or a jar that lifts the burn to 150 s
+  or above hides it on that tick. Tier 1 and the arrows show at every burn.
 
 Every tomb entry holds a flame. No stretch of any entry's way on takes more
 than 150 s to walk between flames, so a full torch covers the longest stretch
@@ -608,16 +636,53 @@ climbing explorer's head stays in air. Where a gallery starts in a cell, a
 ladder in that cell ends at the floor, and a bottom door's sconce stands
 clear of the flight.
 
-**Signs.** A sign is a carved arrow, at most 7×7 px, in one of eight glyphs,
+**Arrows.** An arrow is a carved glyph, at most 7×7 px, in one of eight glyphs,
 one per link direction (E N W S NE NW SW SE). It sits in an upper corner of its
 junction's room, in cell-local columns 8 to 15 or 32 to 39 (the hash picks
 the corner) and rows 31 to 37, clear of the sconce flame, which ends at row 29.
-Both corners of every sign junction hold room air and no ladder, stair, sconce
-or flame pixel. The board art draws the sign after the mask's shading, so it
-sits on the board layer at full brightness in front of the half-bright wall,
-and the light map lights it as it lights the walls. Signs are a deliberate,
-always-on exception to the rule that aids record and never point: they ship
-with no setting.
+Both upper corners of every sign junction hold room air and no ladder, stair,
+sconce or flame pixel. The board art draws the arrow after the mask's shading,
+so it sits on the board layer at full brightness in front of the half-bright
+wall, and the light map lights it as it lights the walls.
+
+**Skeletons.** A skeleton is a small, dim figure slumped in a lower corner of
+its junction's room, its arm pointing the way on. It fills a 7×10 px box on
+the floor, against the room's side edge: cell-local columns 9 to 15 for the
+left corner or 32 to 38 for the right, rows 8 to 17. The ladder's floor opening
+at columns 16 to 31 and the sconce, whose pixels start at row 20, lie outside
+it. The explorer is 16×24, so the skeleton stands under half its height. Where
+the room's side edge is a doorway, the skeleton sits beside it.
+
+- **Corner.** A way on to the right prefers the left corner, and one to the
+  left the right, so the arm reaches across the room toward the corridor. An up
+  or down way takes the hash's corner (§2). A corner is blocked when the
+  cell's gallery runs toward that side: a north-east or south-east link blocks
+  the right corner, a north-west or south-west link the left. A blocked
+  preferred corner gives way to the other. A cell holds at most one gallery, so
+  one corner is always clear; the preferred corner is clear at 85% to 87% of
+  sign junctions. A corner box holds room air, solid floor beneath it and no
+  ladder, stair, stair-ledge, sconce or sconce-flame pixel exactly when its
+  side is not blocked.
+- **Poses.** Four poses, drawn for the left corner with column 0 at the side
+  edge and column 6 toward the room, each with its skull in rows 1 to 3 and
+  one `9` pixel, the fingertip. Right: the arm out at shoulder height, the
+  fingertip in column 6, row 3 to 5. Left: the arm across the body toward the
+  side edge, the fingertip in column 0, row 3 to 5. Up: the arm raised above the
+  skull, the fingertip in row 0. Down: the arm reaching to the floor in front of
+  the legs, the fingertip in row 9. The galleries fold to the key the player
+  presses: a north, north-east or north-west link is up and a south, south-west
+  or south-east link down. The right corner draws each pose mirrored, column `c`
+  to `6 − c`, so its left pose stands for right and its right pose for left.
+- **Palette.** Palette `5` to `9`, umber to sandstone, so a skeleton sits
+  darker than the stair treads and the bone white.
+- **Tiers.** Tier 1 draws on the board layer after the mask's shading, as the
+  stair and the ladder do, at every burn. Tier 2 draws in the scene after the
+  boards and the floor items and before the flames and the light map, at the
+  opacity §7 gives, and draws nothing with no explorer. The light map lights
+  both as it lights the walls, the sconces and flames included.
+
+Arrows and skeletons are a deliberate, always-on exception to the rule that
+aids record and never point: they ship with no setting.
 
 **Score.** A tomb is solved when the explorer leaves it through its exit
 door, and only if it lies on the run's way on: the run's start tomb, the tomb

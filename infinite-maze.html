@@ -2989,9 +2989,9 @@ const SCONCE_FLAME = [
   ['..q.....', '..qp....', '..pqp...', '..ono...'],
 ];
 
-// Signs carved at a junction, 7x7, one per direction in DX, DY order: E N W S
+// Arrows carved at a junction, 7x7, one per direction in DX, DY order: E N W S
 // NE NW SW SE. Each arrow points along the link it names.
-const SIGNS = [
+const ARROWS = [
   [
     '...9...',
     '....9..',
@@ -3063,6 +3063,61 @@ const SIGNS = [
     '....9.9',
     '.....99',
     '...9999',
+  ],
+];
+
+// Skeletons slumped in a lower room corner, 7x10, one pose per way on in DX
+// order: E N W S. Each is drawn for the left corner, column 0 at the room's
+// side edge, and its one `9` pixel is the fingertip pointing the way. Only
+// palette 5-9 keep it dimmer than the stair treads and the bone white.
+const SKELETONS = [
+  [
+    '.......',
+    '.888...',
+    '.868...',
+    '.878...',
+    '.788889',
+    '.787...',
+    '.767...',
+    '.78....',
+    '.78888.',
+    '7788778',
+  ],
+  [
+    '.....9.',
+    '.888.8.',
+    '.868.8.',
+    '.878.8.',
+    '.78888.',
+    '.787...',
+    '.767...',
+    '.78....',
+    '.78888.',
+    '7788778',
+  ],
+  [
+    '.......',
+    '..888..',
+    '..868..',
+    '..878..',
+    '98888..',
+    '.787...',
+    '.767...',
+    '.78....',
+    '.78888.',
+    '7788778',
+  ],
+  [
+    '.......',
+    '.888...',
+    '.868...',
+    '.878...',
+    '.78888.',
+    '.78..8.',
+    '.76..8.',
+    '.78..8.',
+    '.788.8.',
+    '7778.9.',
   ],
 ];
 
@@ -3225,11 +3280,11 @@ function artSets() {
   return {
     explorer: Object.values(EXPLORER).flat(),
     rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
-    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], coin: [COIN], jar: [JAR], flame: FLAME, torch: TORCH,
+    sconceFlame: SCONCE_FLAME, arrow: ARROWS, skeleton: SKELETONS, brazier: [BRAZIER], coin: [COIN], jar: [JAR], flame: FLAME, torch: TORCH,
     font: Object.values(FONT_ROWS),
   };
 }
-return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, SIGNS, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, artSets };
+return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, ARROWS, SKELETONS, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, artSets };
 })();
 
 // src/world/signs.mjs
@@ -3237,17 +3292,22 @@ const __m12 = (() => {
 const { NCELL, cellNeighbor } = __m2;
 const { BDX, BDY } = __m3;
 const { u32 } = __m1;
-// Signs (spec section 4): a glyph carved at some junctions of a route board
-// that points along the link toward the way on. Signs derive from a built
-// board and the hash alone; they enter no board, band or digest.
+// Pointers (spec section 4): at some junctions of a route board, an arrow
+// carved in the wall or a skeleton slumped in a corner, each pointing along
+// the link toward the way on. They derive from a built board and the hash
+// alone; they enter no board, band or digest. The module keeps its name
+// because wind imports `wayOn`.
 
 
 
 
-const SIGN_MOD = 48;
-// A sign junction carries a sign when its hash mod SIGN_MOD is under the
-// level's threshold: about 1 in 6, 8, 12 and 16.
-const SIGN_THRESHOLD = { easy: 8, medium: 6, hard: 4, ultimate: 3 };
+const SIGN_MOD = 1024;
+// One hash mod SIGN_MOD gives a junction at most one pointer, by band:
+// [0, t) a tier-1 skeleton, [t, 2t) a tier-2 skeleton and [2t, 2t + a) an
+// arrow. Each tier holds about one skeleton per tomb. The arrow band is
+// round(SIGN_MOD / N): arrows at 1 junction in N = 12, 16, 24 and 32.
+const SKELETON_THRESHOLD = { easy: 94, medium: 30, hard: 17, ultimate: 11 };
+const ARROW_THRESHOLD = { easy: 85, medium: 64, hard: 43, ultimate: 32 };
 
 const ways = (m) => {
   let n = 0;
@@ -3324,17 +3384,52 @@ function junctions(world, bd) {
 
 const signHash = (world, bd, cell) => u32(world.H('sign', bd.x, bd.y, cell));
 
-/** The sign junctions of `bd` whose hash passes the level's threshold. */
-function signs(world, bd) {
-  const t = SIGN_THRESHOLD[world.difficulty];
-  return junctions(world, bd).filter(({ cell }) => signHash(world, bd, cell) % SIGN_MOD < t);
+/** The junctions of `bd` whose hash mod SIGN_MOD lies in [lo, hi). */
+const hashBand = (world, bd, lo, hi) =>
+  junctions(world, bd).filter(({ cell }) => {
+    const h = signHash(world, bd, cell) % SIGN_MOD;
+    return h >= lo && h < hi;
+  });
+
+/** Tier 1, shown at every burn: the junctions whose hash lies in [0, t). */
+function skeletons(world, bd) {
+  return hashBand(world, bd, 0, SKELETON_THRESHOLD[world.difficulty]);
 }
 
-/** The upper corner of the cell's room that carries its sign: 0 left, 1 right. */
-function signSide(world, bd, cell) {
+/** Tier 2, shown under half the burn: the junctions whose hash lies in [t, 2t). */
+function boostSkeletons(world, bd) {
+  const t = SKELETON_THRESHOLD[world.difficulty];
+  return hashBand(world, bd, t, 2 * t);
+}
+
+/** The junctions whose hash lies in [2t, 2t + a). */
+function arrows(world, bd) {
+  const t = SKELETON_THRESHOLD[world.difficulty];
+  return hashBand(world, bd, 2 * t, 2 * t + ARROW_THRESHOLD[world.difficulty]);
+}
+
+/** The upper corner of the cell's room that carries its arrow: 0 left, 1 right. */
+function arrowSide(world, bd, cell) {
   return signHash(world, bd, cell) >>> 31;
 }
-return { SIGN_MOD, SIGN_THRESHOLD, wayOn, junctions, signs, signSide };
+
+// Link bits of a gallery that runs toward the right (NE, SE) and the left (NW, SW).
+const GALLERY_RIGHT = (1 << 4) | (1 << 7);
+const GALLERY_LEFT = (1 << 5) | (1 << 6);
+
+/**
+ * The lower corner of the cell's room that holds its skeleton: 0 left, 1
+ * right. A way on to the right prefers the left corner and one to the left the
+ * right, so the arm reaches across the room; an up or down way takes the
+ * hash's corner, bit 31. A corner under the cell's gallery gives way to the
+ * other.
+ */
+function skeletonSide(world, bd, cell, dir) {
+  const side = dir === 0 ? 0 : dir === 2 ? 1 : signHash(world, bd, cell) >>> 31;
+  const blocked = bd.links[cell] & (side ? GALLERY_RIGHT : GALLERY_LEFT);
+  return blocked ? side ^ 1 : side;
+}
+return { SIGN_MOD, SKELETON_THRESHOLD, ARROW_THRESHOLD, wayOn, junctions, skeletons, boostSkeletons, arrows, arrowSide, skeletonSide };
 })();
 
 // src/world/wind.mjs
@@ -3527,7 +3622,7 @@ return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 const __m15 = (() => {
 const { BW, NCELL } = __m2;
 const { boardMask, MASK_W, MASK_H, CELL_PX } = __m14;
-const { LADDER, SCONCE, SIGNS, idx } = __m11;
+const { LADDER, SCONCE, ARROWS, SKELETONS, idx } = __m11;
 // Pixel geometry of a board's drawn fixtures and of the dust, DOM-free. Board
 // pixels, y up: X = col * 48, Y = row * 48. A north-east flight from cell c
 // has t = x - (X + 24) over [X + 24, X + 72); a north-west flight mirrors
@@ -3618,18 +3713,50 @@ function sconcePixels([cx, y]) {
 }
 
 /**
- * Sign [x, yTop, dir] of the sign junction `cell`: its glyph's top left in the
+ * Arrow [x, yTop, dir] of the sign junction `cell`: its glyph's top left in the
  * room's upper left (side 0) or upper right (side 1) corner. Rows 31 to 37
  * clear the sconce flame, which ends at row 29, and the ceiling at row 39;
  * the columns keep a pixel from the room wall.
  */
-function signSpot(cell, side, dir) {
+function arrowSpot(cell, side, dir) {
   return [(cell % BW) * CELL_PX + (side ? 32 : 9), ((cell / BW) | 0) * CELL_PX + 37, dir];
 }
 
-/** Opaque pixels of a sign [x, yTop, dir]. */
-function signPixels([x, yTop, dir]) {
-  return spritePixels(SIGNS[dir], x, yTop);
+/** Opaque pixels of an arrow [x, yTop, dir]. */
+function arrowPixels([x, yTop, dir]) {
+  return spritePixels(ARROWS[dir], x, yTop);
+}
+
+// The pose of each way on, in link order: E N W S, then the galleries folded to
+// the key the player presses (NE, NW up; SW, SE down).
+const POSE_OF = [0, 1, 2, 3, 1, 1, 3, 3];
+
+/**
+ * The art index of the pose a skeleton in corner `side` takes for way on
+ * `dir`, and whether it draws mirrored. The right corner mirrors, so its left
+ * and right poses trade places.
+ */
+function skeletonPose(side, dir) {
+  const k = POSE_OF[dir];
+  return { pose: side && k % 2 === 0 ? k ^ 2 : k, flip: side === 1 };
+}
+
+/**
+ * Skeleton [x, yTop, dir, side] of the sign junction `cell`: its pose's top
+ * left in the room's lower left (side 0) or lower right (side 1) corner. The
+ * 7 x 10 box stands on the floor at rows 8 to 17, against the room's side
+ * edge, and keeps clear of the ladder opening at columns 16 to 31 and of the
+ * sconce, which starts at row 20.
+ */
+function skeletonSpot(cell, side, dir) {
+  return [(cell % BW) * CELL_PX + (side ? 32 : 9), ((cell / BW) | 0) * CELL_PX + 17, dir, side];
+}
+
+/** Opaque pixels of a skeleton [x, yTop, dir, side]. */
+function skeletonPixels([x, yTop, dir, side]) {
+  const { pose, flip } = skeletonPose(side, dir);
+  const rows = SKELETONS[pose];
+  return spritePixels(flip ? rows.map((r) => [...r].reverse().join('')) : rows, x, yTop);
 }
 
 /** Ladder boxes [x, y0, y1) of cell c. Where a gallery starts in a cell, its ladder ends at the floor. */
@@ -3727,7 +3854,7 @@ function dustMotes(x0, y0, x1, y1, t, ox = 0, oy = 0) {
   }
   return out;
 }
-return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, signSpot, signPixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
+return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, arrowSpot, arrowPixels, skeletonPose, skeletonSpot, skeletonPixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
 })();
 
 // src/game/map.mjs
@@ -3806,16 +3933,16 @@ return { mapCells, frameOf, panFrame, sameFrame, mapModel };
 
 // src/game/render.mjs
 const __m17 = (() => {
-const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS } = __m11;
+const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS } = __m11;
 const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m10;
 const { BW, BH, DX, DY } = __m2;
-const { signs, signSide } = __m12;
+const { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } = __m12;
 const { boardOfPos } = __m5;
 const { floorItems, itemSpot } = __m7;
 const { windDir } = __m13;
 const { coinId } = __m9;
 const { boardMask, MASK_W } = __m14;
-const { fixtureSets, dustMotes, maskRow, signSpot, ROLE } = __m15;
+const { fixtureSets, dustMotes, maskRow, arrowSpot, skeletonSpot, skeletonPose, ROLE } = __m15;
 const { mapCells } = __m16;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
@@ -3840,6 +3967,13 @@ const AMBIENT = [12, 9, 22];
 // Palette character of each stair role.
 const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 const MAP_SCALE = 3;
+// Seconds of burn below half over which tier-2 skeletons fade in.
+const BOOST_FADE_S = 10;
+
+/** Opacity of the tier-2 skeletons at `burn`: 0 at half the torch, 1 BOOST_FADE_S below it. */
+function boostAlpha(burn) {
+  return Math.min(1, Math.max(0, (BURN_S / 2 - burn) / BOOST_FADE_S));
+}
 // Dust drift in a windy branch (spec section 8): world px/s, reached and
 // shed within a second, and the longest frame step the game loop allows.
 const WIND_SPEED = 12;
@@ -3897,7 +4031,9 @@ function createRenderer(canvas, world) {
   }
   const ladder = spriteCanvas(LADDER);
   const sconce = spriteCanvas(SCONCE);
-  const signGlyphs = SIGNS.map((rows) => spriteCanvas(rows));
+  const arrowGlyphs = ARROWS.map((rows) => spriteCanvas(rows));
+  const skeletonSprites = SKELETONS.map((rows) => [spriteCanvas(rows), spriteCanvas(rows, true)]);
+  const boostCache = new WeakMap();
   const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
   const brazier = spriteCanvas(BRAZIER);
   const coin = spriteCanvas(COIN);
@@ -3943,11 +4079,17 @@ function createRenderer(canvas, world) {
     return c;
   }
 
-  /** Ladders, stairs, sconces, signs and braziers of board `bd`, in board pixels. */
+  /** Skeleton spots of the junctions `list` of board `bd`. */
+  function skeletonSpots(bd, list) {
+    return list.map(({ cell, dir }) => skeletonSpot(cell, skeletonSide(world, bd, cell, dir), dir));
+  }
+
+  /** Ladders, stairs, sconces, arrows, tier-1 skeletons and braziers of board `bd`, in board pixels. */
   function boardFixtures(bd, mask) {
-    if (!bd) return { flights: [], stairs: null, ledge: null, ladders: [], sconces: [], signs: [], braziers: [] };
+    if (!bd) return { flights: [], stairs: null, ledge: null, ladders: [], sconces: [], arrows: [], skeletons: [], braziers: [] };
     const fx = fixtureSets(bd, mask);
-    fx.signs = signs(world, bd).map(({ cell, dir }) => signSpot(cell, signSide(world, bd, cell), dir));
+    fx.arrows = arrows(world, bd).map(({ cell, dir }) => arrowSpot(cell, arrowSide(world, bd, cell), dir));
+    fx.skeletons = skeletonSpots(bd, skeletons(world, bd));
     fx.braziers = world.flamesAt(bd.x, bd.y).map((cell) => nodeXY({ x: 0, y: 0 }, cell));
     return fx;
   }
@@ -3992,6 +4134,22 @@ function createRenderer(canvas, world) {
     g.putImageData(img, 0, 0);
   }
 
+  /** Sprite canvas of a skeleton spot [x, yTop, dir, side]. */
+  function skeletonSprite([, , dir, side]) {
+    const { pose, flip } = skeletonPose(side, dir);
+    return skeletonSprites[pose][flip ? 1 : 0];
+  }
+
+  /** The tier-2 skeleton spots of board `bd`, built once per board object. */
+  function boostSpots(bd) {
+    let spots = boostCache.get(bd);
+    if (!spots) {
+      spots = skeletonSpots(bd, boostSkeletons(world, bd));
+      boostCache.set(bd, spots);
+    }
+    return spots;
+  }
+
   function drawFixtures(g, fx) {
     const toY = (y) => BOARD_H - y;
     for (const [x, y0, y1] of fx.ladders) {
@@ -4014,7 +4172,8 @@ function createRenderer(canvas, world) {
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
-    for (const [x, yTop, dir] of fx.signs) g.drawImage(signGlyphs[dir], x, toY(yTop + 1));
+    for (const [x, yTop, dir] of fx.arrows) g.drawImage(arrowGlyphs[dir], x, toY(yTop + 1));
+    for (const spot of fx.skeletons) g.drawImage(skeletonSprite(spot), spot[0], toY(spot[1] + 1));
   }
 
   function buildBoardCanvas(bd) {
@@ -4140,6 +4299,18 @@ function createRenderer(canvas, world) {
     }
   }
 
+  /** Draws the tier-2 skeletons of the lit boards at opacity `alpha`; they sit under the light map like the walls. */
+  function drawBoost(lit, sx, sy, alpha) {
+    if (alpha <= 0) return;
+    ctx.globalAlpha = alpha;
+    for (const [bx, by] of lit) {
+      for (const spot of boostSpots(world.board(bx, by))) {
+        ctx.drawImage(skeletonSprite(spot), sx(bx * BOARD_W + spot[0]), sy(by * BOARD_H + spot[1] + 1));
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawFlames(lit, sx, sy, t) {
     for (const [bx, by, art] of lit) {
       const wx = bx * BOARD_W, wy = by * BOARD_H;
@@ -4210,6 +4381,7 @@ function createRenderer(canvas, world) {
     drawBackground(cx, cy);
     const lit = drawBoards(cx, cy, sx, sy);
     drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
+    if (sim) drawBoost(lit, sx, sy, boostAlpha(sim.burn));
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
@@ -4327,7 +4499,7 @@ function createRenderer(canvas, world) {
 
   return { ctx, scene, hud, text, panel, prepare, drawMap };
 }
-return { VIEW_W, VIEW_H, MAP_SCALE, WIND_SPEED, shade, spriteCanvas, createRenderer };
+return { VIEW_W, VIEW_H, MAP_SCALE, BOOST_FADE_S, boostAlpha, WIND_SPEED, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs

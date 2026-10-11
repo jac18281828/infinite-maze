@@ -4,7 +4,7 @@
 // every x to 2X + 47 - x. Mask rows count down from the top, as in mask.mjs.
 import { BW, NCELL } from '../world/board.mjs';
 import { boardMask, MASK_W, MASK_H, CELL_PX } from './mask.mjs';
-import { LADDER, SCONCE, SIGNS, idx } from './art.mjs';
+import { LADDER, SCONCE, ARROWS, SKELETONS, idx } from './art.mjs';
 
 export const STEPS = 12;
 export const STEP_W = 4;
@@ -88,18 +88,50 @@ export function sconcePixels([cx, y]) {
 }
 
 /**
- * Sign [x, yTop, dir] of the sign junction `cell`: its glyph's top left in the
+ * Arrow [x, yTop, dir] of the sign junction `cell`: its glyph's top left in the
  * room's upper left (side 0) or upper right (side 1) corner. Rows 31 to 37
  * clear the sconce flame, which ends at row 29, and the ceiling at row 39;
  * the columns keep a pixel from the room wall.
  */
-export function signSpot(cell, side, dir) {
+export function arrowSpot(cell, side, dir) {
   return [(cell % BW) * CELL_PX + (side ? 32 : 9), ((cell / BW) | 0) * CELL_PX + 37, dir];
 }
 
-/** Opaque pixels of a sign [x, yTop, dir]. */
-export function signPixels([x, yTop, dir]) {
-  return spritePixels(SIGNS[dir], x, yTop);
+/** Opaque pixels of an arrow [x, yTop, dir]. */
+export function arrowPixels([x, yTop, dir]) {
+  return spritePixels(ARROWS[dir], x, yTop);
+}
+
+// The pose of each way on, in link order: E N W S, then the galleries folded to
+// the key the player presses (NE, NW up; SW, SE down).
+const POSE_OF = [0, 1, 2, 3, 1, 1, 3, 3];
+
+/**
+ * The art index of the pose a skeleton in corner `side` takes for way on
+ * `dir`, and whether it draws mirrored. The right corner mirrors, so its left
+ * and right poses trade places.
+ */
+export function skeletonPose(side, dir) {
+  const k = POSE_OF[dir];
+  return { pose: side && k % 2 === 0 ? k ^ 2 : k, flip: side === 1 };
+}
+
+/**
+ * Skeleton [x, yTop, dir, side] of the sign junction `cell`: its pose's top
+ * left in the room's lower left (side 0) or lower right (side 1) corner. The
+ * 7 x 10 box stands on the floor at rows 8 to 17, against the room's side
+ * edge, and keeps clear of the ladder opening at columns 16 to 31 and of the
+ * sconce, which starts at row 20.
+ */
+export function skeletonSpot(cell, side, dir) {
+  return [(cell % BW) * CELL_PX + (side ? 32 : 9), ((cell / BW) | 0) * CELL_PX + 17, dir, side];
+}
+
+/** Opaque pixels of a skeleton [x, yTop, dir, side]. */
+export function skeletonPixels([x, yTop, dir, side]) {
+  const { pose, flip } = skeletonPose(side, dir);
+  const rows = SKELETONS[pose];
+  return spritePixels(flip ? rows.map((r) => [...r].reverse().join('')) : rows, x, yTop);
 }
 
 /** Ladder boxes [x, y0, y1) of cell c. Where a gallery starts in a cell, its ladder ends at the floor. */

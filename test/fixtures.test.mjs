@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
-import { createSim, nodeXY, torchRadius } from '../src/game/sim.mjs';
-import { RGB, idx, SIGNS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
+import { createSim, step, nodeXY, torchRadius } from '../src/game/sim.mjs';
+import { RGB, idx, ARROWS, SKELETONS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
 import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import {
-  fixtureSets, ladderPixels, sconcePixels, signPixels, signSpot, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
+  fixtureSets, ladderPixels, sconcePixels, arrowPixels, arrowSpot, skeletonPixels, skeletonSpot, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
 } from '../src/game/fixtures.mjs';
-import { junctions, signs, signSide } from '../src/world/signs.mjs';
+import { junctions, arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../src/world/signs.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
-import { createRenderer, spriteCanvas } from '../src/game/render.mjs';
+import { createRenderer, spriteCanvas, boostAlpha, BOOST_FADE_S } from '../src/game/render.mjs';
 
 const world = createWorld('00000000');
 const NE = 16, NW = 32;
@@ -179,7 +179,8 @@ test('each ladder box matches L1, or L2 where it reaches a stair cell, and each 
 
 // A 2D canvas stub: pixel buffers with source-over drawing, enough for the
 // renderer to build and draw a scene. Each canvas keeps the last putImageData
-// as `shaded` and flags the pixels drawn after it in `touched`.
+// as `shaded` and flags the pixels drawn after it in `touched`. A draw record
+// is [src, ...args] and carries the context's globalAlpha as `.alpha`.
 function stubCanvas() {
   const canvas = { w: 0, h: 0, data: null, shaded: null, touched: null, fills: [], draws: [] };
   const size = () => { canvas.data = new Uint8ClampedArray(canvas.w * canvas.h * 4); canvas.touched = new Uint8Array(canvas.w * canvas.h); };
@@ -202,6 +203,7 @@ function stubCanvas() {
     canvas,
     fillStyle: '#000',
     globalCompositeOperation: 'source-over',
+    globalAlpha: 1,
     imageSmoothingEnabled: false,
     save() {}, restore() {},
     createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
@@ -218,7 +220,9 @@ function stubCanvas() {
       }
     },
     drawImage(src, ...a) {
-      canvas.draws.push([src, ...a]);
+      const record = [src, ...a];
+      record.alpha = ctx.globalAlpha;
+      canvas.draws.push(record);
       if (ctx.globalCompositeOperation !== 'source-over') return;
       const [sx, sy, sw, sh, dx, dy, dw, dh] = a.length === 2 ? [0, 0, src.width, src.height, a[0], a[1], src.width, src.height]
         : a.length === 4 ? [0, 0, src.width, src.height, ...a] : a;
@@ -227,7 +231,7 @@ function stubCanvas() {
           const x = dx + i, y = dy + j;
           if (x < 0 || y < 0 || x >= canvas.w || y >= canvas.h) continue;
           const s = ((sy + Math.floor((j * sh) / dh)) * src.width + sx + Math.floor((i * sw) / dw)) * 4;
-          if (src.data[s + 3]) over((y * canvas.w + x) * 4, src.data[s], src.data[s + 1], src.data[s + 2], src.data[s + 3]);
+          if (src.data[s + 3]) over((y * canvas.w + x) * 4, src.data[s], src.data[s + 1], src.data[s + 2], src.data[s + 3] * ctx.globalAlpha);
         }
       }
     },
@@ -262,24 +266,46 @@ const isColour = (d, i, ch) => {
   return d[i] === c[0] && d[i + 1] === c[1] && d[i + 2] === c[2];
 };
 
-/** Sign pixels of board `bd` as pixel index -> palette character, from the glyph rows. */
-function signGlyphs(bd) {
+/** Arrow pixels of board `bd` as pixel index -> palette character, from the glyph rows. */
+function arrowGlyphs(bd) {
   const out = new Map();
-  for (const { cell, dir } of signs(world, bd)) {
-    const [x, yTop] = signSpot(cell, signSide(world, bd, cell), dir);
-    SIGNS[dir].forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') out.set(px(x + c, yTop - r), ch); }));
+  for (const { cell, dir } of arrows(world, bd)) {
+    const [x, yTop] = arrowSpot(cell, arrowSide(world, bd, cell), dir);
+    ARROWS[dir].forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') out.set(px(x + c, yTop - r), ch); }));
+  }
+  return out;
+}
+
+// Pose index of each way on, E N W S then the galleries folded up and down.
+const POSE_IDX = [0, 1, 2, 3, 1, 1, 3, 3];
+/** Pixel index -> palette character of the skeleton at `cell` in corner `side`, from the literal box and rows. */
+function skeletonMap(cell, side, dir) {
+  const [X, Y] = cellXY(cell);
+  const k = POSE_IDX[dir], pose = side && k % 2 === 0 ? k ^ 2 : k;
+  const x0 = X + (side ? 32 : 9), out = new Map();
+  SKELETONS[pose].forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') out.set(px(x0 + (side ? 6 - c : c), Y + 17 - r), ch); }));
+  return out;
+}
+/** A gallery toward a side takes that lower corner: NE 16 and SE 128 the right, NW 32 and SW 64 the left. */
+const cornerBlocked = (bd, cell, side) => (bd.links[cell] & (side ? 16 | 128 : 32 | 64)) !== 0;
+
+/** Tier-1 skeleton pixels of board `bd` as pixel index -> palette character. */
+function skeletonGlyphs(bd) {
+  const out = new Map();
+  for (const { cell, dir } of skeletons(world, bd)) {
+    for (const [k, ch] of skeletonMap(cell, skeletonSide(world, bd, cell, dir), dir)) out.set(k, ch);
   }
   return out;
 }
 
 test('the renderer paints each stair pixel its role colour (tread b, riser a, body 8) and every ladder and sconce pixel inside its box, nothing else', () => {
-  // "Nothing else" admits the sign pixels by name, each in its glyph's colour.
+  // "Nothing else" admits the arrow and tier-1 skeleton pixels by name, each in its palette colour.
   let signed = 0;
   for (const { bd, fx } of boards.filter((_, i) => i % 3 === 0)) {
     const { art } = renderBoard(bd);
     assert.ok(art, 'board art drawn');
     const { ladders, sconces } = spriteSets(fx);
-    const carved = signGlyphs(bd);
+    const carved = new Map([...arrowGlyphs(bd), ...skeletonGlyphs(bd)]);
     signed += carved.size > 0 ? 1 : 0;
     const bad = [];
     for (let k = 0; k < MASK_W * MASK_H && bad.length < 5; k++) {
@@ -294,23 +320,23 @@ test('the renderer paints each stair pixel its role colour (tread b, riser a, bo
     }
     assert.deepEqual(bad, [], `board ${bd.p}`);
   }
-  assert.ok(signed >= 3, 'the sample holds boards with signs');
+  assert.ok(signed >= 3, 'the sample holds boards with arrows or skeletons');
 });
 
-test('a sign junction shows its sign exactly when it carries one, in its direction and its corner of the room', () => {
+test('a sign junction shows its arrow exactly when it carries one, in its direction and its corner of the room', () => {
   let shown = 0, bare = 0;
   for (const { bd } of boards) {
     const js = junctions(world, bd);
     if (!js.length) continue;
     const { art } = renderBoard(bd);
-    const carry = new Map(signs(world, bd).map((sg) => [sg.cell, sg]));
+    const carry = new Map(arrows(world, bd).map((sg) => [sg.cell, sg]));
     for (const { cell, dir } of js) {
       const [X, Y] = cellXY(cell);
       for (const side of [0, 1]) {
-        const pixels = signPixels(signSpot(cell, side, dir));
+        const pixels = arrowPixels(arrowSpot(cell, side, dir));
         const on = pixels.filter(([x, y]) => art.touched[px(x, y)] === 1).length;
-        if (!carry.has(cell)) { assert.equal(on, 0, `board ${bd.p} cell ${cell}: no sign`); continue; }
-        if (side !== signSide(world, bd, cell)) { assert.equal(on, 0, `board ${bd.p} cell ${cell}: the other corner`); continue; }
+        if (!carry.has(cell)) { assert.equal(on, 0, `board ${bd.p} cell ${cell}: no arrow`); continue; }
+        if (side !== arrowSide(world, bd, cell)) { assert.equal(on, 0, `board ${bd.p} cell ${cell}: the other corner`); continue; }
         assert.equal(on, pixels.length, `board ${bd.p} cell ${cell}`);
         // The glyph lies in a corner column range and in rows 30 to 39 of its cell.
         for (const [x, y] of pixels) {
@@ -322,10 +348,10 @@ test('a sign junction shows its sign exactly when it carries one, in its directi
       if (!carry.has(cell)) bare++;
     }
   }
-  assert.ok(shown >= 20 && bare >= 20, `${shown} signs shown, ${bare} bare junctions`);
+  assert.ok(shown >= 20 && bare >= 20, `${shown} arrows shown, ${bare} bare junctions`);
 });
 
-test('both corners of every sign junction hold room air and no ladder, stair, sconce or sconce-flame pixel, at every level', () => {
+test('both upper corners of every sign junction hold room air and no ladder, stair, sconce or sconce-flame pixel, at every level', () => {
   let corners = 0;
   for (const level of DIFFICULTIES) {
     const w = createWorld('00000000', { difficulty: level });
@@ -347,7 +373,7 @@ test('both corners of every sign junction hold room air and no ladder, stair, sc
           }
           for (const { cell, dir } of js) {
             for (const side of [0, 1]) {
-              for (const [sx, sy] of signPixels(signSpot(cell, side, dir))) {
+              for (const [sx, sy] of arrowPixels(arrowSpot(cell, side, dir))) {
                 const k = px(sx, sy);
                 assert.equal(mask[k], 0, `${level} board ${bd.p}: rock at (${sx}, ${sy})`);
                 assert.ok(!fx.stairs[k] && !ladders.has(k) && !boxed.has(k) && !sconces.has(k) && !flames.has(k), `${level} board ${bd.p}: fixture at (${sx}, ${sy})`);
@@ -360,6 +386,251 @@ test('both corners of every sign junction hold room air and no ladder, stair, sc
     }
   }
   assert.ok(corners > 5000, `${corners} corners`);
+});
+
+test('a sign junction shows its tier-1 skeleton exactly when it carries one, in its pose and its corner of the room', () => {
+  let shown = 0, bare = 0;
+  for (const { bd } of boards) {
+    const js = junctions(world, bd);
+    if (!js.length) continue;
+    const { art } = renderBoard(bd);
+    const carry = new Map(skeletons(world, bd).map((sg) => [sg.cell, sg]));
+    for (const { cell, dir } of js) {
+      for (const side of [0, 1]) {
+        const want = skeletonMap(cell, side, dir);
+        const on = [...want.keys()].filter((k) => art.touched[k] === 1).length;
+        if (!carry.has(cell) || side !== skeletonSide(world, bd, cell, dir)) {
+          // A corner under a gallery holds the stair; every other empty corner is untouched.
+          if (!cornerBlocked(bd, cell, side)) assert.equal(on, 0, `board ${bd.p} cell ${cell} side ${side}: no skeleton`);
+          continue;
+        }
+        assert.equal(on, want.size, `board ${bd.p} cell ${cell}`);
+        for (const [k, ch] of want) assert.ok(isColour(art.data, k * 4, ch), `board ${bd.p} cell ${cell}: pixel ${k} is palette ${ch}`);
+        shown++;
+      }
+      if (!carry.has(cell)) bare++;
+    }
+  }
+  assert.ok(shown >= 8 && bare >= 20, `${shown} skeletons shown, ${bare} bare junctions`);
+});
+
+test('a corner box is clear exactly when the cell\'s gallery runs away from it, and every skeleton lies inside its clear box', () => {
+  let corners = 0, blockedCorners = 0, placed = 0;
+  for (const level of DIFFICULTIES) {
+    const w = createWorld('00000000', { difficulty: level });
+    for (let v = 0; v <= 5; v++) {
+      for (let u = -2; u <= 2; u++) {
+        for (let i = 0; i < w.size.w * w.size.h; i++) {
+          const { x, y } = boardCoords(u, v, i, w.size);
+          const bd = w.board(x, y);
+          const js = junctions(w, bd);
+          if (!js.length) continue;
+          const mask = boardMask(bd), fx = fixtureSets(bd, mask);
+          const { ladders, sconces } = spriteSets(fx);
+          const boxed = new Set(), flames = new Set();
+          for (const [lx, y0, y1] of fx.ladders) for (let yy = y0; yy < y1; yy++) for (let c = 0; c < 16; c++) boxed.add(px(lx + c, yy));
+          for (const [cx, sy] of fx.sconces) {
+            for (const frame of SCONCE_FLAME) {
+              frame.forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') flames.add(px(cx - 4 + c, sy + 3 - r)); }));
+            }
+          }
+          const clear = (cell, side) => {
+            const [X, Y] = cellXY(cell), x0 = X + (side ? 32 : 9);
+            for (let xx = x0; xx < x0 + 7; xx++) {
+              if (mask[px(xx, Y + 7)] !== 1) return false;
+              for (let yy = Y + 8; yy < Y + 18; yy++) {
+                const k = px(xx, yy);
+                if (mask[k] || fx.stairs[k] || fx.ledge[k] || ladders.has(k) || boxed.has(k) || sconces.has(k) || flames.has(k)) return false;
+              }
+            }
+            return true;
+          };
+          for (const { cell } of js) {
+            for (const side of [0, 1]) {
+              const blocked = cornerBlocked(bd, cell, side);
+              assert.equal(clear(cell, side), !blocked, `${level} board ${bd.p} cell ${cell} side ${side}`);
+              corners++;
+              if (blocked) blockedCorners++;
+            }
+          }
+          for (const { cell, dir } of [...skeletons(w, bd), ...boostSkeletons(w, bd)]) {
+            const side = skeletonSide(w, bd, cell, dir), [X, Y] = cellXY(cell), x0 = X + (side ? 32 : 9);
+            assert.ok(clear(cell, side), `${level} board ${bd.p} cell ${cell}: the skeleton's corner is clear`);
+            const pixels = skeletonPixels(skeletonSpot(cell, side, dir));
+            assert.ok(pixels.length > 20);
+            for (const [sx, sy] of pixels) assert.ok(sx >= x0 && sx < x0 + 7 && sy >= Y + 8 && sy < Y + 18, `${level} board ${bd.p} cell ${cell}: pixel (${sx}, ${sy}) outside its box`);
+            assert.deepEqual(new Set(pixels.map(([sx, sy]) => px(sx, sy))), new Set(skeletonMap(cell, side, dir).keys()), 'the pose and corner draw the literal pixels');
+            placed++;
+          }
+        }
+      }
+    }
+  }
+  assert.ok(corners > 5000 && blockedCorners > 500 && placed > 150, `${corners} corners, ${blockedCorners} blocked, ${placed} skeletons`);
+});
+
+test('in either corner a drawn skeleton\'s fingertip lies in the box row or column its way on names', () => {
+  const need = new Set(['0 up', '0 down', '0 right', '0 left', '1 up', '1 down', '1 right', '1 left']);
+  const keyOf = (dir) => ['right', 'up', 'left', 'down'][POSE_IDX[dir]];
+  const tip = RGB[idx('9')];
+  for (const level of DIFFICULTIES) {
+    const w = createWorld('00000000', { difficulty: level });
+    const rend = createRenderer(view, w);
+    for (let v = 0; v <= 19 && need.size; v++) {
+      for (let u = -2; u <= 2 && need.size; u++) {
+        for (let i = 0; i < w.size.w * w.size.h && need.size; i++) {
+          const { x, y } = boardCoords(u, v, i, w.size);
+          const bd = w.board(x, y);
+          const found = skeletons(w, bd).map(({ cell, dir }) => ({ cell, dir, side: skeletonSide(w, bd, cell, dir) }))
+            .filter(({ dir, side }) => need.has(`${side} ${keyOf(dir)}`));
+          if (!found.length) continue;
+          view.draws.length = 0;
+          rend.scene(null, { x: bd.x * 576 + 288, y: bd.y * 336 + 168 }, 0);
+          const art = view.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
+          for (const { cell, dir, side } of found) {
+            const key = keyOf(dir);
+            if (!need.has(`${side} ${key}`)) continue;
+            const [X, Y] = cellXY(cell), x0 = X + (side ? 32 : 9);
+            const tips = [];
+            for (let xx = x0; xx < x0 + 7; xx++) {
+              for (let yy = Y + 8; yy < Y + 18; yy++) {
+                const o = px(xx, yy) * 4;
+                if (art.touched[px(xx, yy)] && art.data[o] === tip[0] && art.data[o + 1] === tip[1] && art.data[o + 2] === tip[2]) tips.push([xx, yy]);
+              }
+            }
+            assert.equal(tips.length, 1, `${level} board ${bd.p} cell ${cell}: one fingertip`);
+            const [[tx, ty]] = tips;
+            if (key === 'up') assert.equal(ty, Y + 17);
+            if (key === 'down') assert.equal(ty, Y + 8);
+            if (key === 'right') { assert.equal(tx, x0 + 6); assert.ok(ty >= Y + 12 && ty <= Y + 14); }
+            if (key === 'left') { assert.equal(tx, x0); assert.ok(ty >= Y + 12 && ty <= Y + 14); }
+            need.delete(`${side} ${key}`);
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual([...need], [], 'every corner and way on appeared');
+});
+
+// Skeleton sprites by pose and flip, and the scene's draws of them.
+const skelSprites = SKELETONS.map((rows) => [spriteCanvas(rows), spriteCanvas(rows, true)]);
+const sameSprite = (a, b) => a.width === b.width && a.height === b.height && Buffer.from(a.data).equals(Buffer.from(b.data));
+const isSkeleton = ([src]) => src.width === 7 && src.height === 10 && skelSprites.flat().some((c) => sameSprite(c, src));
+const skeletonDraws = () => view.draws.filter(isSkeleton);
+
+/** Where the scene under `cam` draws the skeleton `{ cell, dir }` of `bd`, and which sprite. */
+function skeletonDraw(bd, { cell, dir }, cam) {
+  const side = skeletonSide(world, bd, cell, dir), [X, Y] = cellXY(cell);
+  const k = POSE_IDX[dir], pose = side && k % 2 === 0 ? k ^ 2 : k;
+  return {
+    at: [bd.x * 576 + X + (side ? 32 : 9) - Math.round(cam.x) + 160, Math.round(cam.y) - (bd.y * 336 + Y + 18) + 90],
+    sprite: skelSprites[pose][side],
+  };
+}
+/** Skeletons `pick(world, bd)` of `bd` and its eight neighbours, as skeletonDraw records. */
+function around(bd, pick, cam) {
+  const out = [];
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const nb = world.board(bd.x + dx, bd.y + dy);
+      for (const sg of pick(world, nb)) out.push({ ...skeletonDraw(nb, sg, cam), own: nb === bd });
+    }
+  }
+  return out;
+}
+const tier1Board = boards.find(({ bd }) => skeletons(world, bd).length > 0 && boostSkeletons(world, bd).length === 0).bd;
+const tier2Board = boards.find(({ bd }) => boostSkeletons(world, bd).length > 0).bd;
+/** A camera centring the board's first tier-2 skeleton. */
+const camOn = (bd, sg) => {
+  const [X, Y] = cellXY(sg.cell);
+  return { x: bd.x * 576 + X + 12, y: bd.y * 336 + Y + 13 };
+};
+/** The burn `b` and ember of a sim standing at the first cell of `bd`. */
+function simAt(bd, burn, ember = 0) {
+  const sim = createSim(world, { board: bd, cell: bd.a });
+  sim.burn = burn;
+  sim.ember = ember;
+  return sim;
+}
+
+test('boostAlpha fades tier 2 in over the 10 s under half the burn: 0 at 150 s, 0.5 at 145 s, 1 at 140 s and below', () => {
+  assert.equal(BOOST_FADE_S, 10);
+  for (const [burn, want] of [[300, 0], [200, 0], [150, 0], [147, 0.3], [145, 0.5], [142, 0.8], [140, 1], [100, 1], [1, 1], [0, 1]]) near(boostAlpha(burn), want);
+});
+
+test('tier 1 never depends on the burn: the board art and its skeleton pixels hold at 300, 150, 145 and 0 s and in the ember, and the scene never redraws them', () => {
+  const bd = tier1Board;
+  const cam = { x: bd.x * 576 + 288, y: bd.y * 336 + 168 };
+  const want = skeletonGlyphs(bd);
+  assert.ok(want.size > 20, 'the board holds a tier-1 skeleton');
+  let first = null;
+  for (const [burn, ember] of [[300, 0], [150, 0], [145, 0], [0, 0], [0, 5]]) {
+    const { art } = renderBoard(bd, simAt(bd, burn, ember), cam, 0);
+    const snap = Uint8ClampedArray.from(art.data);
+    if (first) assert.deepEqual(snap, first, `burn ${burn}: the board art is the same`);
+    first = first || snap;
+    for (const [k, ch] of want) assert.ok(isColour(art.data, k * 4, ch), `burn ${burn}: skeleton pixel ${k}`);
+    const tier1 = around(bd, skeletons, cam).map((d) => d.at.join());
+    for (const d of skeletonDraws()) assert.ok(!tier1.includes(`${d[1]},${d[2]}`), `burn ${burn}: the scene redraws a tier-1 skeleton`);
+  }
+});
+
+test('the scene draws a board\'s tier-2 skeletons, at their spots and poses, exactly when boostAlpha is above 0, at that alpha', () => {
+  const bd = tier2Board, sg = boostSkeletons(world, bd)[0], cam = camOn(bd, sg);
+  const expected = around(bd, boostSkeletons, cam);
+  const own = expected.filter((d) => d.own);
+  assert.ok(own.length >= 1);
+  for (const [burn, ember, alpha] of [[300, 0, 0], [150, 0, 0], [145, 0, 0.5], [140, 0, 1], [60, 0, 1], [0, 5, 1]]) {
+    renderBoard(bd, simAt(bd, burn, ember), cam, 0);
+    // Each frame restores the alpha, and no draw but a skeleton's records another.
+    assert.equal(view.getContext('2d').globalAlpha, 1, `burn ${burn}: the alpha is restored`);
+    assert.ok(view.draws.filter((d) => !isSkeleton(d)).every((d) => d.alpha === 1), `burn ${burn}: only skeletons draw translucent`);
+    const drawn = skeletonDraws();
+    if (!alpha) { assert.equal(drawn.length, 0, `burn ${burn}: no tier-2 skeleton`); continue; }
+    for (const d of drawn) {
+      assert.equal(d.alpha, alpha, `burn ${burn}: alpha`);
+      assert.ok(expected.some((e) => e.at[0] === d[1] && e.at[1] === d[2] && sameSprite(e.sprite, d[0])), `burn ${burn}: a drawn skeleton at ${d[1]}, ${d[2]} is no tier-2 spot`);
+    }
+    for (const e of own) assert.ok(drawn.some((d) => d[1] === e.at[0] && d[2] === e.at[1] && sameSprite(e.sprite, d[0])), `burn ${burn}: the skeleton at ${e.at} is drawn in its pose`);
+    // The scene draws them before the light map, which multiplies the scene last.
+    const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
+    assert.ok(view.draws.findIndex(isSkeleton) < lit, 'tier 2 draws before the light map');
+  }
+  renderBoard(bd, null, cam, 0);
+  assert.equal(skeletonDraws().length, 0, 'with no sim, tier 2 draws nothing');
+});
+
+test('a refuel to half the burn or above hides tier 2 on its tick, and one that stays under half leaves it shown', () => {
+  const bd = tier2Board, cam = camOn(bd, boostSkeletons(world, bd)[0]);
+  const shown = (sim) => { renderBoard(bd, sim, cam, 0); return skeletonDraws().length; };
+  // A brazier at 100 s.
+  const flameBd = boards.find(({ bd: b }) => world.flamesAt(b.x, b.y).length > 0).bd;
+  let sim = createSim(world, { board: flameBd, cell: world.flamesAt(flameBd.x, flameBd.y)[0] });
+  sim.burn = 100;
+  assert.ok(shown(sim) > 0, 'tier 2 shows at 100 s');
+  step(sim, 0, 0);
+  assert.equal(sim.burn, 300);
+  assert.equal(shown(sim), 0, 'the flame hides tier 2');
+  // A jar from 100 s to 160 s hides it; one from 50 s to 110 s does not.
+  const { bd: jbd } = jarBoard, jar = jarsOf(jbd)[0];
+  const jarSim = (burn) => {
+    const s = createSim(world, { board: jbd, cell: jar.cell });
+    s.off = itemSpot(jbd, jar.cell)[0] - nodeXY(jbd, jar.cell)[0];
+    s.burn = burn;
+    return s;
+  };
+  sim = jarSim(100);
+  const before = shown(sim);
+  assert.ok(before > 0);
+  step(sim, 0, 0);
+  assert.ok(sim.burn > 159 && sim.burn <= 160, `the jar lifts 100 s to ${sim.burn}`);
+  assert.equal(shown(sim), 0, 'a jar to 160 s hides tier 2');
+  sim = jarSim(50);
+  step(sim, 0, 0);
+  assert.ok(sim.burn > 109 && sim.burn <= 110, `the jar lifts 50 s to ${sim.burn}`);
+  assert.equal(shown(sim), before, 'a jar to 110 s leaves tier 2 shown');
+  assert.ok(skeletonDraws().every((d) => d.alpha === 1));
 });
 
 test('rock shading counts the stair as solid: no highlight under a flight, and a lone tread keeps its second row', () => {

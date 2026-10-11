@@ -4,20 +4,23 @@ import { createWorld, boardCoords, cellPath } from '../src/world/world.mjs';
 import { DX, DY, NCELL, cellNeighbor } from '../src/world/board.mjs';
 import { BDX, BDY, DIFFICULTIES } from '../src/world/band.mjs';
 import { u32 } from '../src/world/hash.mjs';
-import { SIGN_MOD, SIGN_THRESHOLD, junctions, signs } from '../src/world/signs.mjs';
-import { SIGNS, artSets } from '../src/game/art.mjs';
+import {
+  SIGN_MOD, SKELETON_THRESHOLD, ARROW_THRESHOLD, junctions, arrows, arrowSide, skeletons, boostSkeletons, skeletonSide,
+} from '../src/world/signs.mjs';
+import { ARROWS, SKELETONS, artSets } from '../src/game/art.mjs';
 
 // The oracle holds its own copy of the rule, never the module's constants.
-const MOD = 48;
-const THRESHOLD = { easy: 8, medium: 6, hard: 4, ultimate: 3 };
-const SHARE = { easy: 1 / 6, medium: 1 / 8, hard: 1 / 12, ultimate: 1 / 16 };
+const MOD = 1024;
+const THRESHOLD = { easy: 94, medium: 30, hard: 17, ultimate: 11 };
+const ARROW_BAND = { easy: 85, medium: 64, hard: 43, ultimate: 32 };
+const ARROW_SHARE = { easy: 1 / 12, medium: 1 / 16, hard: 1 / 24, ultimate: 1 / 32 };
 const worlds = Object.fromEntries(DIFFICULTIES.map((d) => [d, createWorld('00000000', { difficulty: d })]));
 
-/** Boards of tombs u -2..2 by v v0..v1 at `level`. */
-function boardsOf(level, v0, v1) {
+/** Boards of tombs u u0..u1 by v v0..v1 at `level`. */
+function boardsOf(level, v0, v1, u0 = -2, u1 = 2) {
   const w = worlds[level], out = [];
   for (let v = v0; v <= v1; v++) {
-    for (let u = -2; u <= 2; u++) {
+    for (let u = u0; u <= u1; u++) {
       for (let i = 0; i < w.size.w * w.size.h; i++) {
         const { x, y } = boardCoords(u, v, i, w.size);
         out.push(w.board(x, y));
@@ -67,35 +70,101 @@ function expected(world, bd) {
   return got;
 }
 
-test('the share of sign junctions that carry a sign is 1/6 at EASY, 1/8 at MEDIUM and 1/12 at HARD', () => {
+const pointerLists = (w, bd) => [skeletons(w, bd), boostSkeletons(w, bd), arrows(w, bd)];
+const hashOf = (w, bd, cell) => u32(w.H('sign', bd.x, bd.y, cell)) % 1024;
+
+test('each skeleton tier holds 0.8 to 1.2 per tomb at every level over tombs u -5..5 by v 0..39, and the arrow share of junctions lies within 15% of 1/12, 1/16, 1/24 and 1/32', () => {
+  const started = performance.now();
   for (const level of DIFFICULTIES) {
-    let junc = 0, carried = 0;
-    // EASY's 2x2 tombs need twice the rows to pass 2,000 sign junctions.
-    for (const bd of boardsOf(level, 0, level === 'easy' ? 39 : 19)) {
-      junc += junctions(worlds[level], bd).length;
-      carried += signs(worlds[level], bd).length;
+    const w = worlds[level];
+    let one = 0, two = 0;
+    for (const bd of boardsOf(level, 0, 39, -5, 5)) {
+      one += skeletons(w, bd).length;
+      two += boostSkeletons(w, bd).length;
     }
-    assert.ok(junc > 2000, `${level}: ${junc} sign junctions`);
-    assert.ok(Math.abs(carried / junc - SHARE[level]) <= 0.02, `${level}: ${carried}/${junc}`);
+    const tombs = 11 * 40;
+    assert.ok(one / tombs >= 0.8 && one / tombs <= 1.2, `${level}: ${one / tombs} tier-1 skeletons per tomb`);
+    assert.ok(two / tombs >= 0.8 && two / tombs <= 1.2, `${level}: ${two / tombs} tier-2 skeletons per tomb`);
+    let junc = 0, arrowed = 0;
+    // EASY's 2x2 tombs need twice the rows to pass 2,000 junctions.
+    for (const bd of boardsOf(level, 0, level === 'easy' ? 39 : 19)) {
+      junc += junctions(w, bd).length;
+      arrowed += arrows(w, bd).length;
+    }
+    assert.ok(junc > 1000, `${level}: ${junc} sign junctions`);
+    const share = arrowed / junc;
+    assert.ok(Math.abs(share - ARROW_SHARE[level]) <= 0.15 * ARROW_SHARE[level], `${level}: arrow share ${share} (${arrowed}/${junc})`);
+  }
+  console.log(`# rate test: ${((performance.now() - started) / 1000).toFixed(1)} s`);
+});
+
+test('a junction is in skeletons exactly when its hash mod 1024 is under t, in boostSkeletons exactly when it lies in [t, 2t) and in arrows exactly when it lies in [2t, 2t + a), never in two lists', () => {
+  assert.equal(SIGN_MOD, MOD);
+  assert.deepEqual(SKELETON_THRESHOLD, THRESHOLD);
+  assert.deepEqual(ARROW_THRESHOLD, ARROW_BAND);
+  for (const level of DIFFICULTIES) {
+    const w = worlds[level], t = THRESHOLD[level], a = ARROW_BAND[level];
+    let one = 0, two = 0, arrow = 0, none = 0;
+    for (const bd of boardsOf(level, 0, 5)) {
+      const lists = { first: skeletons(w, bd), second: boostSkeletons(w, bd), third: arrows(w, bd) };
+      const js = junctions(w, bd);
+      for (const { cell, dir } of js) {
+        const h = hashOf(w, bd, cell);
+        const want = { first: h < t, second: h >= t && h < 2 * t, third: h >= 2 * t && h < 2 * t + a };
+        for (const [name, list] of Object.entries(lists)) {
+          const hit = list.find((s) => s.cell === cell);
+          assert.equal(!!hit, want[name], `${level} board ${bd.p} cell ${cell}: ${name} list`);
+          if (hit) assert.equal(hit.dir, dir, `${level} board ${bd.p} cell ${cell}: the junction's direction`);
+        }
+        if (want.first) one++; else if (want.second) two++; else if (want.third) arrow++; else none++;
+      }
+      for (const [name, list] of Object.entries(lists)) {
+        assert.ok(list.every((s) => js.some((j) => j.cell === s.cell)), `${name} lists junctions only`);
+        assert.deepEqual(list.map((s) => s.cell), list.map((s) => s.cell).sort((p, q) => p - q));
+      }
+      const all = Object.values(lists).flat().map((s) => s.cell);
+      assert.equal(new Set(all).size, all.length, 'no junction holds two pointers');
+      if (bd.kind === 'dead') for (const list of Object.values(lists)) assert.deepEqual(list, []);
+    }
+    assert.ok(one >= 15 && two >= 15 && arrow >= 15 && none > 20, `${level}: ${one} tier 1, ${two} tier 2, ${arrow} arrows, ${none} bare`);
   }
 });
 
-test('a sign junction carries a sign exactly when its hash mod 48 is under the level threshold', () => {
-  assert.equal(SIGN_MOD, MOD);
-  assert.deepEqual(SIGN_THRESHOLD, THRESHOLD);
+test('arrowSide is bit 31 of the junction\'s hash at every arrow junction of the band sample', () => {
+  let n = 0;
   for (const level of DIFFICULTIES) {
     const w = worlds[level];
-    let carried = 0, bare = 0;
-    for (const bd of boardsOf(level, 0, 3)) {
-      const has = new Set(signs(w, bd).map((s) => s.cell));
-      for (const { cell } of junctions(w, bd)) {
-        const pass = u32(w.H('sign', bd.x, bd.y, cell)) % MOD < THRESHOLD[level];
-        assert.equal(has.has(cell), pass, `${level} board ${bd.p} cell ${cell}`);
-        if (pass) carried++; else bare++;
+    for (const bd of boardsOf(level, 0, 5)) {
+      for (const { cell } of arrows(w, bd)) {
+        assert.equal(arrowSide(w, bd, cell), u32(w.H('sign', bd.x, bd.y, cell)) >>> 31, `${level} board ${bd.p} cell ${cell}`);
+        n++;
       }
-      for (const c of has) assert.ok(junctions(w, bd).some((j) => j.cell === c), 'a sign sits on a junction');
     }
-    assert.ok(carried > 20 && bare > 20, `${level}: ${carried} carried, ${bare} bare`);
+  }
+  assert.ok(n >= 60, `${n} arrow junctions`);
+});
+
+test('skeletonSide is the corner the way on, the hash and the gallery give, and the sample holds every case at every level', () => {
+  for (const level of DIFFICULTIES) {
+    const w = worlds[level];
+    const cases = { right: 0, left: 0, upHash0: 0, upHash1: 0, fallback: 0 };
+    for (const bd of boardsOf(level, 0, 5)) {
+      for (const { cell, dir } of junctions(w, bd)) {
+        const bit = u32(w.H('sign', bd.x, bd.y, cell)) >>> 31;
+        // A right way prefers the left corner, a left way the right, else the hash's.
+        const prefer = dir === 0 ? 0 : dir === 2 ? 1 : bit;
+        // Link bits: NE 16, NW 32, SW 64, SE 128. A gallery toward a side blocks its corner.
+        const toRight = (bd.links[cell] & (16 | 128)) !== 0, toLeft = (bd.links[cell] & (32 | 64)) !== 0;
+        const blocked = prefer ? toRight : toLeft;
+        const want = blocked ? 1 - prefer : prefer;
+        assert.equal(skeletonSide(w, bd, cell, dir), want, `${level} board ${bd.p} cell ${cell} dir ${dir}`);
+        if (blocked) cases.fallback++;
+        else if (dir === 0) cases.right++;
+        else if (dir === 2) cases.left++;
+        else if (dir === 1 || dir === 3) cases[bit ? 'upHash1' : 'upHash0']++;
+      }
+    }
+    for (const [name, n] of Object.entries(cases)) assert.ok(n >= 60, `${level}: ${n} ${name} cases`);
   }
 });
 
@@ -123,13 +192,13 @@ test('junctions lists exactly the cells on a path from an in-cell to the out-doo
   }
 });
 
-test('every sign sits on a route board and its link leads to the next cell of the path toward the out-door', () => {
+test('every pointer sits on a route board and its link leads to the next cell of the path toward the out-door', () => {
   const dirs = new Set();
   let n = 0;
   for (const level of DIFFICULTIES) {
     const w = worlds[level];
     for (const bd of boardsOf(level, 0, 19)) {
-      for (const { cell, dir } of signs(w, bd)) {
+      for (const { cell, dir } of [...skeletons(w, bd), ...boostSkeletons(w, bd), ...arrows(w, bd)]) {
         assert.equal(bd.kind, 'route');
         const next = w.step(bd, cell, dir);
         assert.equal(next.board, bd);
@@ -140,10 +209,10 @@ test('every sign sits on a route board and its link leads to the next cell of th
     }
   }
   assert.ok(n > 1500);
-  assert.equal(dirs.size, 8, 'the sample holds a sign for each direction');
+  assert.equal(dirs.size, 8, 'the sample holds a pointer for each direction');
 });
 
-test('dead-end boards carry no sign, and the sample holds dead-end cells with three or more ways out', () => {
+test('dead-end boards carry no pointer, and the sample holds dead-end cells with three or more ways out', () => {
   let dead = 0, cells = 0;
   for (const level of DIFFICULTIES) {
     const w = worlds[level];
@@ -151,7 +220,7 @@ test('dead-end boards carry no sign, and the sample holds dead-end cells with th
       if (bd.kind !== 'dead') continue;
       dead++;
       assert.deepEqual(junctions(w, bd), []);
-      assert.deepEqual(signs(w, bd), []);
+      for (const list of [arrows, skeletons, boostSkeletons]) assert.deepEqual(list(w, bd), []);
       for (let c = 0; c < NCELL; c++) if (bits(bd.links[c]) + bits(bd.doorMask[c]) >= 3) cells++;
     }
   }
@@ -159,10 +228,10 @@ test('dead-end boards carry no sign, and the sample holds dead-end cells with th
 });
 
 test('the eight glyphs differ pairwise, fit 7 x 7 and point their direction', () => {
-  assert.equal(SIGNS.length, 8);
-  assert.equal(artSets().sign, SIGNS);
-  assert.equal(new Set(SIGNS.map((g) => g.join('/'))).size, 8);
-  SIGNS.forEach((rows, d) => {
+  assert.equal(ARROWS.length, 8);
+  assert.equal(artSets().arrow, ARROWS);
+  assert.equal(new Set(ARROWS.map((g) => g.join('/'))).size, 8);
+  ARROWS.forEach((rows, d) => {
     assert.ok(rows.length <= 7 && rows.every((r) => r.length <= 7));
     // The tip is the one opaque pixel farthest along the direction (y runs up).
     let best = -Infinity, tips = 0;
@@ -175,16 +244,12 @@ test('the eight glyphs differ pairwise, fit 7 x 7 and point their direction', ()
   });
 });
 
-// Per level: [skeleton threshold t, arrow band width a]. The pointer bands are [0, 2t + a).
-const BANDS = { easy: [94, 85], medium: [30, 64], hard: [17, 43], ultimate: [11, 32] };
-const pointerLists = (w, bd) => [signs(w, bd)];
-const hashOf = (w, bd, cell) => u32(w.H('sign', bd.x, bd.y, cell)) % 1024;
 
 test('a way-on cell with three links and doors but under three real choices is no junction and holds no pointer', () => {
   const want = { easy: 7, medium: 4, hard: 6, ultimate: 5 };
   let banded = 0;
   for (const level of DIFFICULTIES) {
-    const w = worlds[level], [t, a] = BANDS[level];
+    const w = worlds[level], t = THRESHOLD[level], a = ARROW_BAND[level];
     let n = 0;
     for (const bd of boardsOf(level, 0, 19)) {
       if (bd.kind !== 'route') continue;
@@ -234,4 +299,23 @@ test('the owner\'s case: seed 00000004 at HARD, board (7, 69) in tomb (1, 17), c
   assert.equal(bd.doorMask[70], 0, 'and no door');
   assert.ok(!junctions(w, bd).some((j) => j.cell === 59));
   for (const list of pointerLists(w, bd)) assert.ok(!list.some((s) => s.cell === 59));
+});
+
+test('the four poses differ pairwise, fill 7 x 10 and put their one fingertip where its way on says', () => {
+  assert.equal(SKELETONS.length, 4);
+  assert.equal(artSets().skeleton, SKELETONS);
+  assert.equal(new Set(SKELETONS.map((p) => p.join('/'))).size, 4);
+  // Poses run E N W S: right, up, left, down.
+  SKELETONS.forEach((rows, k) => {
+    assert.equal(rows.length, 10);
+    assert.ok(rows.every((r) => r.length === 7), `pose ${k} is 7 wide`);
+    const tips = [];
+    rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch === '9') tips.push([x, y]); }));
+    assert.equal(tips.length, 1, `pose ${k} has one fingertip`);
+    const [[x, y]] = tips;
+    if (k === 0) { assert.equal(x, 6); assert.ok(y >= 3 && y <= 5); }
+    if (k === 1) assert.equal(y, 0);
+    if (k === 2) { assert.equal(x, 0); assert.ok(y >= 3 && y <= 5); }
+    if (k === 3) assert.equal(y, 9);
+  });
 });

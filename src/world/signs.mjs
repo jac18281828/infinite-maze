@@ -1,14 +1,19 @@
-// Signs (spec section 4): a glyph carved at some junctions of a route board
-// that points along the link toward the way on. Signs derive from a built
-// board and the hash alone; they enter no board, band or digest.
+// Pointers (spec section 4): at some junctions of a route board, an arrow
+// carved in the wall or a skeleton slumped in a corner, each pointing along
+// the link toward the way on. They derive from a built board and the hash
+// alone; they enter no board, band or digest. The module keeps its name
+// because wind imports `wayOn`.
 import { NCELL, cellNeighbor } from './board.mjs';
 import { BDX, BDY } from './band.mjs';
 import { u32 } from './hash.mjs';
 
-export const SIGN_MOD = 48;
-// A sign junction carries a sign when its hash mod SIGN_MOD is under the
-// level's threshold: about 1 in 6, 8, 12 and 16.
-export const SIGN_THRESHOLD = { easy: 8, medium: 6, hard: 4, ultimate: 3 };
+export const SIGN_MOD = 1024;
+// One hash mod SIGN_MOD gives a junction at most one pointer, by band:
+// [0, t) a tier-1 skeleton, [t, 2t) a tier-2 skeleton and [2t, 2t + a) an
+// arrow. Each tier holds about one skeleton per tomb. The arrow band is
+// round(SIGN_MOD / N): arrows at 1 junction in N = 12, 16, 24 and 32.
+export const SKELETON_THRESHOLD = { easy: 94, medium: 30, hard: 17, ultimate: 11 };
+export const ARROW_THRESHOLD = { easy: 85, medium: 64, hard: 43, ultimate: 32 };
 
 const ways = (m) => {
   let n = 0;
@@ -85,13 +90,48 @@ export function junctions(world, bd) {
 
 const signHash = (world, bd, cell) => u32(world.H('sign', bd.x, bd.y, cell));
 
-/** The sign junctions of `bd` whose hash passes the level's threshold. */
-export function signs(world, bd) {
-  const t = SIGN_THRESHOLD[world.difficulty];
-  return junctions(world, bd).filter(({ cell }) => signHash(world, bd, cell) % SIGN_MOD < t);
+/** The junctions of `bd` whose hash mod SIGN_MOD lies in [lo, hi). */
+const hashBand = (world, bd, lo, hi) =>
+  junctions(world, bd).filter(({ cell }) => {
+    const h = signHash(world, bd, cell) % SIGN_MOD;
+    return h >= lo && h < hi;
+  });
+
+/** Tier 1, shown at every burn: the junctions whose hash lies in [0, t). */
+export function skeletons(world, bd) {
+  return hashBand(world, bd, 0, SKELETON_THRESHOLD[world.difficulty]);
 }
 
-/** The upper corner of the cell's room that carries its sign: 0 left, 1 right. */
-export function signSide(world, bd, cell) {
+/** Tier 2, shown under half the burn: the junctions whose hash lies in [t, 2t). */
+export function boostSkeletons(world, bd) {
+  const t = SKELETON_THRESHOLD[world.difficulty];
+  return hashBand(world, bd, t, 2 * t);
+}
+
+/** The junctions whose hash lies in [2t, 2t + a). */
+export function arrows(world, bd) {
+  const t = SKELETON_THRESHOLD[world.difficulty];
+  return hashBand(world, bd, 2 * t, 2 * t + ARROW_THRESHOLD[world.difficulty]);
+}
+
+/** The upper corner of the cell's room that carries its arrow: 0 left, 1 right. */
+export function arrowSide(world, bd, cell) {
   return signHash(world, bd, cell) >>> 31;
+}
+
+// Link bits of a gallery that runs toward the right (NE, SE) and the left (NW, SW).
+const GALLERY_RIGHT = (1 << 4) | (1 << 7);
+const GALLERY_LEFT = (1 << 5) | (1 << 6);
+
+/**
+ * The lower corner of the cell's room that holds its skeleton: 0 left, 1
+ * right. A way on to the right prefers the left corner and one to the left the
+ * right, so the arm reaches across the room; an up or down way takes the
+ * hash's corner, bit 31. A corner under the cell's gallery gives way to the
+ * other.
+ */
+export function skeletonSide(world, bd, cell, dir) {
+  const side = dir === 0 ? 0 : dir === 2 ? 1 : signHash(world, bd, cell) >>> 31;
+  const blocked = bd.links[cell] & (side ? GALLERY_RIGHT : GALLERY_LEFT);
+  return blocked ? side ^ 1 : side;
 }

@@ -570,9 +570,9 @@ export const SCONCE_FLAME = [
   ['..q.....', '..qp....', '..pqp...', '..ono...'],
 ];
 
-// Signs carved at a junction, 7x7, one per direction in DX, DY order: E N W S
+// Arrows carved at a junction, 7x7, one per direction in DX, DY order: E N W S
 // NE NW SW SE. Each arrow points along the link it names.
-export const SIGNS = [
+export const ARROWS = [
   [
     '...9...',
     '....9..',
@@ -644,6 +644,61 @@ export const SIGNS = [
     '....9.9',
     '.....99',
     '...9999',
+  ],
+];
+
+// Skeletons slumped in a lower room corner, 7x10, one pose per way on in DX
+// order: E N W S. Each is drawn for the left corner, column 0 at the room's
+// side edge, and its one `9` pixel is the fingertip pointing the way. Only
+// palette 5-9 keep it dimmer than the stair treads and the bone white.
+export const SKELETONS = [
+  [
+    '.......',
+    '.888...',
+    '.868...',
+    '.878...',
+    '.788889',
+    '.787...',
+    '.767...',
+    '.78....',
+    '.78888.',
+    '7788778',
+  ],
+  [
+    '.....9.',
+    '.888.8.',
+    '.868.8.',
+    '.878.8.',
+    '.78888.',
+    '.787...',
+    '.767...',
+    '.78....',
+    '.78888.',
+    '7788778',
+  ],
+  [
+    '.......',
+    '..888..',
+    '..868..',
+    '..878..',
+    '98888..',
+    '.787...',
+    '.767...',
+    '.78....',
+    '.78888.',
+    '7788778',
+  ],
+  [
+    '.......',
+    '.888...',
+    '.868...',
+    '.878...',
+    '.78888.',
+    '.78..8.',
+    '.76..8.',
+    '.78..8.',
+    '.788.8.',
+    '7778.9.',
   ],
 ];
 
@@ -806,7 +861,7 @@ export function artSets() {
   return {
     explorer: Object.values(EXPLORER).flat(),
     rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
-    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], coin: [COIN], jar: [JAR], flame: FLAME, torch: TORCH,
+    sconceFlame: SCONCE_FLAME, arrow: ARROWS, skeleton: SKELETONS, brazier: [BRAZIER], coin: [COIN], jar: [JAR], flame: FLAME, torch: TORCH,
     font: Object.values(FONT_ROWS),
   };
 }
