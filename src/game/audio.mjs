@@ -1,4 +1,5 @@
-// WebAudio music and sound, synthesized; starts on the first key press or touch.
+// WebAudio music and sound, synthesized. The context is built at boot,
+// suspended; the first key press or touch resumes it and starts the music.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
 // drum at 110 BPM. As the torch dims, layers enter and the tempo rises to
 // 128 BPM; a relight drops both back. A low-pass, a light bit-crush and tape
@@ -24,7 +25,7 @@ const PHRASES = [
 const ARP = [0, 2, 4, 6, 7, 6, 4, 2];
 
 export function createAudio() {
-  let ac = null, master, music, sfx, wobble, noise, timer = 0;
+  let ac = null, master, music, sfx, wobble, noise, timer = 0, started = false;
   let muted = false, intensity = 0, eased = 0, nextTime = 0, step = 0, phrase = 0;
 
   function crushCurve(levels) {
@@ -36,11 +37,19 @@ export function createAudio() {
     return c;
   }
 
-  function start() {
-    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  /** Builds the context and its graph; a missing or throwing context leaves audio off. */
+  function build() {
     const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
     if (!AC) return;
-    ac = new AC();
+    try {
+      ac = new AC();
+      graph();
+    } catch {
+      ac = null;
+    }
+  }
+
+  function graph() {
     master = ac.createGain();
     master.gain.value = muted ? 0 : 0.9;
     master.connect(ac.destination);
@@ -70,6 +79,22 @@ export function createAudio() {
     noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
     const d = noise.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+
+  /**
+   * Resumes the context whenever it is not running, which covers iOS's
+   * `interrupted` as well as `suspended`, and on the first call starts the music.
+   */
+  function start() {
+    if (!ac) return;
+    if (ac.state !== 'running') {
+      try {
+        const resumed = ac.resume();
+        if (resumed && resumed.catch) resumed.catch(() => {});
+      } catch { /* a refused resume leaves the context as it was */ }
+    }
+    if (started) return;
+    started = true;
     nextTime = ac.currentTime + 0.08;
     timer = setInterval(schedule, 25);
   }
@@ -287,9 +312,11 @@ export function createAudio() {
   };
 
   function play(name) {
-    if (!ac || muted || !SOUNDS[name]) return;
+    if (!started || muted || !SOUNDS[name]) return;
     SOUNDS[name](ac.currentTime + 0.005);
   }
+
+  build();
 
   return {
     start,

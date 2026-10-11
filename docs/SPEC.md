@@ -701,8 +701,10 @@ The simulation runs on a fixed 60 Hz timestep, with rendering on
 `requestAnimationFrame`, interpolated between ticks (§8). Building a board takes 0.7 ms on average and 17 ms
 at most, and a tomb's board tree 0.04 ms on average and under 1 ms at most,
 measured on node 26.7.0 and an Apple M3 Max.
-Audio starts on the first key press or touch, as browser autoplay policy
-requires.
+The audio context is built at boot, suspended, and the first key press or
+touch resumes it and starts the music, as browser autoplay policy requires;
+no sound plays before then, and a browser without WebAudio leaves the game
+silent.
 
 **Frame timing.** `infinite-maze.html#perf`, read once at boot, turns on a
 probe. Its overlay sits at the view's upper left, below the torch bar, and
