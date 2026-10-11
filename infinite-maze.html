@@ -1321,16 +1321,18 @@ function createTrail() {
   return new Map();
 }
 
+const trailKey = (x, y) => `${x},${y}`;
+
 /** The trail's record of board (x, y): `stood` and `walked` per cell, or undefined. */
 function trailAt(trail, x, y) {
-  return trail.get(`${x},${y}`);
+  return trail.get(trailKey(x, y));
 }
 
 function trailBoard(trail, bd) {
   let t = trailAt(trail, bd.x, bd.y);
   if (!t) {
     t = { x: bd.x, y: bd.y, stood: new Uint8Array(NCELL), walked: new Uint8Array(NCELL) };
-    trail.set(`${bd.x},${bd.y}`, t);
+    trail.set(trailKey(bd.x, bd.y), t);
   }
   return t;
 }
@@ -1656,7 +1658,7 @@ function flameTouch(s) {
 }
 
 /** Records the one link or door that joins the cell the tick began on to the current cell. */
-function walkTrail(s, bd, cell) {
+function recordMove(s, bd, cell) {
   for (let d = 0; d < 8; d++) {
     const to = s.world.step(bd, cell, d);
     if (to && to.board.x === s.bd.x && to.board.y === s.bd.y && to.cell === s.cell) { recordWalk(s.trail, bd, cell, d, to); return; }
@@ -1684,7 +1686,7 @@ function step(s, h, v, jump = false, edges = NO_EDGES) {
   else if (s.mode === 'air') airMove(s, h, v, dt);
   else linkMove(s, h, v, dt);
   // Every path that changes the cell runs above; the trail follows the cell.
-  if (s.bd !== fromBd || s.cell !== fromCell) walkTrail(s, fromBd, fromCell);
+  if (s.bd !== fromBd || s.cell !== fromCell) recordMove(s, fromBd, fromCell);
   // Contact with a flame holds the torch at full; events fire once per contact.
   const touch = flameTouch(s);
   if (touch) {
@@ -1716,7 +1718,7 @@ function pose(s) {
   if (s.burn <= 0) return { anim: 'gasp', frame: Math.floor(s.time * 3) % 2 };
   return { anim: 'idle', frame: Math.floor(s.time * 4) % 4 };
 }
-return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, recordWalk, runCarry, createSim, canGo, feet, step, pose };
+return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, runCarry, createSim, canGo, feet, step, pose };
 })();
 
 // src/game/art.mjs
@@ -2547,14 +2549,14 @@ function mapModel(world, trail, b, at) {
   for (const t of boards) {
     const bd = world.board(t.x, t.y);
     if (!bd.links) continue;
-    const lit = world.flamesAt(t.x, t.y);
+    const flameCells = world.flamesAt(t.x, t.y);
     const gaps = [];
     let entered = false;
     for (let cell = 0; cell < NCELL; cell++) {
       if (!t.stood[cell]) continue;
       entered = true;
       const here = cellAt(bd, cell);
-      if (lit.includes(cell)) flames.push(here);
+      if (flameCells.includes(cell)) flames.push(here);
       for (let d = 0; d < 8; d++) {
         const to = world.step(bd, cell, d);
         if (!to) continue;
@@ -2980,46 +2982,54 @@ function createRenderer(canvas, world) {
     text(`TOMB ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
   }
 
+  /** Draws board outline `o` in the current fill, open at each crossed door. */
+  function mapOutline(o, cellPx) {
+    const S = MAP_SCALE, w = BW * S, h = BH * S;
+    const [left, top] = cellPx(o.col, o.row + BH - 1);
+    // A crossed door opens its cell's three pixels of the wall.
+    const gapX = (d, px) => o.gaps.some((g) => g.d === d && px >= cellPx(g.col, g.row)[0] && px < cellPx(g.col, g.row)[0] + S);
+    const gapY = (d, py) => o.gaps.some((g) => g.d === d && py >= cellPx(g.col, g.row)[1] && py < cellPx(g.col, g.row)[1] + S);
+    for (let k = 0; k < w; k++) {
+      if (!gapX(1, left + k)) ctx.fillRect(left + k, top, 1, 1);
+      if (!gapX(3, left + k)) ctx.fillRect(left + k, top + h - 1, 1, 1);
+    }
+    for (let k = 0; k < h; k++) {
+      if (!gapY(2, top + k)) ctx.fillRect(left, top + k, 1, 1);
+      if (!gapY(0, top + k)) ctx.fillRect(left + w - 1, top + k, 1, 1);
+    }
+  }
+
   /**
-   * Draws a map model at 3 px per cell, top left at (x, y); `t` is wall
-   * seconds. A link joins the centre pixels of its two cells and a stub stays
-   * inside its own cell.
+   * Draws a map model at 3 px per cell, top left at (x, y); `t` is seconds
+   * since the pause began. A link joins the centre pixels of its two cells and
+   * a stub stays inside its own cell.
    */
   function drawMap(model, x, y, t) {
     const S = MAP_SCALE;
+    // Top left pixel of a frame cell; rows run up the screen.
+    const cellPx = (col, row) => [x + col * S, y + (MAP_ROWS - 1 - row) * S];
     const dot = (col, row, i, d, color) => {
+      const [px, py] = cellPx(col, row);
       ctx.fillStyle = color;
-      ctx.fillRect(x + col * S + 1 + i * DX[d], y + (MAP_ROWS - 1 - row) * S + 1 - i * DY[d], 1, 1);
+      ctx.fillRect(px + 1 + i * DX[d], py + 1 - i * DY[d], 1, 1);
+    };
+    const block = (c, color) => {
+      const [px, py] = cellPx(c.col, c.row);
+      ctx.fillStyle = color;
+      ctx.fillRect(px, py, S, S);
     };
     ctx.fillStyle = pal('0');
     ctx.fillRect(x, y, MAP_COLS * S, MAP_ROWS * S);
     ctx.fillStyle = pal('4');
-    for (const o of model.outlines) {
-      const left = x + o.col * S, top = y + (MAP_ROWS - o.row - BH) * S, w = BW * S, h = BH * S;
-      // A crossed door opens its cell's three pixels of the wall.
-      const gapX = (d, px) => o.gaps.some((g) => g.d === d && px >= x + g.col * S && px < x + (g.col + 1) * S);
-      const gapY = (d, py) => o.gaps.some((g) => g.d === d && py >= y + (MAP_ROWS - 1 - g.row) * S && py < y + (MAP_ROWS - g.row) * S);
-      for (let k = 0; k < w; k++) {
-        if (!gapX(1, left + k)) ctx.fillRect(left + k, top, 1, 1);
-        if (!gapX(3, left + k)) ctx.fillRect(left + k, top + h - 1, 1, 1);
-      }
-      for (let k = 0; k < h; k++) {
-        if (!gapY(2, top + k)) ctx.fillRect(left, top + k, 1, 1);
-        if (!gapY(0, top + k)) ctx.fillRect(left + w - 1, top + k, 1, 1);
-      }
-    }
+    for (const o of model.outlines) mapOutline(o, cellPx);
     for (const s of model.stubs) for (let i = 0; i < 2; i++) dot(s.col, s.row, i, s.d, pal('7'));
     for (const l of model.lines) for (let i = 0; i <= 3; i++) dot(l.col, l.row, i, l.d, pal('b'));
     for (const f of model.flames) {
-      ctx.fillStyle = pal('i');
-      ctx.fillRect(x + f.col * S, y + (MAP_ROWS - 1 - f.row) * S, S, S);
+      block(f, pal('i'));
       dot(f.col, f.row, 0, 0, pal('j'));
     }
-    const e = model.explorer;
-    if (e && Math.floor(t * 3) % 2 === 0) {
-      ctx.fillStyle = pal('p');
-      ctx.fillRect(x + e.col * S, y + (MAP_ROWS - 1 - e.row) * S, S, S);
-    }
+    // The dot shows first, so it is on screen when the pause begins.
+    if (model.explorer && Math.floor(t * 3) % 2 === 0) block(model.explorer, pal('p'));
   }
 
   return { ctx, scene, hud, text, panel, prepare, drawMap };
@@ -3989,8 +3999,10 @@ const { runScript, SELFTEST_CODE } = __m12;
 const { createTouch, layout, viewport } = __m13;
 const { copyWithStatus, saveLabel } = __m14;
 const { frameOf, panFrame, mapModel } = __m9;
+const { RGB, idx } = __m7;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -4083,7 +4095,7 @@ function selftest() {
     r.scene(sim, cam, 0);
     r.hud(sim);
     // Draws the pause screen over the scene, so a draw-time error fails the gate.
-    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd), pauseMap: null });
+    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd), pauseMap: null, pausedAt: null });
     present();
     const px = view.getContext('2d').getImageData(0, 0, VIEW_W, VIEW_H).data;
     const colours = new Set();
@@ -4137,7 +4149,7 @@ function driveTouch(copied) {
   const pointer = (type, el, x, y) => el.dispatchEvent(new PointerEvent(type, {
     pointerId: 7, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true,
   }));
-  const press = (code, key) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }));
+  const press = (code, key, repeat = false) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, repeat, bubbles: true, cancelable: true }));
   const copies = (sid, want) => {
     copied.length = 0;
     click(sid, 'copy');
@@ -4260,19 +4272,31 @@ function driveTouch(copied) {
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
   need(g.frame === g.sim.bd.band, 'PAUSE frames the explorer\'s band');
-  const arrow = (code, repeat = false) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key: code, repeat, bubbles: true, cancelable: true }));
-  arrow('ArrowUp');
+  press('ArrowUp', 'ArrowUp');
   need(g.frame === g.sim.bd.band + 1, 'Up pans one band up');
-  arrow('ArrowUp', true);
-  arrow('ArrowLeft');
+  press('ArrowUp', 'ArrowUp', true);
+  press('ArrowLeft', 'ArrowLeft');
   need(g.frame === g.sim.bd.band + 1, 'a held Up and a Left pan nothing');
-  arrow('KeyS');
+  press('KeyS', 's');
   need(g.frame === g.sim.bd.band, 'S pans one band down');
   toggles('pause');
   copies('pause', hereCode(g));
+  const before = pauseModel(g).explorer;
+  // A pan before RESUME must not outlast the pause.
+  press('ArrowUp', 'ArrowUp');
   click('pause', 'resume');
   need(g.screen === 'play', 'RESUME returns to play');
+  // Walk to another cell of the band, so a map kept from the last pause shows the old one.
+  const band = g.sim.bd.band, cell = g.sim.cell, bd = g.sim.bd;
+  for (const [h, v] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (let i = 0; i < 600 && g.sim.cell === cell && g.sim.bd === bd; i++) step(g.sim, h, v);
+    if (g.sim.cell !== cell || g.sim.bd !== bd) break;
+  }
+  need(g.sim.bd.band === band && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its band');
   click('play', 'pause');
+  need(g.frame === frameOf(g.sim.bd), 'PAUSE frames the explorer\'s band again');
+  const after = pauseModel(g).explorer;
+  need(after && (!before || after.col !== before.col || after.row !== before.row), 'PAUSE draws the explorer where it now stands');
   click('pause', 'title');
   need(g.screen === 'title', 'TITLE reaches the title');
 
@@ -4302,7 +4326,11 @@ function driveTouch(copied) {
   g.keys.clear();
   press('Escape', 'Escape');
   need(g.screen === 'pause' && g.frame === frameOf(g.sim.bd), 'Esc pauses on the explorer\'s band');
-  draw(g, 0);
+  // The first pause frame lands half a second into the page and shows the explorer's dot.
+  draw(g, 0.5);
+  const e = pauseModel(g).explorer;
+  const dot = view.getContext('2d').getImageData(52 + e.col * 3 + 1, 28 + (27 - e.row) * 3 + 1, 1, 1).data;
+  need(RGB[idx('p')].every((v, i) => dot[i] === v), 'the pause map shows the explorer first');
 }
 
 const DIRS = {
@@ -4331,7 +4359,7 @@ function createGame() {
     world: null, renderer: null, sim: null, preview: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
     // The band the pause map frames, and its model.
-    frame: 0, pauseMap: null,
+    frame: 0, pauseMap: null, pausedAt: null,
   };
 }
 
@@ -4413,6 +4441,7 @@ function playKey(g, e) {
     g.screen = 'pause';
     g.frame = frameOf(g.sim.bd);
     g.pauseMap = null;
+    g.pausedAt = null;
     store(KEY_SAVE, hereCode(g));
     return;
   }
@@ -4549,7 +4578,8 @@ function drawPause(g, t = 0) {
   r.panel(50, 2, 220, 176);
   r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
   r.text(`TOMB ${g.frame}`, 267, 16, 'a', { align: 'right' });
-  r.drawMap(pauseModel(g), 52, 28, t);
+  if (g.pausedAt === null) g.pausedAt = t;
+  r.drawMap(pauseModel(g), 52, 28, t - g.pausedAt);
   r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
   r.text(hereCode(g), VIEW_W / 2, 129, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });

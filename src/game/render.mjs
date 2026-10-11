@@ -402,46 +402,54 @@ export function createRenderer(canvas, world) {
     text(`TOMB ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
   }
 
+  /** Draws board outline `o` in the current fill, open at each crossed door. */
+  function mapOutline(o, cellPx) {
+    const S = MAP_SCALE, w = BW * S, h = BH * S;
+    const [left, top] = cellPx(o.col, o.row + BH - 1);
+    // A crossed door opens its cell's three pixels of the wall.
+    const gapX = (d, px) => o.gaps.some((g) => g.d === d && px >= cellPx(g.col, g.row)[0] && px < cellPx(g.col, g.row)[0] + S);
+    const gapY = (d, py) => o.gaps.some((g) => g.d === d && py >= cellPx(g.col, g.row)[1] && py < cellPx(g.col, g.row)[1] + S);
+    for (let k = 0; k < w; k++) {
+      if (!gapX(1, left + k)) ctx.fillRect(left + k, top, 1, 1);
+      if (!gapX(3, left + k)) ctx.fillRect(left + k, top + h - 1, 1, 1);
+    }
+    for (let k = 0; k < h; k++) {
+      if (!gapY(2, top + k)) ctx.fillRect(left, top + k, 1, 1);
+      if (!gapY(0, top + k)) ctx.fillRect(left + w - 1, top + k, 1, 1);
+    }
+  }
+
   /**
-   * Draws a map model at 3 px per cell, top left at (x, y); `t` is wall
-   * seconds. A link joins the centre pixels of its two cells and a stub stays
-   * inside its own cell.
+   * Draws a map model at 3 px per cell, top left at (x, y); `t` is seconds
+   * since the pause began. A link joins the centre pixels of its two cells and
+   * a stub stays inside its own cell.
    */
   function drawMap(model, x, y, t) {
     const S = MAP_SCALE;
+    // Top left pixel of a frame cell; rows run up the screen.
+    const cellPx = (col, row) => [x + col * S, y + (MAP_ROWS - 1 - row) * S];
     const dot = (col, row, i, d, color) => {
+      const [px, py] = cellPx(col, row);
       ctx.fillStyle = color;
-      ctx.fillRect(x + col * S + 1 + i * DX[d], y + (MAP_ROWS - 1 - row) * S + 1 - i * DY[d], 1, 1);
+      ctx.fillRect(px + 1 + i * DX[d], py + 1 - i * DY[d], 1, 1);
+    };
+    const block = (c, color) => {
+      const [px, py] = cellPx(c.col, c.row);
+      ctx.fillStyle = color;
+      ctx.fillRect(px, py, S, S);
     };
     ctx.fillStyle = pal('0');
     ctx.fillRect(x, y, MAP_COLS * S, MAP_ROWS * S);
     ctx.fillStyle = pal('4');
-    for (const o of model.outlines) {
-      const left = x + o.col * S, top = y + (MAP_ROWS - o.row - BH) * S, w = BW * S, h = BH * S;
-      // A crossed door opens its cell's three pixels of the wall.
-      const gapX = (d, px) => o.gaps.some((g) => g.d === d && px >= x + g.col * S && px < x + (g.col + 1) * S);
-      const gapY = (d, py) => o.gaps.some((g) => g.d === d && py >= y + (MAP_ROWS - 1 - g.row) * S && py < y + (MAP_ROWS - g.row) * S);
-      for (let k = 0; k < w; k++) {
-        if (!gapX(1, left + k)) ctx.fillRect(left + k, top, 1, 1);
-        if (!gapX(3, left + k)) ctx.fillRect(left + k, top + h - 1, 1, 1);
-      }
-      for (let k = 0; k < h; k++) {
-        if (!gapY(2, top + k)) ctx.fillRect(left, top + k, 1, 1);
-        if (!gapY(0, top + k)) ctx.fillRect(left + w - 1, top + k, 1, 1);
-      }
-    }
+    for (const o of model.outlines) mapOutline(o, cellPx);
     for (const s of model.stubs) for (let i = 0; i < 2; i++) dot(s.col, s.row, i, s.d, pal('7'));
     for (const l of model.lines) for (let i = 0; i <= 3; i++) dot(l.col, l.row, i, l.d, pal('b'));
     for (const f of model.flames) {
-      ctx.fillStyle = pal('i');
-      ctx.fillRect(x + f.col * S, y + (MAP_ROWS - 1 - f.row) * S, S, S);
+      block(f, pal('i'));
       dot(f.col, f.row, 0, 0, pal('j'));
     }
-    const e = model.explorer;
-    if (e && Math.floor(t * 3) % 2 === 0) {
-      ctx.fillStyle = pal('p');
-      ctx.fillRect(x + e.col * S, y + (MAP_ROWS - 1 - e.row) * S, S, S);
-    }
+    // The dot shows first, so it is on screen when the pause begins.
+    if (model.explorer && Math.floor(t * 3) % 2 === 0) block(model.explorer, pal('p'));
   }
 
   return { ctx, scene, hud, text, panel, prepare, drawMap };

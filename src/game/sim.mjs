@@ -69,16 +69,18 @@ export function createTrail() {
   return new Map();
 }
 
+const trailKey = (x, y) => `${x},${y}`;
+
 /** The trail's record of board (x, y): `stood` and `walked` per cell, or undefined. */
 export function trailAt(trail, x, y) {
-  return trail.get(`${x},${y}`);
+  return trail.get(trailKey(x, y));
 }
 
 function trailBoard(trail, bd) {
   let t = trailAt(trail, bd.x, bd.y);
   if (!t) {
     t = { x: bd.x, y: bd.y, stood: new Uint8Array(NCELL), walked: new Uint8Array(NCELL) };
-    trail.set(`${bd.x},${bd.y}`, t);
+    trail.set(trailKey(bd.x, bd.y), t);
   }
   return t;
 }
@@ -88,7 +90,7 @@ export function recordStood(trail, bd, cell) {
 }
 
 /** Records link or door d from (bd, cell) to (to.board, to.cell), standing on both ends. */
-export function recordWalk(trail, bd, cell, d, to) {
+function recordWalk(trail, bd, cell, d, to) {
   const a = trailBoard(trail, bd), b = trailBoard(trail, to.board);
   a.stood[cell] = 1;
   b.stood[to.cell] = 1;
@@ -404,7 +406,7 @@ function flameTouch(s) {
 }
 
 /** Records the one link or door that joins the cell the tick began on to the current cell. */
-function walkTrail(s, bd, cell) {
+function recordMove(s, bd, cell) {
   for (let d = 0; d < 8; d++) {
     const to = s.world.step(bd, cell, d);
     if (to && to.board.x === s.bd.x && to.board.y === s.bd.y && to.cell === s.cell) { recordWalk(s.trail, bd, cell, d, to); return; }
@@ -432,7 +434,7 @@ export function step(s, h, v, jump = false, edges = NO_EDGES) {
   else if (s.mode === 'air') airMove(s, h, v, dt);
   else linkMove(s, h, v, dt);
   // Every path that changes the cell runs above; the trail follows the cell.
-  if (s.bd !== fromBd || s.cell !== fromCell) walkTrail(s, fromBd, fromCell);
+  if (s.bd !== fromBd || s.cell !== fromCell) recordMove(s, fromBd, fromCell);
   // Contact with a flame holds the torch at full; events fire once per contact.
   const touch = flameTouch(s);
   if (touch) {

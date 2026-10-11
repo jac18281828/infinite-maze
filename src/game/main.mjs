@@ -10,6 +10,7 @@ import { runScript, SELFTEST_CODE } from './autopilot.mjs';
 import { createTouch, layout, viewport } from './touch.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, mapModel } from './map.mjs';
+import { RGB, idx } from './art.mjs';
 
 const KEY_SAVE = 'infinite-maze.save';
 const KEY_BEST = 'infinite-maze.best';
@@ -92,7 +93,7 @@ function selftest() {
     r.scene(sim, cam, 0);
     r.hud(sim);
     // Draws the pause screen over the scene, so a draw-time error fails the gate.
-    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd), pauseMap: null });
+    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd), pauseMap: null, pausedAt: null });
     present();
     const px = view.getContext('2d').getImageData(0, 0, VIEW_W, VIEW_H).data;
     const colours = new Set();
@@ -146,7 +147,7 @@ function driveTouch(copied) {
   const pointer = (type, el, x, y) => el.dispatchEvent(new PointerEvent(type, {
     pointerId: 7, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true,
   }));
-  const press = (code, key) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }));
+  const press = (code, key, repeat = false) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, repeat, bubbles: true, cancelable: true }));
   const copies = (sid, want) => {
     copied.length = 0;
     click(sid, 'copy');
@@ -269,19 +270,31 @@ function driveTouch(copied) {
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
   need(g.frame === g.sim.bd.band, 'PAUSE frames the explorer\'s band');
-  const arrow = (code, repeat = false) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key: code, repeat, bubbles: true, cancelable: true }));
-  arrow('ArrowUp');
+  press('ArrowUp', 'ArrowUp');
   need(g.frame === g.sim.bd.band + 1, 'Up pans one band up');
-  arrow('ArrowUp', true);
-  arrow('ArrowLeft');
+  press('ArrowUp', 'ArrowUp', true);
+  press('ArrowLeft', 'ArrowLeft');
   need(g.frame === g.sim.bd.band + 1, 'a held Up and a Left pan nothing');
-  arrow('KeyS');
+  press('KeyS', 's');
   need(g.frame === g.sim.bd.band, 'S pans one band down');
   toggles('pause');
   copies('pause', hereCode(g));
+  const before = pauseModel(g).explorer;
+  // A pan before RESUME must not outlast the pause.
+  press('ArrowUp', 'ArrowUp');
   click('pause', 'resume');
   need(g.screen === 'play', 'RESUME returns to play');
+  // Walk to another cell of the band, so a map kept from the last pause shows the old one.
+  const band = g.sim.bd.band, cell = g.sim.cell, bd = g.sim.bd;
+  for (const [h, v] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (let i = 0; i < 600 && g.sim.cell === cell && g.sim.bd === bd; i++) step(g.sim, h, v);
+    if (g.sim.cell !== cell || g.sim.bd !== bd) break;
+  }
+  need(g.sim.bd.band === band && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its band');
   click('play', 'pause');
+  need(g.frame === frameOf(g.sim.bd), 'PAUSE frames the explorer\'s band again');
+  const after = pauseModel(g).explorer;
+  need(after && (!before || after.col !== before.col || after.row !== before.row), 'PAUSE draws the explorer where it now stands');
   click('pause', 'title');
   need(g.screen === 'title', 'TITLE reaches the title');
 
@@ -311,7 +324,11 @@ function driveTouch(copied) {
   g.keys.clear();
   press('Escape', 'Escape');
   need(g.screen === 'pause' && g.frame === frameOf(g.sim.bd), 'Esc pauses on the explorer\'s band');
-  draw(g, 0);
+  // The first pause frame lands half a second into the page and shows the explorer's dot.
+  draw(g, 0.5);
+  const e = pauseModel(g).explorer;
+  const dot = view.getContext('2d').getImageData(52 + e.col * 3 + 1, 28 + (27 - e.row) * 3 + 1, 1, 1).data;
+  need(RGB[idx('p')].every((v, i) => dot[i] === v), 'the pause map shows the explorer first');
 }
 
 const DIRS = {
@@ -340,7 +357,7 @@ function createGame() {
     world: null, renderer: null, sim: null, preview: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
     // The band the pause map frames, and its model.
-    frame: 0, pauseMap: null,
+    frame: 0, pauseMap: null, pausedAt: null,
   };
 }
 
@@ -422,6 +439,7 @@ function playKey(g, e) {
     g.screen = 'pause';
     g.frame = frameOf(g.sim.bd);
     g.pauseMap = null;
+    g.pausedAt = null;
     store(KEY_SAVE, hereCode(g));
     return;
   }
@@ -558,7 +576,8 @@ function drawPause(g, t = 0) {
   r.panel(50, 2, 220, 176);
   r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
   r.text(`TOMB ${g.frame}`, 267, 16, 'a', { align: 'right' });
-  r.drawMap(pauseModel(g), 52, 28, t);
+  if (g.pausedAt === null) g.pausedAt = t;
+  r.drawMap(pauseModel(g), 52, 28, t - g.pausedAt);
   r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
   r.text(hereCode(g), VIEW_W / 2, 129, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });

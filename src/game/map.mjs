@@ -37,14 +37,14 @@ export function mapModel(world, trail, b, at) {
   for (const t of boards) {
     const bd = world.board(t.x, t.y);
     if (!bd.links) continue;
-    const lit = world.flamesAt(t.x, t.y);
+    const flameCells = world.flamesAt(t.x, t.y);
     const gaps = [];
     let entered = false;
     for (let cell = 0; cell < NCELL; cell++) {
       if (!t.stood[cell]) continue;
       entered = true;
       const here = cellAt(bd, cell);
-      if (lit.includes(cell)) flames.push(here);
+      if (flameCells.includes(cell)) flames.push(here);
       for (let d = 0; d < 8; d++) {
         const to = world.step(bd, cell, d);
         if (!to) continue;
