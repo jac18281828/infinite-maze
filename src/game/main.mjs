@@ -354,11 +354,11 @@ function driveTouch(copied) {
   const r = live(pad, 'pad');
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2, d = r.width / 3;
   // The placed controls say which side the pad stands on: its centre minus the fire button's.
-  const padAhead = () => {
+  const padOffset = () => {
     const p = live(touch.padEl, 'pad'), f = live(touch.fireEl, 'fire');
     return p.left + p.width / 2 - (f.left + f.width / 2);
   };
-  need(padAhead() > 0, 'boot reads the stored pad side');
+  need(padOffset() > 0, 'boot reads the stored pad side');
   pointer('pointerdown', pad, cx + d, cy);
   pointer('pointercancel', pad, cx + d, cy);
   need(!g.keys.has('r') && (g.release & KEY.R) !== 0, 'pointercancel releases Right');
@@ -433,7 +433,7 @@ function driveTouch(copied) {
   need(g.screen === 'play' && g.sim === run && g.world === runWorld && g.code === runCode, 'pause, TITLE and RESUME return to the same run');
   need(run.burn === BURN_S / 2 && run.time === 77, 'the resumed run keeps its torch and time');
   need(g.difficulty === runWorld.difficulty, 'RESUME moves the setting to the run\'s');
-  need(load(KEY_PAD) === 'left' && padAhead() < 0, 'PAD stores the side and mirrors the layout');
+  need(load(KEY_PAD) === 'left' && padOffset() < 0, 'PAD stores the side and mirrors the layout');
 
   // P pauses and resumes; Esc does the same as the alias.
   press('KeyP', 'p');
@@ -551,6 +551,9 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   need(g.screen === 'title', 'the title ignores an auto-repeated P');
   press('Escape', 'Escape', true);
   need(g.screen === 'title', 'the title ignores an auto-repeated Esc');
+  const sideNow = g.side;
+  press('KeyH', 'h', true);
+  need(g.side === sideNow && load(KEY_PAD) === sideNow, 'the title ignores an auto-repeated H');
   click('title', 'resume');
   need(g.screen === 'play' && sized('ultimate') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays a save with no stored difficulty at ULTIMATE on its board');
   click('play', 'pause');

@@ -300,7 +300,7 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
   }
 });
 
-test('in band mode the pad centre sits a quarter of the way down the band, MARGIN below the view at most', () => {
+test('in band mode the pad centre sits a quarter of the way down the band, its top at least MARGIN below the view', () => {
   for (const spec of [PORTRAIT, IPAD, PHONE]) {
     const { pad, band } = layout(spec);
     assert.ok(Math.abs(pad.y + pad.s / 2 - (band.y + band.h / 4)) <= 1, `${spec.w}x${spec.h}: a quarter down`);
@@ -335,6 +335,8 @@ test('the fire button stands opposite the pad at its height, sized by FIRE_FRAC 
   }
   assert.equal(layout(PORTRAIT).fire.s, 64);
   assert.equal(layout({ w: 300, h: 300, dpr: 2, insets: {}, touch: true }).fire.s, 50);
+  // D is 109 here, so FIRE_FRAC gives 43 and FIRE_MIN binds.
+  assert.equal(layout({ w: 260, h: 260, dpr: 2, insets: {}, touch: true }).fire.s, FIRE_MIN);
   for (const swap of [false, true]) {
     const lay = layout({ w: 1280, h: 720, dpr: 2, touch: false, swap });
     assert.equal(lay.fire, null);
@@ -387,6 +389,7 @@ test('the pad, the fire button and PAUSE stay GAP apart in the safe area at ever
     const [pause] = keyRects(lay, 'play', ['PAUSE']);
     assert.equal(lay.mode, mode);
     assert.ok(Math.abs(pause.x + pause.w / 2 - (lay.fire.x + lay.fire.s / 2)) <= 1, `${w}x${h}: PAUSE centred on the fire button`);
+    if (mode === 'band') assert.equal(pause.y, lay.band.y + GAP, `${w}x${h}: PAUSE at the top of the band`);
     if (w === 400 && h === 400) assert.ok(Math.abs(pause.y + pause.h + GAP - lay.fire.y) <= 1e-9, '400x400: PAUSE just above the fire button');
   }
 });
@@ -406,6 +409,25 @@ for (const spec of [LANDSCAPE, LAND_375, SHORT, WIDE_320]) {
     assert.equal(labels.length, 8);
     const box = explorerBox(lay);
     for (const r of keyRects(lay, 'title', labels)) assert.ok(apart(box, r), `explorer clear of ${JSON.stringify(r)}`);
+  });
+}
+
+// Insets that leave the two strips one pixel apart after rounding: the keys share the narrower width.
+for (const [dpr, wider] of [[2, 'left'], [3, 'right']]) {
+  test(`title keys in two strips share the narrower width and stay in their strips, the ${wider} strip wider`, () => {
+    const lay = layout({ w: 650, h: 340, dpr, insets: { left: 44 }, touch: true });
+    const labels = softKeys({ screen: 'title', typing: false, resume: true }).map((k) => k.text);
+    const rects = keyRects(lay, 'title', labels);
+    const [p0, p1] = PANEL_X.title, { safe, view, scale } = lay;
+    const left = { x: safe.x + GAP, w: view.x + p0 * scale - GAP - (safe.x + GAP) };
+    const right = { x: view.x + p1 * scale + GAP, w: safe.x + safe.w - GAP - (view.x + p1 * scale + GAP) };
+    assert.equal(Math.floor(left.w) > Math.floor(right.w), wider === 'left');
+    const half = labels.length / 2;
+    rects.forEach((r, i) => {
+      const strip = i < half ? left : right;
+      assert.equal(r.w, Math.floor(Math.min(left.w, right.w)), `${labels[i]} takes the narrower width`);
+      assert.ok(r.x >= strip.x - 1e-9 && r.x + r.w <= strip.x + strip.w + 1e-9, `${labels[i]} stays in its strip`);
+    });
   });
 }
 
@@ -481,6 +503,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['side: padSide(load(KEY_PAD)),', 'side: padSide(null),', /^fail: touch boot reads the stored pad side/],
       ['store(KEY_PAD, g.side);', 'void g;', /^fail: touch PAD stores the side and mirrors the layout/],
       ['tap(SPACE.code, SPACE.key);', "tap('KeyX', 'x');", /^fail: touch FIRE jumps/],
+      ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch the title ignores an auto-repeated H/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

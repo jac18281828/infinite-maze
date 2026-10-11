@@ -20,8 +20,26 @@ const KEY_H = 44;
 const KEY_MIN_W = 44;
 const PAUSE_W = 96;
 const DOUBLE_TAP_MS = 350;
+// The pad and the fire button draw translucent over the view in overlay mode.
+const OVERLAY_ALPHA = 0.6;
 
 const mid = (a, size, inner) => a + (size - inner) / 2;
+
+/**
+ * The pad and the fire button for a pad of diameter D whose left edge and top
+ * are x and y. The fire button mirrors the pad across the safe area's
+ * vertical centre line at the pad's height; `swap` exchanges their sides.
+ */
+function controls(safe, D, swap, x, y) {
+  const s = Math.max(FIRE_MIN, Math.floor(FIRE_FRAC * D));
+  const c2 = 2 * safe.x + safe.w;
+  const padCx = swap ? c2 - (x + D / 2) : x + D / 2;
+  const fireCx = c2 - padCx;
+  return {
+    pad: { x: padCx - D / 2, y, s: D },
+    fire: { x: fireCx - s / 2, y: y + D / 2 - s / 2, s },
+  };
+}
 
 /**
  * Where the view, the d-pad, the fire button and the soft-key areas go.
@@ -60,17 +78,6 @@ export function layout({ w, h, dpr = 1, insets = {}, touch, swap = false }) {
   const vw = bw / dpr, vh = bh / dpr;
   const snap = (v) => Math.round(v * dpr) / dpr;
   const vx = snap(mid(safe.x, safe.w, vw));
-  // The pad's left edge and top, then both controls by `swap`.
-  const controls = (x, y) => {
-    const s = Math.max(FIRE_MIN, Math.floor(FIRE_FRAC * D));
-    const c2 = 2 * safe.x + safe.w;
-    const padCx = swap ? c2 - (x + D / 2) : x + D / 2;
-    const fireCx = c2 - padCx;
-    return {
-      pad: { x: padCx - D / 2, y, s: D },
-      fire: { x: fireCx - s / 2, y: y + D / 2 - s / 2, s },
-    };
-  };
   if (band) {
     const rest = { x: safe.x, y: safe.y + vh, w: safe.w, h: safe.h - vh };
     // The pad's centre rests a quarter in, where a left thumb sits on a
@@ -80,13 +87,13 @@ export function layout({ w, h, dpr = 1, insets = {}, touch, swap = false }) {
     return {
       mode: 'band', D, safe, band: rest, scale: vw / VIEW_W,
       view: { x: vx, y: safe.y, w: vw, h: vh }, backing: { w: bw, h: bh },
-      ...controls(rest.x + Math.max(MARGIN, rest.w / 4 - D / 2), top),
+      ...controls(safe, D, swap, rest.x + Math.max(MARGIN, rest.w / 4 - D / 2), top),
     };
   }
   return {
     mode: 'overlay', D, safe, band: null, scale: vw / VIEW_W,
     view: { x: vx, y: snap(mid(safe.y, safe.h, vh)), w: vw, h: vh }, backing: { w: bw, h: bh },
-    ...controls(safe.x + MARGIN, safe.y + safe.h - MARGIN - D),
+    ...controls(safe, D, swap, safe.x + MARGIN, safe.y + safe.h - MARGIN - D),
   };
 }
 
@@ -412,16 +419,17 @@ function stopDoubleTapZoom() {
  */
 export function createTouch({ state, onMode }) {
   const root = document.getElementById('touch');
-  const padEl = document.createElement('div');
-  padEl.id = 'pad';
-  const padCv = document.createElement('canvas');
-  padEl.append(padCv);
-  root.append(padEl);
-  const fireEl = document.createElement('div');
-  fireEl.id = 'fire';
-  const fireCv = document.createElement('canvas');
-  fireEl.append(fireCv);
-  root.append(fireEl);
+  // A round control: a div holding one canvas.
+  const disc = (id) => {
+    const el = document.createElement('div');
+    el.id = id;
+    const cv = document.createElement('canvas');
+    el.append(cv);
+    root.append(el);
+    return { el, cv };
+  };
+  const { el: padEl, cv: padCv } = disc('pad');
+  const { el: fireEl, cv: fireCv } = disc('fire');
   const pad = createPad();
   // Pointers holding the fire button. They never enter the pad's bookkeeping.
   const fireHeld = new Set();
@@ -477,9 +485,13 @@ export function createTouch({ state, onMode }) {
     const r = padEl.getBoundingClientRect();
     return { dx: e.clientX - (r.left + r.width / 2), dy: e.clientY - (r.top + r.height / 2), D: r.width };
   }
-  padEl.addEventListener('pointerdown', (e) => {
+  // Takes a pointer for `el`: no default action, and its moves and lift follow it.
+  function capture(el, e) {
     e.preventDefault();
-    try { padEl.setPointerCapture(e.pointerId); } catch { /* a dispatched pointer cannot be captured */ }
+    try { el.setPointerCapture(e.pointerId); } catch { /* a dispatched pointer cannot be captured */ }
+  }
+  padEl.addEventListener('pointerdown', (e) => {
+    capture(padEl, e);
     const { dx, dy, D } = viewOf(e);
     run(pad.down(e.pointerId, dx, dy, D));
   });
@@ -496,8 +508,7 @@ export function createTouch({ state, onMode }) {
   }
   // A jump fires on press, so the fire button takes `pointerdown`, not a click.
   fireEl.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    try { fireEl.setPointerCapture(e.pointerId); } catch { /* a dispatched pointer cannot be captured */ }
+    capture(fireEl, e);
     fireHeld.add(e.pointerId);
     tap(SPACE.code, SPACE.key);
   });
@@ -517,14 +528,21 @@ export function createTouch({ state, onMode }) {
   window.addEventListener('pointerdown', (e) => setOn(nextTouchMode(on, e)), true);
   window.addEventListener('keydown', (e) => setOn(nextTouchMode(on, e)), true);
 
-  function drawPad(held) {
-    const s = lay.pad.s, dpr = lay.backing.w / lay.view.w;
-    padCv.width = Math.round(s * dpr);
-    padCv.height = padCv.width;
-    padCv.style.width = padCv.style.height = `${s}px`;
-    const c = padCv.getContext('2d');
+  // Sizes `cv` to s CSS px at the backing's resolution and returns its context in CSS px.
+  function sizeDisc(cv, s) {
+    const dpr = lay.backing.w / lay.view.w;
+    cv.width = Math.round(s * dpr);
+    cv.height = cv.width;
+    cv.style.width = cv.style.height = `${s}px`;
+    const c = cv.getContext('2d');
     c.scale(dpr, dpr);
-    const alpha = lay.mode === 'overlay' ? 0.6 : 1;
+    return c;
+  }
+  const discAlpha = () => (lay.mode === 'overlay' ? OVERLAY_ALPHA : 1);
+
+  function drawPad(held) {
+    const s = lay.pad.s, c = sizeDisc(padCv, s);
+    const alpha = discAlpha();
     const r = s / 2;
     c.fillStyle = rgba(PLATE, alpha);
     c.strokeStyle = PALETTE[EDGE];
@@ -549,14 +567,9 @@ export function createTouch({ state, onMode }) {
 
   // A red arcade button; a held pointer lights it torch orange with a gold rim.
   function drawFire(down) {
-    const s = lay.fire.s, dpr = lay.backing.w / lay.view.w;
-    fireCv.width = Math.round(s * dpr);
-    fireCv.height = fireCv.width;
-    fireCv.style.width = fireCv.style.height = `${s}px`;
-    const c = fireCv.getContext('2d');
-    c.scale(dpr, dpr);
+    const s = lay.fire.s, c = sizeDisc(fireCv, s);
     const r = s / 2;
-    c.fillStyle = rgba(down ? TORCH_ORANGE : TORCH_RED, lay.mode === 'overlay' ? 0.6 : 1);
+    c.fillStyle = rgba(down ? TORCH_ORANGE : TORCH_RED, discAlpha());
     c.strokeStyle = PALETTE[down ? GOLD : EDGE];
     c.lineWidth = 2;
     c.beginPath(); c.arc(r, r, r - 1, 0, Math.PI * 2); c.fill(); c.stroke();

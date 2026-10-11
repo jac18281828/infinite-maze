@@ -758,8 +758,9 @@ scrolls, zooms or selects.
   | splash | CONTINUE (Enter), HOME (Q) |
 
   In overlay mode a screen's keys stand in one column beside its panel; where
-  one column cannot hold them, as the title's eight, the first half stand in
-  the left strip and the rest in the right. The title's preview explorer then
+  one column cannot hold them (the title's eight need a safe height of 410 px,
+  so 640x360 splits them and 736x414 does not), the first half stand in the
+  left strip and the rest in the right. The title's preview explorer then
   stands lower, below the left column.
 
   Each P key has Esc as its keyboard alias. CANCEL sends Esc, because P types
