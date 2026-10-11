@@ -303,3 +303,11 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       assert.match(verdict(broken, '500,1000'), miss, from);
     }
   });
+
+test('the self-test plane leg fails when the renderer refuses board columns outside 0-5',
+  { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
+    const html = build();
+    const guarded = html.replace('  function boardArt(bx, by) {\n', '  function boardArt(bx, by) {\n    if (bx < 0 || bx >= 6) return null;\n');
+    assert.notEqual(guarded, html);
+    assert.match(verdict(guarded, '1280,720'), /^fail: plane leg/);
+  });

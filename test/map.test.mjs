@@ -1,16 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld } from '../src/world/world.mjs';
+import { createWorld, boardCoords, tombOf } from '../src/world/world.mjs';
 import { NCELL, BW, BH } from '../src/world/board.mjs';
 import { createSim, step, inputEdges, createTrail, recordStood, BURN_S } from '../src/game/sim.mjs';
 import { createAutopilot, SELFTEST_CODE, SELFTEST_TICKS } from '../src/game/autopilot.mjs';
-import { frameOf, panFrame, mapModel, mapCells } from '../src/game/map.mjs';
+import { frameOf, panFrame, sameFrame, mapModel, mapCells } from '../src/game/map.mjs';
 import { DIFFICULTY } from '../src/world/band.mjs';
 
 const EMPTY = { lines: [], stubs: [], outlines: [], flames: [], explorer: null };
 
 const key = (bd, cell) => `${bd.x},${bd.y}:${cell}`;
-const bandOfY = (y) => Math.floor(y / 4);
+const fkey = (f) => `${f.u},${f.v}`;
+const inTomb = (x, y, f) => sameFrame(tombOf(x, y), f);
 
 /** Cells stood on and links walked, read from nothing but each tick's (bd, cell). */
 function watcher(world, s) {
@@ -35,31 +36,32 @@ function watcher(world, s) {
   };
 }
 
-const frameCell = (bd, cell, b) => [bd.x * BW + (cell % BW), (bd.y - 4 * b) * BH + ((cell / BW) | 0)];
+const frameCell = (bd, cell, f) => [(bd.x - 6 * f.u) * BW + (cell % BW), (bd.y - 4 * f.v) * BH + ((cell / BW) | 0)];
 
-/** What band b must show, checked over every cell, link and door of its boards. */
-function expectedSet(world, w, b, at) {
+/** What tomb f must show, checked over every cell, link and door of its boards. */
+function expectedSet(world, w, f, at) {
   const out = [];
   for (let i = 0; i < 24; i++) {
-    const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+    const { x, y } = boardCoords(f.u, f.v, i);
+    const bd = world.board(x, y);
     if (!bd.links) continue;
     let entered = false;
     for (let cell = 0; cell < NCELL; cell++) {
       if (!w.stood.has(key(bd, cell))) continue;
       entered = true;
-      const [col, row] = frameCell(bd, cell, b);
+      const [col, row] = frameCell(bd, cell, f);
       if (world.flamesAt(bd.x, bd.y).includes(cell)) out.push(`flame ${col},${row}`);
       for (let d = 0; d < 8; d++) {
         const to = world.step(bd, cell, d);
         if (!to) continue;
         if (!w.walked.has(`${key(bd, cell)}:${d}`)) { out.push(`stub ${col},${row},${d}`); continue; }
         if (d < 4 && !(bd.links[cell] & (1 << d))) out.push(`gap ${col},${row},${d}`);
-        if ([0, 1, 4, 5].includes(d) && bandOfY(to.board.y) === b) out.push(`line ${col},${row},${d}`);
+        if ([0, 1, 4, 5].includes(d) && inTomb(to.board.x, to.board.y, f)) out.push(`line ${col},${row},${d}`);
       }
     }
-    if (entered) out.push(`outline ${frameCell(bd, 0, b).join(',')}`);
+    if (entered) out.push(`outline ${frameCell(bd, 0, f).join(',')}`);
   }
-  if (at && bandOfY(at.bd.y) === b) out.push(`explorer ${frameCell(at.bd, at.cell, b).join(',')}`);
+  if (at && inTomb(at.bd.x, at.bd.y, f)) out.push(`explorer ${frameCell(at.bd, at.cell, f).join(',')}`);
   return out.sort();
 }
 
@@ -73,30 +75,37 @@ function flat(m) {
   ].sort();
 }
 
-/** Checks every band holding a stood cell, and the bands either side of them, against the watched run. */
-function checkBands(world, s, w, tally) {
-  const bands = new Set();
-  for (const k of w.stood) bands.add(bandOfY(+k.split(',')[1].split(':')[0]));
-  const lo = Math.min(...bands), hi = Math.max(...bands);
-  for (let b = lo - 1; b <= hi + 1; b++) {
-    const at = { bd: s.bd, cell: s.cell };
-    const got = flat(mapModel(world, s.trail, b, at));
-    assert.deepEqual(got, expectedSet(world, w, b, at), `band ${b}`);
-    assert.equal(new Set(got).size, got.length, `band ${b} lists nothing twice`);
-    if (!bands.has(b)) assert.deepEqual(mapModel(world, s.trail, b, at), EMPTY, `band ${b} holds no stood cell`);
-    for (const e of got) tally[e.split(' ')[0]] = (tally[e.split(' ')[0]] || 0) + 1;
+/** Checks every tomb holding a stood cell, and the tombs around them, against the watched run. */
+function checkTombs(world, s, w, tally) {
+  const tombs = new Set();
+  for (const k of w.stood) {
+    const [x, y] = k.split(':')[0].split(',').map(Number);
+    tombs.add(fkey(tombOf(x, y)));
+  }
+  const fs = [...tombs].map((k) => k.split(',').map(Number));
+  const u0 = Math.min(...fs.map((f) => f[0])), u1 = Math.max(...fs.map((f) => f[0]));
+  const v0 = Math.min(...fs.map((f) => f[1])), v1 = Math.max(...fs.map((f) => f[1]));
+  for (let v = v0 - 1; v <= v1 + 1; v++) {
+    for (let u = u0 - 1; u <= u1 + 1; u++) {
+      const f = { u, v }, at = { bd: s.bd, cell: s.cell };
+      const got = flat(mapModel(world, s.trail, f, at));
+      assert.deepEqual(got, expectedSet(world, w, f, at), `tomb ${fkey(f)}`);
+      assert.equal(new Set(got).size, got.length, `tomb ${fkey(f)} lists nothing twice`);
+      if (!tombs.has(fkey(f))) assert.deepEqual(mapModel(world, s.trail, f, at), EMPTY, `tomb ${fkey(f)} holds no stood cell`);
+      for (const e of got) tally[e.split(' ')[0]] = (tally[e.split(' ')[0]] || 0) + 1;
+    }
   }
 }
 
-/** Frame cell (col, row) of band b back to its board and cell. */
-function cellOf(world, b, col, row) {
-  const bd = world.board(Math.floor(col / BW), 4 * b + Math.floor(row / BH));
+/** Frame cell (col, row) of tomb f back to its board and cell. */
+function cellOf(world, f, col, row) {
+  const bd = world.board(6 * f.u + Math.floor(col / BW), 4 * f.v + Math.floor(row / BH));
   return [bd, (row % BH) * BW + (col % BW)];
 }
 
-function checkNamedCells(world, m, b) {
+function checkNamedCells(world, m, f) {
   for (const o of [...m.lines, ...m.stubs, ...m.outlines.flatMap((q) => q.gaps)]) {
-    const [bd, cell] = cellOf(world, b, o.col, o.row);
+    const [bd, cell] = cellOf(world, f, o.col, o.row);
     assert.ok(world.step(bd, cell, o.d), `(${o.col},${o.row}) holds direction ${o.d}`);
   }
 }
@@ -108,11 +117,12 @@ const noteTally = (tally) => {
 test('the map shows exactly the walked links, stood openings, entered boards and their flames', () => {
   const world = createWorld(SELFTEST_CODE);
   const tally = {};
+  const chain = world.tombFlames(0, 0).chains[0];
   // The self-test script, tick by tick, as runScript drives it.
   {
-    const s = createSim(world, world.resumePoint(world.tree(0).entryX, 0));
+    const s = createSim(world, world.startPoint());
     const w = watcher(world, s);
-    const drive = createAutopilot(world, world.bandFlames(0).chain);
+    const drive = createAutopilot(world, chain);
     let ph = 0, pv = 0;
     for (let i = 0; i < SELFTEST_TICKS; i++) {
       const [h, v, jump] = drive(s);
@@ -122,44 +132,50 @@ test('the map shows exactly the walked links, stood openings, entered boards and
       w.observe();
     }
     assert.ok(w.walked.size > 100, `only ${w.walked.size} walked ends`);
-    checkBands(world, s, w, tally);
+    checkTombs(world, s, w, tally);
   }
-  // The script on up through band 1's chain, which crosses the band seam.
+  // The script on through the downstream tomb's chain from the entry it reaches.
   {
-    const s = createSim(world, world.resumePoint(world.tree(0).entryX, 0));
+    const end = chain.at(-1);
+    const next = tombOf(end.x, end.y);
+    const t = world.tomb(next.u, next.v);
+    const j = t.entries.findIndex((i) => { const b = boardCoords(next.u, next.v, i); return b.x === end.x && b.y === end.y; });
+    const s = createSim(world, world.startPoint());
     const w = watcher(world, s);
-    const drive = createAutopilot(world, [...world.bandFlames(0).chain, ...world.bandFlames(1).chain]);
-    let ph = 0, pv = 0, top = 0;
-    for (let i = 0; i < 16000; i++) {
+    const drive = createAutopilot(world, [...chain, ...world.tombFlames(next.u, next.v).chains[j]]);
+    let ph = 0, pv = 0, left = false;
+    for (let i = 0; i < 40000; i++) {
       const [h, v, jump] = drive(s);
       step(s, h, v, jump, inputEdges(ph, pv, h, v));
       ph = h;
       pv = v;
       s.burn = BURN_S;
       w.observe();
-      top = Math.max(top, s.bd.band);
+      if (s.bd.u !== 0 || s.bd.v !== 0) left = true;
     }
-    assert.ok(top >= 1, 'the script climbs into band 1');
-    checkBands(world, s, w, tally);
+    assert.ok(left, 'the script leaves tomb (0, 0)');
+    assert.ok(s.solved.has('0,0'), 'the script solves tomb (0, 0)');
+    checkTombs(world, s, w, tally);
   }
   // Seeded random input, as the fuzz test drives it.
   let seed = 11;
   const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed >>> 16; };
   const w2 = createWorld('000001C3');
-  for (let b = -1; b <= 1; b++) {
-    const s = createSim(w2, w2.resumePoint(w2.tree(b).entryX, 4 * b));
+  for (const [u, v] of [[-1, -1], [0, 0], [1, 1]]) {
+    const e = boardCoords(u, v, w2.tomb(u, v).entries[0]);
+    const s = createSim(w2, w2.resumePoint(e.x, e.y));
     const w = watcher(w2, s);
-    let h = 0, v = 0, ph = 0, pv = 0;
+    let h = 0, vv = 0, ph = 0, pv = 0;
     for (let i = 0; i < 3000; i++) {
-      if (i % 20 === 0) { h = (rnd() % 3) - 1; v = (rnd() % 3) - 1; }
-      step(s, h, v, rnd() % 12 === 0, inputEdges(ph, pv, h, v));
+      if (i % 20 === 0) { h = (rnd() % 3) - 1; vv = (rnd() % 3) - 1; }
+      step(s, h, vv, rnd() % 12 === 0, inputEdges(ph, pv, h, vv));
       ph = h;
-      pv = v;
+      pv = vv;
       s.burn = BURN_S;
       w.observe();
     }
-    checkBands(w2, s, w, tally);
-    checkNamedCells(w2, mapModel(w2, s.trail, s.bd.band, { bd: s.bd, cell: s.cell }), s.bd.band);
+    checkTombs(w2, s, w, tally);
+    checkNamedCells(w2, mapModel(w2, s.trail, frameOf(s.bd), { bd: s.bd, cell: s.cell }), frameOf(s.bd));
   }
   noteTally(tally);
   assert.ok(tally.flame > 0 && tally.gap > 0);
@@ -167,8 +183,8 @@ test('the map shows exactly the walked links, stood openings, entered boards and
 
 test('every cell the model names holds a link or door, and a flame sits on a stood cell', () => {
   const world = createWorld(SELFTEST_CODE);
-  const s = createSim(world, world.resumePoint(world.tree(0).entryX, 0));
-  const drive = createAutopilot(world, world.bandFlames(0).chain);
+  const s = createSim(world, world.startPoint());
+  const drive = createAutopilot(world, world.tombFlames(0, 0).chains[0]);
   let ph = 0, pv = 0;
   for (let i = 0; i < SELFTEST_TICKS; i++) {
     const [h, v, jump] = drive(s);
@@ -176,52 +192,55 @@ test('every cell the model names holds a link or door, and a flame sits on a sto
     ph = h;
     pv = v;
   }
-  const m = mapModel(world, s.trail, 0, { bd: s.bd, cell: s.cell });
+  const f = { u: 0, v: 0 };
+  const m = mapModel(world, s.trail, f, { bd: s.bd, cell: s.cell });
   assert.ok(m.lines.length > 20 && m.stubs.length > 5 && m.outlines.length >= 2 && m.flames.length >= 1);
-  checkNamedCells(world, m, 0);
+  checkNamedCells(world, m, f);
 });
 
-test('frameOf floors board rows into bands, negative rows included', () => {
-  assert.equal(frameOf({ y: 0 }), 0);
-  assert.equal(frameOf({ y: 3 }), 0);
-  assert.equal(frameOf({ y: 4 }), 1);
-  assert.equal(frameOf({ y: -1 }), -1);
-  assert.equal(frameOf({ y: -4 }), -1);
-  assert.equal(frameOf({ y: -5 }), -2);
+test('frameOf floors board coordinates into tombs, negatives included', () => {
+  assert.deepEqual(frameOf({ x: 0, y: 0 }), { u: 0, v: 0 });
+  assert.deepEqual(frameOf({ x: 5, y: 3 }), { u: 0, v: 0 });
+  assert.deepEqual(frameOf({ x: 6, y: 4 }), { u: 1, v: 1 });
+  assert.deepEqual(frameOf({ x: -1, y: -1 }), { u: -1, v: -1 });
+  assert.deepEqual(frameOf({ x: -6, y: -4 }), { u: -1, v: -1 });
+  assert.deepEqual(frameOf({ x: -7, y: -5 }), { u: -2, v: -2 });
 });
 
-test('panFrame moves one band up or down and holds on left and right', () => {
-  assert.equal(panFrame(0, 'u'), 1);
-  assert.equal(panFrame(0, 'd'), -1);
-  assert.equal(panFrame(-3, 'u'), -2);
-  assert.equal(panFrame(2, 'l'), 2);
-  assert.equal(panFrame(2, 'r'), 2);
+test('panFrame moves one tomb in each arrow\'s direction', () => {
+  assert.deepEqual(panFrame({ u: 0, v: 0 }, 'u'), { u: 0, v: 1 });
+  assert.deepEqual(panFrame({ u: 0, v: 0 }, 'd'), { u: 0, v: -1 });
+  assert.deepEqual(panFrame({ u: -3, v: 2 }, 'l'), { u: -4, v: 2 });
+  assert.deepEqual(panFrame({ u: -3, v: 2 }, 'r'), { u: -2, v: 2 });
+  assert.ok(sameFrame({ u: 1, v: -1 }, { u: 1, v: -1 }) && !sameFrame({ u: 1, v: -1 }, { u: -1, v: 1 }));
 });
 
-test('a trail with stood cells in two bands fills each frame with its own band only', () => {
+test('a trail with stood cells in two tombs fills each frame with its own tomb only', () => {
   const world = createWorld(SELFTEST_CODE);
   const trail = createTrail();
-  const a = world.resumePoint(world.tree(0).entryX, 0), b = world.resumePoint(world.tree(-1).entryX, -4);
+  const a = world.startPoint();
+  const e = boardCoords(-1, 0, world.tomb(-1, 0).entries[0]);
+  const b = world.resumePoint(e.x, e.y);
   recordStood(trail, a.board, a.cell);
   recordStood(trail, b.board, b.cell);
   const at = { bd: a.board, cell: a.cell };
-  const m0 = mapModel(world, trail, 0, at), m1 = mapModel(world, trail, -1, at);
-  assert.deepEqual(flat(m0), expectedSet(world, { stood: new Set([key(a.board, a.cell)]), walked: new Set() }, 0, at));
-  assert.deepEqual(flat(m1), expectedSet(world, { stood: new Set([key(b.board, b.cell)]), walked: new Set() }, -1, at));
+  const fa = { u: 0, v: 0 }, fb = { u: -1, v: 0 };
+  const m0 = mapModel(world, trail, fa, at), m1 = mapModel(world, trail, fb, at);
+  assert.deepEqual(flat(m0), expectedSet(world, { stood: new Set([key(a.board, a.cell)]), walked: new Set() }, fa, at));
+  assert.deepEqual(flat(m1), expectedSet(world, { stood: new Set([key(b.board, b.cell)]), walked: new Set() }, fb, at));
   assert.equal(m0.outlines.length, 1);
   assert.equal(m1.outlines.length, 1);
   assert.ok(m0.explorer && m1.explorer === null);
-  assert.deepEqual(mapModel(world, trail, 1, at), EMPTY);
-  assert.deepEqual(mapModel(world, trail, -2, at), EMPTY);
-  for (const [m, band] of [[m0, 0], [m1, -1]]) {
-    for (const e of [...m.stubs, ...m.outlines]) assert.ok(e.col >= 0 && e.col < 72 && e.row >= 0 && e.row < 28, `band ${band} stays in frame`);
+  for (const f of [{ u: 1, v: 0 }, { u: 0, v: 1 }, { u: -1, v: -1 }, { u: -2, v: 0 }]) assert.deepEqual(mapModel(world, trail, f, at), EMPTY);
+  for (const [m, f] of [[m0, fa], [m1, fb]]) {
+    for (const o of [...m.stubs, ...m.outlines]) assert.ok(o.col >= 0 && o.col < 72 && o.row >= 0 && o.row < 28, `tomb ${fkey(f)} stays in frame`);
   }
 });
 
 test('a fresh run frames a map of its start cell alone', () => {
   const world = createWorld(SELFTEST_CODE);
-  const s = createSim(world, world.resumePoint(world.tree(0).entryX, 0));
-  const m = mapModel(world, s.trail, 0, { bd: s.bd, cell: s.cell });
+  const s = createSim(world, world.startPoint());
+  const m = mapModel(world, s.trail, frameOf(s.bd), { bd: s.bd, cell: s.cell });
   assert.deepEqual(m.lines, []);
   assert.ok(m.flames.length <= 1);
   assert.equal(m.outlines.length, 1);

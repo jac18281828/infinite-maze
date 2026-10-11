@@ -1,14 +1,21 @@
-// Scripted input for the self-test: walks the explorer up band 0's chain of
-// route flames by feeding the same arrow and jump input a player would.
+// Scripted input for the self-test: walks the explorer along tomb (0, 0)'s
+// first chain of flames by feeding the same arrow and jump input a player
+// would.
 import { DX, DY } from '../world/board.mjs';
 import { createSim, step, inputEdges } from './sim.mjs';
 
 export const SELFTEST_CODE = '00000000';
 export const SELFTEST_TICKS = 3600;
 
-/** Link directions of the cell path from (bd, cell) to (goal, goalCell). */
+/**
+ * Link directions of the cell path from (bd, cell) to (goal, goalCell),
+ * searched within the tombs one tomb around both ends.
+ */
 export function pathTo(world, bd, cell, goal, goalCell) {
-  const lo = Math.min(bd.band, goal.band) - 1, hi = Math.max(bd.band, goal.band) + 1;
+  const u0 = Math.min(bd.u, goal.u) - 1, u1 = Math.max(bd.u, goal.u) + 1;
+  const v0 = Math.min(bd.v, goal.v) - 1, v1 = Math.max(bd.v, goal.v) + 1;
+  const near = (b) => b.u >= u0 && b.u <= u1 && b.v >= v0 && b.v <= v1;
+  // Boards near the start keep p below 2^46, so the key stays exact.
   const key = (b, c) => b.p * 128 + c;
   const target = key(goal, goalCell);
   const prev = new Map([[key(bd, cell), null]]);
@@ -17,7 +24,7 @@ export function pathTo(world, bd, cell, goal, goalCell) {
     const [b, c] = queue[h];
     for (let d = 0; d < 8; d++) {
       const t = world.step(b, c, d);
-      if (!t || t.board.band < lo || t.board.band > hi) continue;
+      if (!t || !near(t.board)) continue;
       const k = key(t.board, t.cell);
       if (prev.has(k)) continue;
       prev.set(k, [key(b, c), d]);
@@ -66,14 +73,13 @@ export function createAutopilot(world, goals, { jumps = true, grabs = true } = {
 }
 
 /**
- * Runs the self-test script: band 0's entry, then up its flame chain, for
- * `ticks` steps. Returns the sim and the first unmet requirement, if any.
- * `options` pass to createAutopilot.
+ * Runs the self-test script: tomb (0, 0)'s first entry, then along that
+ * entry's flame chain, for `ticks` steps. Returns the sim and the first
+ * unmet requirement, if any. `options` pass to createAutopilot.
  */
 export function runScript(world, ticks = SELFTEST_TICKS, options = {}) {
-  const t = world.tree(0);
-  const sim = createSim(world, world.resumePoint(t.entryX, 0));
-  const drive = createAutopilot(world, world.bandFlames(0).chain, options);
+  const sim = createSim(world, world.startPoint());
+  const drive = createAutopilot(world, world.tombFlames(0, 0).chains[0], options);
   let ph = 0, pv = 0;
   for (let i = 0; i < ticks; i++) {
     const [h, v, jump] = drive(sim);

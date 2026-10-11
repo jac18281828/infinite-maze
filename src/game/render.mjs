@@ -397,7 +397,7 @@ export function createRenderer(canvas, world) {
     } else if (Math.floor(sim.time * 4) % 2 === 0) {
       text('EMBER', 70, 5, 'o');
     }
-    text(`TOMB ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
+    text(`TOMB ${sim.solved.size}`, VIEW_W - 5, 5, 'm', { align: 'right' });
   }
 
   /** Draws board outline `o` in the current fill, open at each crossed door. */

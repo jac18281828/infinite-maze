@@ -15,29 +15,49 @@ The world has two scales, and both use the same maze rule:
 
 - **Board:** a 12×7 grid of cells. This is one room of the tomb, a little
   larger than two screens in each direction.
-- **Band:** a W×H grid of boards. Bands stack upward without end.
+- **Tomb:** a W×H grid of boards, also called a band; §3 builds its board
+  tree. Tombs tile an unbounded plane.
 
-The difficulty, picked on the title (§8), sets the band's size in boards:
+The difficulty, picked on the title (§8), sets the tomb's size in boards:
 EASY 3×2 (6 boards), MEDIUM 4×3 (12) and HARD 6×4 (24). Every other rule
-holds at every difficulty, and a world never mixes sizes. A band depends on
+holds at every difficulty, and a world never mixes sizes. A tomb depends on
 the seed, its position and the difficulty alone; the difficulty enters no
-hash, so HARD is the world from before difficulties existed.
+hash.
 
-Board coordinates are integers `(x, y)` with `x ∈ [0, W)` and `y ∈ ℤ`, where y
-increases upward. Board `(x, y)` belongs to band `b = ⌊y / H⌋`. Band 0 holds
-the start, and negative bands exist, so retreating downward is endless too.
-Every position outside `[0, W)` is rock.
+Board coordinates are integers `(x, y)`, both unbounded, where y increases
+upward. Tombs are keyed `(u, v)`, both in ℤ: tomb `(u, v)` holds boards
+`x ∈ [Wu, Wu + W)`, `y ∈ [Hv, Hv + H)`. Tomb `(0, 0)` holds the start. Every
+tomb is a pure function of the seed and its position, so the world is static
+and any tomb can be entered at any time.
 
-Within a band, the boards form a tree with one route from a door in the band's
-floor to a door in its ceiling. Dead-end branches hang off that route, and
-board positions on neither are solid rock. Consecutive bands share exactly one
-door. Every board's cells form a tree that connects all of that board's doors.
-A tree of trees, joined by single doors, is a tree. That gives three
+**Flow.** Each tomb leaves through one exit door: up, left or right, never
+down. The wall between tombs `(u, v)` and `(u + 1, v)` points right or left.
+With `r = u32(H("exit", u, v)) mod 3`, the tomb can leave right when wall
+`(u, v)` points right and left when wall `(u − 1, v)` points left. It exits
+up when `r = 0` or neither side is open; otherwise it exits left on `r = 1`
+and right on `r = 2` when both sides are open, or through the one open side.
+
+A tomb holds an in-door on its floor when the tomb below exits up, on its
+left wall when the left tomb exits right, and on its right wall when the
+right tomb exits left. The exit wall and the in-walls are distinct by
+construction, so a tomb has one exit and 0–3 in-doors, and a tomb wall holds
+at most one door.
+
+The flow cannot loop. No exit goes down, so height never falls along a way
+on, and a loop could lie only within one row. A loop within a row needs two
+side neighbours whose exits point at each other, and the wall between them
+points one way, so it forbids that pair. The tombs, joined by their doors,
+form a forest, and every way on climbs without end.
+
+Within a tomb, the boards form a tree that joins all of its doors: a trunk
+from an entry to the exit, tributaries from the other entries, dead-end
+branches, and rock on board positions in none of them. Every board's cells
+form a tree that connects all of that board's doors. Trees of cells, joined
+by single doors into tomb trees along a flow without loops, give two
 properties, at every depth:
 
-- A unique path between any two cells.
-- No loops.
-- An unbroken route upward.
+- No loops, so a path between two cells is unique.
+- An unbroken route upward from every cell.
 
 ## 2. Seed and hashing
 
@@ -62,44 +82,73 @@ the same world on every engine.
 
 | Value | Source | Range |
 |---|---|---|
-| Band edge column `e_b`: column of the door between bands `b−1` and `b` | `H("edge", b)` u32 mod W | `[0, W)` |
-| Band maze | sfc32 of `H("band", b, k)`, k = reroll | — |
+| Wall between tombs `(u,v)` and `(u+1,v)` | `H("flow", u, v)` byte 0 < 128 | right, else left |
+| Tomb exit draw `r` | `H("exit", u, v)` u32 mod 3 | `[0, 3)` |
+| Door between tombs `(u,v)` and `(u,v+1)` | `H("tfloor", u, v)` u32 mod W | board column `[0, W)` |
+| Door between tombs `(u,v)` and `(u+1,v)` | `H("tside", u, v)` u32 mod H | board row `[0, H)` |
+| Entry board `S` of a source tomb | `H("source", u, v)` u32 mod W·H | board index `[0, W·H)` |
+| Band maze | sfc32 of `H("band", u, v, k)`, k = reroll | — |
 | Side door between `(x,y)` and `(x+1,y)` | `H("hdoor", x, y)` u32 mod 5 + 1 | cell row `[1, 5]` |
 | Floor door between `(x,y)` and `(x,y+1)` | `H("vdoor", x, y)` u32 mod 10 + 1 | cell column `[1, 10]` |
 | Board cell maze | sfc32 of `H("board", x, y, k)`, k = reroll | — |
 | Flame in a dead-end board | `H("flame", x, y)` byte 0 < 128 | 50% |
 | Flame cell | `H("flame", x, y)` u32 at bytes 4–7 mod 84 | any of the 84 cells |
 
-Both boards on a shared wall read the same door key, so door positions match
-across every seam by construction. Doors stay out of corner cells, so two
-doors of one board never share a cell.
+Both boards on a shared wall read the same door key, and both tombs on a
+shared tomb wall read the same crossing key, so door positions match across
+every seam by construction. Doors stay out of corner cells, so two doors of
+one board never share a cell.
 
 ## 3. Band maze
 
-Band `b` spans board rows `Hb … Hb+H−1`. Its entry is board `(e_b, Hb)`,
-through the floor. Its exit is board `(e_{b+1}, Hb+H−1)`, through the ceiling.
+Tomb `(u, v)` spans board columns `Wu … Wu+W−1` and rows `Hv … Hv+H−1`, and
+its board index is `i = W · row + column` within the tomb. A door on the tomb
+wall between `(u, v)` and `(u, v + 1)` crosses at board column
+`u32(H("tfloor", u, v)) mod W`; on the wall between `(u, v)` and
+`(u + 1, v)`, at board row `u32(H("tside", u, v)) mod H`. The exit board `X`
+holds the exit door.
 
-1. **Route.** Run a randomized depth-first search over the W×H boards from
-   entry to exit. The search stack on arrival is the route. Reroll `k` until
-   the route covers at least half the band's boards: 3 at EASY, 6 at MEDIUM
-   and 12 at HARD.
-2. **Dead ends.** Repeatedly pick, uniformly, a board in the tree at depth
-   below 2 with an unused neighbour, and attach that neighbour. The route sits
-   at depth 0. Stop when no candidate remains. Every dead-end branch is
-   therefore at most `D = 2` boards deep.
-3. **Rock.** Board positions left unused are solid rock.
-4. **Flames.** Number the route boards from 0 at the band entry. Every route
-   board whose index is a multiple of 3 gets a flame at its flame cell, so
-   every band entry holds one. Half the dead-end boards get a flame at their
-   deepest cell. Then the generator measures the walking time, at the §6
-   speeds, along the cell path between consecutive route flames, crossing
-   into the next band's entry board where needed. Any gap over 150 s gets an
+1. **Entries.** List the tomb's in-door boards in wall order floor, left,
+   right: `E_1 … E_k`. A tomb with no in-door is a source; its single entry
+   board is `S = u32(H("source", u, v)) mod W·H`.
+2. **Trunk.** Run a randomized depth-first search over the W×H boards,
+   seeded from `H("band", u, v, k)`, from `E_1` (or `S`) to `X`. The search
+   stack on arrival is the trunk. Reroll `k` until the trunk covers at least
+   half the tomb's boards: 3 at EASY, 6 at MEDIUM and 12 at HARD. When the
+   entry board is `X` itself, the trunk is that one board and is exempt from
+   the minimum.
+3. **Tributaries.** For `j = 2 … k` in order, an `E_j` already in the tree
+   needs nothing. Otherwise a randomized depth-first search on the same
+   generator runs from `E_j` over boards outside the tree and ends on its
+   first step onto a tree board; its stack, without that board, is the
+   tributary. The unused boards around `E_j` always touch the tree, so a
+   tributary never fails.
+4. **Dead ends.** Repeatedly pick, uniformly, a board in the tree at depth
+   below 2 with an unused neighbour, and attach that neighbour. Trunk and
+   tributaries sit at depth 0. Stop when no candidate remains. Every dead-end
+   branch is therefore at most `D = 2` boards deep.
+5. **Rock.** Board positions left unused are solid rock.
+6. **Flames.** Every `E_j` and `S` holds a flame at its flame cell, an `E_j`
+   already on the trunk included. Number each route's boards from 0 at its
+   entry: the trunk from `E_1` or `S`, a tributary from its `E_j`. Every
+   route board whose index is a multiple of 3 holds a flame at its flame
+   cell. Half the dead-end boards get a flame at their deepest cell. Then,
+   for each entry in order, the generator walks that entry's chain: from its
+   flame along the cell path through its route, the trunk from the
+   confluence, and across the exit wall to the downstream tomb's entry board
+   there, whose flame always burns. The chain holds the flames on those
+   boards that the routes and earlier chains placed, in the order the walk
+   reaches them. Any gap over 150 s of walking, at the §6 speeds, gets an
    extra flame at its midpoint cell, and this repeats until no gap exceeds
-   150 s.
+   150 s. A board's flames include every flame any tomb's chain places on it.
 
-Every link in the band tree is a door. A board has 1–4 doors, at most one per
-wall. A route board's doors never share a wall, because the route never
-reverses.
+Every link in the band tree is a door, and a board holds a door on every tomb
+wall it carries. A board has 1–4 doors, at most one per wall. On a trunk or
+tributary board, the primary pair of §4 is the door toward its own route's
+predecessor (the in-door on `E_j`, the flame cell on `S`) and the door toward
+its successor (the exit door on `X`, the joined tree board on a tributary's
+last board). §4 exempts branches that hold a door, so a confluence board's
+extra door needs no rule of its own.
 
 ## 4. Board maze
 
@@ -175,25 +224,34 @@ builds a board when it first comes within one board of the camera.
 
 ## 5. Save code
 
-A position is one integer, `p = W·y + x`. The full save is the seed code plus
-`p`, written `K7Q2-M9XA:4813`. Resuming computes `y = ⌊p / W⌋` and
-`x = p mod W`, then regenerates that band and board directly from `H`. No
-replay is needed. The hero appears at the board's door that leads back toward
-the band entry. A rock position resumes at its band's entry. Any band entry is
-a valid start, a million bands up included.
+A position is one integer that pairs the board's signed coordinates. With
+`z(n) = 2n` for `n ≥ 0`, else `−2n − 1`, `a = z(x)` and `b = z(y)`:
 
-The save code omits the difficulty, so one `p` names different boards at
-different difficulties. The player picks the difficulty on the title, and the
-code reads at the difficulty in force:
+```
+p = a ≥ b ? a² + a + b : a + b²
+```
+
+The full save is the seed code plus `p`, written `K7Q2-M9XA:4813`. Resuming
+inverts the pairing, then regenerates that tomb and board directly from `H`.
+No replay is needed. A save holds `|x|` and `|y|` below 2²⁵, where `p` stays
+an exact integer, and a code outside that range is rejected; the longest
+code runs to 26 characters. The hero appears at the board's first primary
+cell `a`, the start of its way back along its route; a rock board resumes at
+its tomb's first entry. Any tomb entry is a valid start, a million tombs up
+included.
+
+The save code omits the difficulty, so one `p` names a board of different
+tombs at different difficulties. The player picks the difficulty on the
+title, and the code reads at the difficulty in force:
 
 - The game stores the title setting; absent, it is MEDIUM.
 - Every stored save keeps the difficulty of the run that wrote it; absent,
-  it is HARD, the one size of every save from before difficulties.
+  it is HARD.
 - RESUME plays the stored save at its own difficulty, and the title setting
   moves to match. A typed save code plays at the title setting.
 
 Resuming lights the torch to full. Flames never run out, so the save carries
-no pickup state. The game separately keeps the deepest band reached, as the
+no pickup state. The game separately keeps the most tombs solved, as the
 score, per seed and difficulty.
 
 ## 6. Movement
@@ -296,13 +354,13 @@ battery.
   and never runs out. §3 places them. A flame inside a route board can sit on
   a dead-end branch of that board's maze.
 
-Every band entry holds a flame. No stretch of the route takes more than 150 s
-to walk between flames, so a full torch covers the longest stretch twice, and
-only real disorientation runs it dry.
+Every tomb entry holds a flame. No stretch of any entry's way on takes more
+than 150 s to walk between flames, so a full torch covers the longest stretch
+twice, and only real disorientation runs it dry.
 
 When the burn reaches zero, the torch gutters to an 8 px ember for 10 s, and
 reaching a flame in that time relights it. Otherwise the run ends. The end
-screen shows the bands climbed, the time and the save code for the last band
+screen shows the tombs solved, the time and the save code for the last tomb
 entry reached, and Continue resumes there with a full torch.
 
 ## 8. Presentation
@@ -334,17 +392,21 @@ the upper floor, in air the mask already cuts. Where a gallery starts in a
 cell, a ladder in that cell ends at the floor, and a bottom door's sconce
 stands clear of the flight.
 
-**Labels.** On screen a band is a tomb: the HUD reads `TOMB n`, the title
-`BEST TOMB`, and the end screen `TOMBS CLIMBED`. The title's panel holds a
-difficulty row naming EASY, MEDIUM and HARD with the setting lit, and its
-save line names the save's difficulty. Its best tomb is the shown seed's at
-the setting. The pause and end screens name the run's difficulty after the
-save code. The pause map draws the run's band at 3 px per cell, a frame of
-`W·36 × H·21` px: 108×42 at EASY, 144×63 at MEDIUM and 216×84 at HARD.
+**Score.** A tomb is solved when the explorer crosses its exit door outward.
+A run counts the distinct tombs it solves and carries the set through
+Continue. The HUD's `TOMB n`, the title's `BEST TOMB` and the end screen's
+`TOMBS CLIMBED` show that count.
+
+**Labels.** The title's panel holds a difficulty row naming EASY, MEDIUM and
+HARD with the setting lit, and its save line names the save's difficulty. Its
+best tomb is the shown seed's at the setting. The pause and end screens name
+the run's difficulty after the save code. The pause map draws the run's tomb
+at 3 px per cell, a frame of `W·36 × H·21` px: 108×42 at EASY, 144×63 at
+MEDIUM and 216×84 at HARD.
 
 **Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
 pixels. It scrolls freely across board seams, and rock fills every position
-outside the band tree.
+outside the band trees.
 
 **Explorer.** A khaki-clad figure in a fedora, carrying a torch, with these
 animations:
@@ -440,19 +502,27 @@ scrolls, zooms or selects.
 ## 10. Acceptance
 
 A headless test harness, run with `node`, checks the generator against the
-same source the game uses, at every difficulty: HARD over bands −1000 to 1000
-and EASY and MEDIUM over −300 to 300, or each over a shorter range when the
-run asks for one. Each check reads the band size from its world, and the
-summary reports each difficulty's route lengths, rock boards per band,
-fallback rate and flame gaps.
+same source the game uses, at every difficulty. It checks the window of tombs
+`u ∈ [−10, 10]`, `v ∈ [−50, 50]`, 2,121 tombs, unless told otherwise. Each
+check reads the tomb size from its world. Continuity, Tree, Acyclic, Flames
+and Solvability follow doors held on both sides, never the generator's tomb
+graph, so a generator fault cannot vouch for itself. Flow alone reads the
+generator's exits, and checks them against the doors.
 
 - **Keccak:** SHA3-256 matches the FIPS 202 test vectors.
-- **Continuity:** over the range, every door matches in position on both
+- **Continuity:** every door in the window matches in position on both
   sides of its wall.
-- **Tree:** over the same range, the graph of all carved cells and doors is
-  connected and has edges = nodes − 1 for each band. A carved cell holds a
-  link or a door. Exactly one door joins consecutive bands.
-- **Bounds:** every band's route covers at least half its boards, no board
+- **Tree:** per tomb, the graph of carved cells and doors is one tree,
+  connected with edges = nodes − 1, that joins all of the tomb's wall doors.
+  A carved cell holds a link or a door.
+- **Flow:** each tomb's exit is left, right or up; its exit wall holds
+  exactly one door, matched on both sides; every other door of the tomb faces
+  a neighbour whose exit points into it; no two side neighbours exit into
+  each other. The harness reports the shares of up, left and right exits and
+  the mean sideways run.
+- **Acyclic:** the window's tombs, joined by their wall doors, form a forest:
+  union-find over tomb doors finds no cycle.
+- **Bounds:** every tomb's trunk covers at least half its boards, no board
   at `x = −1` or `x = W` holds a link, every dead-end branch is at most 2
   boards deep, and every board
   meets the targets in §4 or records its best-attempt fallback. A run of at
@@ -464,13 +534,15 @@ fallback rate and flame gaps.
 - **Carve:** every door cell and flame cell holds a link, every tree board
   carves at least 50 cells, and the mean stays within 48–56. A cell is carved
   when it holds a link, doors aside. The harness reports the mean.
-- **Flames:** every band entry holds a flame, and the walking time between
-  consecutive route flames stays at or under 150 s. The harness reports the
-  maximum and the 99th percentile.
-- **Solvability:** a breadth-first search from the first band's entry reaches
-  the last band's exit.
-- **Saves:** encoding and decoding round-trip at the world's size for a sample
-  of positions, and a board resumed at the world's difficulty is
+- **Flames:** every tomb entry holds a flame, and along each entry's way on
+  the walking time between consecutive chain flames stays at or under 150 s.
+  The harness reports the maximum and the 99th percentile.
+- **Solvability:** the harness follows the generator's exits from tomb
+  `(0, −50)` until a tomb in row 50, leaving the window sideways if the walk
+  does; a breadth-first search over carved cells and doors, confined to those
+  tombs, reaches the last tomb's exit door from the first tomb's first entry.
+- **Saves:** encoding and decoding round-trip for a sample of positions of
+  both signs, and a board resumed at the world's difficulty is
   byte-identical to one generated in sequence.
-- **Determinism:** a fixed seed code produces a fixed digest of bands 0–99 at
-  each difficulty; HARD's is the digest from before difficulties.
+- **Determinism:** a fixed seed code produces a fixed digest of tombs
+  `u ∈ [−2, 2]`, `v ∈ [0, 19]`, v outer and u inner, at each difficulty.

@@ -1,28 +1,30 @@
 // Each acceptance check passes a sound world and rejects one broken on purpose.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, acrossDoor, posOf, cellPath } from '../src/world/world.mjs';
+import { createWorld, acrossDoor, posOf, cellPath, boardCoords } from '../src/world/world.mjs';
 import { DX, DY, NCELL } from '../src/world/board.mjs';
+import { sideRow } from '../src/world/flow.mjs';
 import {
-  checkContinuity, checkTree, checkBounds, checkGalleries, checkCarve, checkFlames, checkSolvability, checkSaves,
-  bandShape,
+  checkContinuity, checkTree, checkFlow, checkAcyclic, checkBounds, checkGalleries, checkCarve, checkFlames,
+  checkSolvability, checkSaves, tombShape, tombWindow,
 } from '../tools/acceptance.mjs';
 
-const B0 = -2, B1 = 2;
+const WIN = tombWindow(-1, 1, -2, 2);
 const world = createWorld('00000000');
 
-/** A view of `world` with some boards and flames replaced. */
-function broken(base, { boards = new Map(), flames = new Map() } = {}) {
+/** A view of `world` with some boards, tombs and flame sets replaced. */
+function broken(base, { boards = new Map(), flames = new Map(), tombs = new Map() } = {}) {
   const key = (x, y) => `${x},${y}`;
   return {
     ...base,
     board: (x, y) => boards.get(key(x, y)) ?? base.board(x, y),
-    bandFlames: (b) => flames.get(b) ?? base.bandFlames(b),
+    tomb: (u, v) => tombs.get(key(u, v)) ?? base.tomb(u, v),
+    tombFlames: (u, v) => flames.get(key(u, v)) ?? base.tombFlames(u, v),
     flamesAt: (x, y) => {
       let cells = base.flamesAt(x, y);
-      for (const [fb, fs] of flames) {
-        const orig = base.bandFlames(fb);
-        for (const f of orig.flames) {
+      for (const [k, fs] of flames) {
+        const [u, v] = k.split(',').map(Number);
+        for (const f of base.tombFlames(u, v).flames) {
           if (f.x === x && f.y === y && !fs.flames.includes(f)) cells = cells.filter((c) => c !== f.cell);
         }
       }
@@ -48,10 +50,12 @@ function clearLink(bd, c, d) {
   bd.links[t] &= ~(1 << (d ^ 2));
 }
 
-/** Tree boards of bands B0..B1. */
+/** Tree boards of the window's tombs. */
 function treeBoards() {
   const out = [];
-  for (let b = B0; b <= B1; b++) for (const bd of bandShape(world, b).boards) if (bd.links) out.push(bd);
+  for (let v = WIN.v0; v <= WIN.v1; v++) {
+    for (let u = WIN.u0; u <= WIN.u1; u++) for (const bd of tombShape(world, u, v).boards) if (bd.links) out.push(bd);
+  }
   return out;
 }
 
@@ -95,90 +99,162 @@ function reachable(links, from) {
 }
 
 test('every check passes the sound world', () => {
-  assert.deepEqual(checkContinuity(world, B0, B1).errors, []);
-  assert.deepEqual(checkTree(world, B0, B1).errors, []);
-  assert.deepEqual(checkBounds(world, B0, B1).errors, []);
-  assert.deepEqual(checkGalleries(world, B0, B1).errors, []);
-  assert.deepEqual(checkCarve(world, B0, B1).errors, []);
-  assert.deepEqual(checkFlames(world, B0, B1).errors, []);
-  assert.deepEqual(checkSolvability(world, B0, B1).errors, []);
+  assert.deepEqual(checkContinuity(world, WIN).errors, []);
+  assert.deepEqual(checkTree(world, WIN).errors, []);
+  assert.deepEqual(checkFlow(world, WIN).errors, []);
+  assert.deepEqual(checkAcyclic(world, WIN).errors, []);
+  assert.deepEqual(checkBounds(world, WIN).errors, []);
+  assert.deepEqual(checkGalleries(world, WIN).errors, []);
+  assert.deepEqual(checkCarve(world, WIN).errors, []);
+  assert.deepEqual(checkFlames(world, WIN).errors, []);
+  assert.deepEqual(checkSolvability(world, WIN).errors, []);
 });
 
 test('continuity rejects a door moved on one side of its wall', () => {
   const w = broken(world);
-  const shape = bandShape(world, 0);
-  const bd = shape.boards.find((b) => b.links && b.doors.some((d) => d.dir === 0));
+  const bd = treeBoards().find((b) => b.doors.some((d) => d.dir === 0));
   const moved = copyBoard(bd);
   const door = moved.doors.find((d) => d.dir === 0);
   const row = (door.cell / 12) | 0;
   door.cell = (row === 5 ? 1 : row + 1) * 12 + 11;
   w._set(bd.x, bd.y, moved);
-  const errors = checkContinuity(w, B0, B1).errors;
+  const errors = checkContinuity(w, WIN).errors;
   assert.ok(errors.some((e) => e.includes(`board (${bd.x},${bd.y})`) && e.includes('no partner')), errors.join('\n'));
 });
 
 test('tree rejects an extra link that closes a loop', () => {
   const w = broken(world);
-  const bd = world.board(world.tree(0).entryX, 0);
+  const bd = world.startPoint().board;
   const looped = copyBoard(bd);
   // Two carved east neighbours that no link joins; the tree already joins them.
   const c = [...Array(84).keys()].find((i) => i % 12 < 11 && looped.links[i] && looped.links[i + 1] && !(looped.links[i] & 1));
   setLink(looped, c, 0);
   w._set(bd.x, bd.y, looped);
-  const errors = checkTree(w, B0, B1).errors;
-  assert.ok(errors.some((e) => e.startsWith('band 0:') && e.includes('edges for')), errors.join('\n'));
+  const errors = checkTree(w, WIN).errors;
+  assert.ok(errors.some((e) => e.startsWith('tomb (0,0):') && e.includes('edges for')), errors.join('\n'));
 });
 
-test('tree rejects a second door between bands', () => {
-  const w = broken(world);
-  let added = false;
-  for (let x = 0; x < 6 && !added; x++) {
-    const top = world.board(x, -1), bottom = world.board(x, 0);
-    if (!top.links || !bottom.links || bottom.doors.some((d) => d.dir === 3)) continue;
-    const t = copyBoard(top), u = copyBoard(bottom);
-    const col = 1 + ((x + 3) % 10);
-    t.doors.push({ dir: 1, cell: 72 + col });
-    u.doors.push({ dir: 3, cell: col });
-    w._set(x, -1, t);
-    w._set(x, 0, u);
-    added = true;
+test('tree rejects a tributary dropped, leaving an in-door unjoined', () => {
+  const cut = createWorld('00000000', { faults: { dropTributary: true } });
+  let t = null;
+  for (let v = 0; v <= 40 && !t; v++) for (let u = -3; u <= 3 && !t; u++) if (world.tomb(u, v).routes.length >= 2) t = world.tomb(u, v);
+  assert.ok(t, 'no tomb with a tributary');
+  const win = tombWindow(t.u, t.u, t.v, t.v);
+  assert.deepEqual(checkTree(world, win).errors, []);
+  const errors = checkTree(cut, win).errors;
+  assert.ok(errors.some((e) => e.startsWith(`tomb (${t.u},${t.v}):`) && e.includes('components')), errors.join('\n'));
+});
+
+test('flow rejects a tomb that exits down', () => {
+  const t = world.tomb(0, 0);
+  const w = broken(world, { tombs: new Map([['0,0', { ...t, exit: 3 }]]) });
+  const errors = checkFlow(w, WIN).errors;
+  assert.ok(errors.includes('tomb (0,0): exits down'), errors.join('\n'));
+});
+
+test('flow and acyclic reject two side neighbours that exit into each other, wall direction ignored', () => {
+  const loose = createWorld('00000000', { faults: { ignoreWalls: true } });
+  // A pair whose two side doors cross at different rows, so they join twice.
+  let pair = null;
+  for (let v = -5; v <= 5 && !pair; v++) {
+    for (let u = -5; u <= 5 && !pair; u++) {
+      if (loose.tomb(u, v).exit === 0 && loose.tomb(u + 1, v).exit === 2 && sideRow(world.H, u, v) !== sideRow(world.H, u + 1, v)) pair = [u, v];
+    }
   }
-  assert.ok(added, 'no column holds two tree boards across the band seam');
-  const errors = checkTree(w, B0, B1).errors;
-  assert.ok(errors.some((e) => e.startsWith('bands -1/0:')), errors.join('\n'));
+  assert.ok(pair, 'no pair exits into each other');
+  const [u, v] = pair;
+  const win = tombWindow(u - 1, u + 2, v - 1, v + 1);
+  assert.deepEqual(checkFlow(world, win).errors, []);
+  assert.deepEqual(checkAcyclic(world, win).errors, []);
+  const flow = checkFlow(loose, win).errors;
+  assert.ok(flow.includes(`tombs (${u},${v}) and (${u + 1},${v}) exit into each other`), flow.join('\n'));
+  const acyclic = checkAcyclic(loose, win).errors;
+  assert.ok(acyclic.includes(`tombs (${u},${v}) and (${u + 1},${v}): a door closes a cycle`), acyclic.join('\n'));
+});
+
+/** Copies of two tree boards that face each other across wall d of tomb (u, v), each holding a new door there. */
+function addWallDoor(u, v, d) {
+  for (let k = 0; k < (d % 2 === 0 ? 4 : 6); k++) {
+    const x = d === 0 ? 6 * u + 5 : 6 * u + k, y = d === 1 ? 4 * v + 3 : 4 * v + k;
+    const near = world.board(x, y), far = world.board(x + DX[d], y + DY[d]);
+    if (!near.links || !far.links || near.doors.some((dr) => dr.dir === d)) continue;
+    const cell = d === 0 ? 3 * 12 + 11 : 72 + 5;
+    const a = copyBoard(near), b = copyBoard(far);
+    a.doors.push({ dir: d, cell });
+    b.doors.push({ dir: d ^ 2, cell: acrossDoor(cell, d) });
+    return [a, b];
+  }
+  return null;
+}
+
+test('flow rejects a door on a tomb wall that neither tomb exits through', () => {
+  let made = null;
+  for (let v = WIN.v0; v <= WIN.v1 && !made; v++) {
+    for (let u = WIN.u0; u < WIN.u1 && !made; u++) {
+      if (world.tomb(u, v).exit === 0 || world.tomb(u + 1, v).exit === 2) continue;
+      const pair = addWallDoor(u, v, 0);
+      if (pair) made = { u, v, pair };
+    }
+  }
+  assert.ok(made, 'no side wall without an exit borders two tree boards');
+  const w = broken(world);
+  for (const bd of made.pair) w._set(bd.x, bd.y, bd);
+  assert.deepEqual(checkContinuity(w, WIN).errors, []);
+  const errors = checkFlow(w, WIN).errors;
+  assert.ok(errors.includes(`tomb (${made.u},${made.v}): a door on its right wall faces a tomb that does not exit into it`), errors.join('\n'));
+});
+
+test('flow and acyclic reject a second door on an exit wall', () => {
+  let made = null;
+  for (let v = WIN.v0; v < WIN.v1 && !made; v++) {
+    for (let u = WIN.u0; u <= WIN.u1 && !made; u++) {
+      if (world.tomb(u, v).exit !== 1) continue;
+      const pair = addWallDoor(u, v, 1);
+      if (pair) made = { u, v, pair };
+    }
+  }
+  assert.ok(made, 'no ceiling borders two more tree boards');
+  const w = broken(world);
+  for (const bd of made.pair) w._set(bd.x, bd.y, bd);
+  const errors = checkFlow(w, WIN).errors;
+  assert.ok(errors.includes(`tomb (${made.u},${made.v}): 2 doors on its exit wall`), errors.join('\n'));
+  const acyclic = checkAcyclic(w, WIN).errors;
+  assert.ok(acyclic.some((e) => e.startsWith(`tombs (${made.u},${made.v}) and (${made.u},${made.v + 1})`)), acyclic.join('\n'));
 });
 
 test('bounds rejects a dead-end branch 3 boards deep', () => {
   const w = broken(world);
   let made = null;
-  for (let b = B0; b <= B1 && !made; b++) {
-    const shape = bandShape(world, b);
-    shape.boards.forEach((bd, i) => {
-      if (made || shape.depth[i] !== 2) return;
-      for (let d = 0; d < 4 && !made; d++) {
-        const nx = bd.x + DX[d], ny = bd.y + DY[d];
-        if (nx < 0 || nx > 5 || Math.floor(ny / 4) !== b) continue;
-        const rock = world.board(nx, ny);
-        if (rock.links) continue;
-        const cell = d === 0 ? 3 * 12 + 11 : d === 2 ? 3 * 12 : d === 1 ? 72 + 5 : 5;
-        const deep = copyBoard(bd);
-        deep.doors.push({ dir: d, cell });
-        const leaf = {
-          ...copyBoard(world.board(world.tree(b).entryX, 4 * b)),
-          x: nx, y: ny, p: 6 * ny + nx, kind: 'dead', fallback: true,
-          doors: [{ dir: d ^ 2, cell: acrossDoor(cell, d) }],
-        };
-        w._set(bd.x, bd.y, deep);
-        w._set(nx, ny, leaf);
-        made = { x: nx, y: ny };
-      }
-    });
+  for (let v = WIN.v0; v <= WIN.v1 && !made; v++) {
+    for (let u = WIN.u0; u <= WIN.u1 && !made; u++) {
+      const shape = tombShape(world, u, v);
+      shape.boards.forEach((bd, i) => {
+        if (made || shape.depth[i] !== 2) return;
+        for (let d = 0; d < 4 && !made; d++) {
+          const nx = bd.x + DX[d], ny = bd.y + DY[d];
+          if (Math.floor(nx / 6) !== u || Math.floor(ny / 4) !== v) continue;
+          const rock = world.board(nx, ny);
+          if (rock.links) continue;
+          const cell = d === 0 ? 3 * 12 + 11 : d === 2 ? 3 * 12 : d === 1 ? 72 + 5 : 5;
+          const deep = copyBoard(bd);
+          deep.doors.push({ dir: d, cell });
+          const leaf = {
+            ...copyBoard(world.startPoint().board),
+            x: nx, y: ny, p: posOf(nx, ny), u, v, kind: 'dead', fallback: true,
+            doors: [{ dir: d ^ 2, cell: acrossDoor(cell, d) }],
+          };
+          w._set(bd.x, bd.y, deep);
+          w._set(nx, ny, leaf);
+          made = { x: nx, y: ny };
+        }
+      });
+    }
   }
   assert.ok(made, 'no depth-2 board borders rock');
-  const errors = checkBounds(w, B0, B1).errors;
+  const errors = checkBounds(w, WIN).errors;
   assert.ok(errors.some((e) => e.includes(`(${made.x},${made.y})`) && e.includes('3 boards deep')), errors.join('\n'));
   // The deeper board still forms a valid tree, so only bounds can catch it.
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  assert.deepEqual(checkTree(w, WIN).errors, []);
 });
 
 /** A view of `world` with the first `n` tree boards flagged as fallbacks. */
@@ -191,16 +267,16 @@ function withFallbacks(n) {
 test('bounds rejects a run over the fallback ceiling and passes the sound world', () => {
   const boards = treeBoards().length;
   const w = withFallbacks(Math.ceil(boards / 20));
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  assert.deepEqual(checkTree(w, WIN).errors, []);
   // Lowering the 2,000-board threshold below this world's size enforces the ceiling.
-  const errors = checkBounds(w, B0, B1, boards).errors;
+  const errors = checkBounds(w, WIN, boards).errors;
   assert.ok(errors.some((e) => e.includes('ceiling') && /\(\d+\.\d%\)/.test(e)), errors.join('\n'));
-  assert.deepEqual(checkBounds(world, B0, B1, boards).errors, []);
+  assert.deepEqual(checkBounds(world, WIN, boards).errors, []);
 });
 
 test('bounds reports a fallback rate over the ceiling on a run under 2,000 boards', () => {
   const w = withFallbacks(Math.ceil(treeBoards().length / 20));
-  const r = checkBounds(w, B0, B1);
+  const r = checkBounds(w, WIN);
   assert.ok(r.boards < 2000);
   assert.ok(100 * r.fallbacks > 2 * r.boards);
   assert.deepEqual(r.errors, []);
@@ -223,19 +299,19 @@ test('galleries rejects a corridor inside a gallery block of a valid tree', () =
     clearLink(tangled, cells[k], dirs[k]);
     const w = broken(world);
     w._set(bd.x, bd.y, tangled);
-    if (checkBounds(w, B0, B1).errors.length === 0) { found = { bd, c, w }; break; }
+    if (checkBounds(w, WIN).errors.length === 0) { found = { bd, c, w }; break; }
   }
   assert.ok(found, 'no board with a north-east gallery survives the tangle');
   const { bd, c, w } = found;
-  const errors = checkGalleries(w, B0, B1).errors;
+  const errors = checkGalleries(w, WIN).errors;
   assert.ok(errors.some((e) => e.startsWith(`board (${bd.x},${bd.y}): gallery ${c}`) && e.includes('shares its block')), errors.join('\n'));
   // The board stays a valid tree, so only the galleries check catches it.
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
-  assert.deepEqual(checkBounds(w, B0, B1).errors, []);
+  assert.deepEqual(checkTree(w, WIN).errors, []);
+  assert.deepEqual(checkBounds(w, WIN).errors, []);
 });
 
 test('galleries rejects a world averaging under 4 galleries per board', () => {
-  const sound = checkGalleries(world, B0, B1);
+  const sound = checkGalleries(world, WIN);
   assert.ok(sound.mean >= 4, `sound mean ${sound.mean}`);
   const w = broken(world);
   let galleries = sound.galleries;
@@ -245,11 +321,11 @@ test('galleries rejects a world averaging under 4 galleries per board', () => {
     for (let c = 0; c < 84; c++) galleries -= ((bd.links[c] >> 4) & 1) + ((bd.links[c] >> 5) & 1);
     w._set(bd.x, bd.y, flat);
   }
-  const r = checkGalleries(w, B0, B1);
+  const r = checkGalleries(w, WIN);
   assert.ok(r.mean < 4 && r.mean > 3.5, `mean ${r.mean}`);
   assert.equal(r.conflicts, 0);
   assert.ok(r.errors.some((e) => e.includes('galleries per board average')), r.errors.join('\n'));
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  assert.deepEqual(checkTree(w, WIN).errors, []);
 });
 
 /**
@@ -288,15 +364,15 @@ test('galleries rejects two gallery blocks that share a cell in a valid tree', (
   const bd = treeBoards()[0];
   // North-east galleries from cells 0 and 1: their blocks share cells 1 and 13.
   w._set(bd.x, bd.y, treeWithGalleries(bd, [[0, 4], [1, 4]]));
-  const errors = checkGalleries(w, B0, B1).errors;
+  const errors = checkGalleries(w, WIN).errors;
   assert.ok(errors.includes(`board (${bd.x},${bd.y}): gallery 1 dir 4 overlaps another block`), errors.join('\n'));
   assert.ok(!errors.some((e) => e.includes('shares its block')), errors.join('\n'));
   // The board stays a valid tree, so only the galleries check catches it.
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  assert.deepEqual(checkTree(w, WIN).errors, []);
 });
 
 test('galleries rejects a world averaging over 10 galleries per board', () => {
-  const sound = checkGalleries(world, B0, B1);
+  const sound = checkGalleries(world, WIN);
   assert.ok(sound.mean <= 10, `sound mean ${sound.mean}`);
   // Fifteen disjoint blocks: rows 0-1, 2-3 and 4-5, columns 0-9 in pairs.
   const dense = [];
@@ -309,11 +385,11 @@ test('galleries rejects a world averaging over 10 galleries per board', () => {
     galleries += dense.length;
     w._set(bd.x, bd.y, treeWithGalleries(bd, dense));
   }
-  const r = checkGalleries(w, B0, B1);
+  const r = checkGalleries(w, WIN);
   assert.ok(r.mean > 10 && r.mean < 10.5, `mean ${r.mean}`);
   assert.equal(r.conflicts, 0);
   assert.ok(r.errors.some((e) => e.includes('galleries per board average')), r.errors.join('\n'));
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  assert.deepEqual(checkTree(w, WIN).errors, []);
 });
 
 /** Cells of `bd` that hold exactly one link, none of them a door cell. */
@@ -331,10 +407,10 @@ function pruned(bd, c) {
 
 test('carve rejects the uncarved world', () => {
   const full = createWorld('00000000', { carveCells: NCELL });
-  const r = checkCarve(full, B0, B1);
+  const r = checkCarve(full, WIN);
   assert.equal(r.mean, NCELL);
   assert.ok(r.errors.some((e) => e.includes('average 84.00')), r.errors.join('\n'));
-  assert.deepEqual(checkTree(full, B0, B1).errors, []);
+  assert.deepEqual(checkTree(full, WIN).errors, []);
 });
 
 test('carve rejects a pruned flame cell', () => {
@@ -342,10 +418,10 @@ test('carve rejects a pruned flame cell', () => {
   const bd = treeBoards().find((b) => leaves(b).some((c) => world.flamesAt(b.x, b.y).includes(c)));
   const c = leaves(bd).find((u) => world.flamesAt(bd.x, bd.y).includes(u));
   w._set(bd.x, bd.y, pruned(bd, c));
-  const errors = checkCarve(w, B0, B1).errors;
+  const errors = checkCarve(w, WIN).errors;
   assert.ok(errors.includes(`board (${bd.x},${bd.y}): flame cell ${c} is pruned`), errors.join('\n'));
   // The board stays a tree, so only the carve check catches it.
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  assert.deepEqual(checkTree(w, WIN).errors, []);
 });
 
 test('carve rejects a door cell stripped of its links', () => {
@@ -353,7 +429,7 @@ test('carve rejects a door cell stripped of its links', () => {
   const bd = treeBoards().find((b) => b.doors.some((d) => b.links[d.cell] && !(b.links[d.cell] & (b.links[d.cell] - 1))));
   const door = bd.doors.find((d) => bd.links[d.cell] && !(bd.links[d.cell] & (bd.links[d.cell] - 1)));
   w._set(bd.x, bd.y, pruned(bd, door.cell));
-  const errors = checkCarve(w, B0, B1).errors;
+  const errors = checkCarve(w, WIN).errors;
   assert.ok(errors.includes(`board (${bd.x},${bd.y}): door cell ${door.cell} is pruned`), errors.join('\n'));
 });
 
@@ -361,55 +437,65 @@ test('carve rejects a board carved to 49 cells', () => {
   const w = broken(world);
   const bd = treeBoards().find((b) => b.links.filter(Boolean).length === 50 && leaves(b).length);
   const c = leaves(bd)[0];
-  assert.deepEqual(checkCarve(world, B0, B1).errors, []);
+  assert.deepEqual(checkCarve(world, WIN).errors, []);
   w._set(bd.x, bd.y, pruned(bd, c));
-  const errors = checkCarve(w, B0, B1).errors;
+  const errors = checkCarve(w, WIN).errors;
   assert.ok(errors.includes(`board (${bd.x},${bd.y}): 49 carved cells, under 50`), errors.join('\n'));
 });
 
 test('flames rejects a removed flame that opens a gap over 150 s', () => {
-  // In seed 0000-0013, band 2, dropping chain flame 2 leaves a 152.9 s walk.
-  const base = createWorld('00000013');
-  const b = 2;
-  assert.deepEqual(checkFlames(base, b, b).errors, []);
-  const fs = base.bandFlames(b);
-  const gone = fs.chain[2];
+  // In seed 0000-0001, tomb (-1, 0), dropping entry 2's chain flame 2 leaves a 153.5 s walk.
+  const base = createWorld('00000001');
+  const win = tombWindow(-1, -1, 0, 0);
+  assert.deepEqual(checkFlames(base, win).errors, []);
+  const fs = base.tombFlames(-1, 0);
+  const gone = fs.chains[1][2];
   assert.equal(gone.kind, 'route');
+  const same = (f) => f.x === gone.x && f.y === gone.y && f.cell === gone.cell;
   const w = broken(base, {
-    flames: new Map([[b, { ...fs, chain: fs.chain.filter((f) => f !== gone), flames: fs.flames.filter((f) => f !== gone) }]]),
+    flames: new Map([['-1,0', { ...fs, chains: fs.chains.map((c) => c.filter((f) => !same(f))), flames: fs.flames.filter((f) => !same(f)) }]]),
   });
   assert.ok(!w.flamesAt(gone.x, gone.y).includes(gone.cell));
-  const errors = checkFlames(w, b, b).errors;
-  assert.ok(errors.some((e) => e.includes('exceeds 150 s')), errors.join('\n'));
+  const errors = checkFlames(w, win).errors;
+  assert.ok(errors.some((e) => e.startsWith('tomb (-1,0) entry 2: flame gap 153.5 s exceeds 150 s')), errors.join('\n'));
 });
 
-test('flames rejects a band entry without a flame', () => {
-  const t = world.tree(1);
-  const fs = world.bandFlames(1);
-  const entryFlame = fs.chain[0];
-  const w = broken(world, {
-    flames: new Map([[1, { ...fs, flames: fs.flames.filter((f) => f !== entryFlame) }]]),
-  });
-  assert.equal(w.flamesAt(t.entryX, 4).length, 0);
-  const errors = checkFlames(w, 1, 1).errors;
-  assert.ok(errors.some((e) => e.includes('entry holds no flame')), errors.join('\n'));
+test('flames rejects an entry board without a flame', () => {
+  const t = world.tomb(0, 1);
+  const fs = world.tombFlames(0, 1);
+  const e = boardCoords(0, 1, t.entries[0]);
+  const entryFlames = (f) => f.x === e.x && f.y === e.y;
+  // Upstream chains end on the entry board; their flames go too.
+  const flames = new Map([['0,1', { ...fs, flames: fs.flames.filter((f) => !entryFlames(f)) }]]);
+  for (const wl of t.walls.slice(1)) {
+    const k = `${DX[wl.dir]},${1 + DY[wl.dir]}`;
+    const up = world.tombFlames(...k.split(',').map(Number));
+    flames.set(k, { ...up, flames: up.flames.filter((f) => !entryFlames(f)) });
+  }
+  const w = broken(world, { flames });
+  assert.equal(w.flamesAt(e.x, e.y).length, 0);
+  const errors = checkFlames(w, tombWindow(0, 0, 1, 1)).errors;
+  assert.ok(errors.some((err) => err.includes(`entry board (${e.x},${e.y}) holds no flame`)), errors.join('\n'));
 });
 
-test('solvability rejects a world cut at a band seam', () => {
+test('solvability rejects a world cut at a tomb wall', () => {
+  // The walk's second tomb loses its exit door, so the way on is cut.
+  const first = world.tomb(0, WIN.v0);
+  const t = world.tomb(DX[first.exit], WIN.v0 + DY[first.exit]);
+  assert.ok(t.v < WIN.v1);
+  const x = boardCoords(t.u, t.v, t.X);
   const w = broken(world);
-  const bd = world.board(world.tree(1).entryX, 4);
-  const cut = copyBoard(bd);
-  cut.doors = cut.doors.filter((d) => d.dir !== 3);
-  w._set(bd.x, bd.y, cut);
-  const errors = checkSolvability(w, B0, B1).errors;
+  const cut = copyBoard(world.board(x.x, x.y));
+  cut.doors = cut.doors.filter((d) => d.dir !== t.exit);
+  w._set(x.x, x.y, cut);
+  const errors = checkSolvability(w, WIN).errors;
   assert.ok(errors.some((e) => e.includes('unreachable')), errors.join('\n'));
 });
 
 test('saves rejects a resumed board that differs from the board in sequence', () => {
-  const t = world.tree(0);
-  const p = posOf(t.entryX, 0);
+  const bd = world.startPoint().board;
+  const p = posOf(bd.x, bd.y);
   assert.deepEqual(checkSaves(world, [p]).errors, []);
-  const bd = world.board(t.entryX, 0);
   const changed = copyBoard(bd);
   setLink(changed, [...Array(84).keys()].find((i) => i % 12 < 11 && !(changed.links[i] & 1)), 0);
   const w = broken(world);

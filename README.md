@@ -1,10 +1,11 @@
 # Infinite Maze
 
-An endless tomb maze, climbed by torchlight. One seed code grows a world of
-bands stacked without end. The difficulty picked on the title sets a band's
-size: EASY 3x2 boards, MEDIUM 4x3 and HARD 6x4. Every board is a 12x7 grid of
-cells, of which a board carves about 60% and leaves the rest rock. The maze
-has no loops at any scale, and one route always leads up.
+An endless tomb maze, climbed by torchlight. One seed code grows a plane of
+tombs without end in any direction. The difficulty picked on the title sets a
+tomb's size: EASY 3x2 boards, MEDIUM 4x3 and HARD 6x4. Every board is a 12x7
+grid of cells, of which a board carves about 60% and leaves the rest rock.
+Each tomb leaves up, left or right, never down, so the way on wanders sideways
+as it climbs, and the maze has no loops at any scale.
 `docs/SPEC.md` is the full specification.
 
 ## Play
@@ -22,39 +23,42 @@ and no assets.
   drops to the floor below; a held Up grabs again once pressed anew.
 - **P** pauses and shows the map of the passages walked and the save code;
   P resumes. Esc does the same outside full screen, where a browser keeps Esc
-  for itself.
-  Up and Down (or W and S) pan the map one band per press. **C** there copies
-  the save code. **M** mutes.
+  for itself. The arrows (or WASD) pan the map one tomb per press. **C** there
+  copies the save code. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:
   RESUME, BEGIN, RESET, TYPE CODE (a prompt that takes a pasted save code),
   the difficulty, COPY, SOUND, PAUSE, CONTINUE and TITLE. Pressing a key
   switches back to the keyboard layout; `#touch` on the URL forces touch on a
-  desktop. The pause map shows the explorer's band; panning needs a keyboard.
+  desktop. The pause map shows the explorer's tomb; panning needs a keyboard.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends.
-- Every band entry holds a flame, and no stretch of the route runs more than
+- Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
+- The score counts tombs solved: a tomb is solved when the explorer leaves it
+  through its exit door. Each tomb counts once, and Continue keeps the count.
 
-The title screen shows the seed code. **Enter** begins at band 0. **R** rolls
-a new world. **T** takes a typed seed or save code. **L** cycles the
-difficulty, and Left and Right step it. **P** resumes the run left by
-pause, or the last save at its own difficulty. Esc is its alias outside full
-screen. **K** copies the save code
-shown, or the seed code. The end screen's **C** copies its save code. The
-game keeps that save with its difficulty, the setting and the best band per
-seed and difficulty in `localStorage`, and runs without them where storage is
-blocked.
+The title screen shows the seed code. **Enter** begins at tomb (0, 0)'s
+first entry. **R** rolls a new world. **T** takes a typed seed or save code.
+**L** cycles the difficulty, and Left and Right step it. **P** resumes the run
+left by pause, or the last save at its own difficulty. Esc is its alias
+outside full screen. **K** copies the save code shown, or the seed code. The
+end screen's **C** copies its save code. The game keeps that save with its
+difficulty, the setting and the most tombs solved per seed and difficulty in
+`localStorage`, and runs without them where storage is blocked.
 
 ## Save codes
 
-A save is the seed code and one integer: `K7Q2-M9XA:4813`. The integer is
-`p = Wy + x` for board `(x, y)` in bands W boards wide, and it may be negative
-below band 0. A typed save code plays at the title's difficulty.
+A save is the seed code and one integer: `K7Q2-M9XA:4813`. The integer pairs
+the signed coordinates of board `(x, y)`: with `z(n) = 2n` for `n >= 0`, else
+`-2n - 1`, `a = z(x)` and `b = z(y)`, `p = a >= b ? a*a + a + b : a + b*b`.
+Saves hold `|x|` and `|y|` below 2^25, and a code runs to 26 characters. A
+typed save code plays at the title's difficulty.
 Resuming regenerates that board from the seed and lights the torch to full.
-The explorer stands at the board's door back toward its band entry. The end
-screen offers the code of the last band entry reached; Continue resumes there.
+The explorer stands at the start of the board's way back along its route.
+The end screen offers the code of the last tomb entry reached; Continue
+resumes there.
 
 ## Build
 
@@ -76,11 +80,15 @@ node tools/acceptance.mjs
 ! grep -Eiq '(src|href)=["'\'']?https?:|fetch\(|XMLHttpRequest|WebSocket' infinite-maze.html
 ```
 
-`AGENTS.md` defines `WT` and `CHROME`. The acceptance harness checks bands
--1000 to 1000 and prints the fallback-board count, the largest and 99th
-percentile flame gaps and its run time. `infinite-maze.html#selftest` boots
-seed `0000-0000`, drives 3600 ticks of scripted input and draws the pause map.
-It then sets `data-selftest` on `<body>`.
+`AGENTS.md` defines `WT` and `CHROME`. The acceptance harness checks tombs
+`u` -10 to 10 by `v` -50 to 50 (`--cols` and `--rows` set the half-widths)
+and prints the fallback-board count, the largest and 99th percentile flame
+gaps, the shares of up, left and right exits with the mean sideways run, and
+its run time. `infinite-maze.html#selftest` boots seed `0000-0000`, drives
+3600 ticks of scripted input and draws the pause map. A second leg resumes
+in tomb (1, 0), outside board columns 0-5, and fails unless the explorer's
+room draws as maze rather than rock. The self-test then sets
+`data-selftest` on `<body>`.
 
 ## Deploy
 

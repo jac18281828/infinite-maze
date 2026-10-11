@@ -13,21 +13,23 @@ const H = makeHasher(worldKey(CODE));
 const uncarved = createWorld(CODE, { carveCells: NCELL });
 const carvedWorld = createWorld(CODE);
 
-/** Tree boards of bands lo..hi. */
-function boards(world, lo, hi) {
+/** Tree boards of tombs u0..u1 by v0..v1. */
+function boards(world, u0, u1, v0, v1) {
   const out = [];
-  for (let b = lo; b <= hi; b++) {
-    for (let i = 0; i < 24; i++) {
-      const { x, y } = boardCoords(b, i);
-      const bd = world.board(x, y);
-      if (bd.links) out.push(bd);
+  for (let v = v0; v <= v1; v++) {
+    for (let u = u0; u <= u1; u++) {
+      for (let i = 0; i < 24; i++) {
+        const { x, y } = boardCoords(u, v, i);
+        const bd = world.board(x, y);
+        if (bd.links) out.push(bd);
+      }
     }
   }
   return out;
 }
 
-const tenBands = boards(uncarved, 0, 9);
-const fallbacks = boards(uncarved, 0, 59).filter((bd) => bd.fallback);
+const tenTombs = boards(uncarved, -1, 0, 0, 4);
+const fallbacks = boards(uncarved, -1, 1, 0, 19).filter((bd) => bd.fallback);
 
 const nb = (c, d) => c + DY[d] * BW + DX[d];
 
@@ -112,28 +114,28 @@ function mismatch(list, rules) {
   return list.find((bd) => !same(reference(bd, rules), carvedWorld.board(bd.x, bd.y).links));
 }
 
-test('the reference carve reproduces the generator on 232 boards of bands 0..9', () => {
-  assert.equal(tenBands.length, 232);
-  const bad = mismatch(tenBands);
+test('the reference carve reproduces the generator on 238 boards of tombs u -1..0, v 0..4', () => {
+  assert.equal(tenTombs.length, 238);
+  const bad = mismatch(tenTombs);
   assert.equal(bad, undefined, bad && `board (${bad.x},${bad.y})`);
 });
 
-test('the reference carve reproduces the generator on every fallback board of bands 0..59', () => {
-  assert.equal(fallbacks.length, 16);
-  assert.equal(boards(uncarved, 0, 9).filter((bd) => bd.fallback).length, 0);
+test('the reference carve reproduces the generator on every fallback board of tombs u -1..1, v 0..19', () => {
+  assert.equal(fallbacks.length, 10);
+  assert.equal(tenTombs.filter((bd) => bd.fallback).length, 3);
   const bad = mismatch(fallbacks);
   assert.equal(bad, undefined, bad && `board (${bad.x},${bad.y})`);
 });
 
 test('a carve that skips the deficit rule, the gallery preference or the rng order differs', () => {
-  const sample = [...tenBands, ...fallbacks];
+  const sample = [...tenTombs, ...fallbacks];
   for (const rules of [{ deficit: false }, { gallery: false }, { order: false }]) {
     assert.ok(mismatch(sample, rules), `no board tells ${JSON.stringify(rules)} apart`);
   }
 });
 
 test('the carve is subtractive and keeps the attempt, the pair and the primary path', () => {
-  for (const bd of [...tenBands, ...fallbacks]) {
+  for (const bd of [...tenTombs, ...fallbacks]) {
     const cv = carvedWorld.board(bd.x, bd.y);
     const at = `board (${bd.x},${bd.y})`;
     assert.equal(cv.k, bd.k, at);
@@ -152,7 +154,7 @@ test('the carve is subtractive and keeps the attempt, the pair and the primary p
 
 test('a board holding more than 50 cells has no qualifying cut left', () => {
   let over = 0;
-  for (const bd of [...tenBands, ...fallbacks]) {
+  for (const bd of [...tenTombs, ...fallbacks]) {
     const cv = carvedWorld.board(bd.x, bd.y);
     if (rooted(cv.links, cv.a).size <= CARVE_CELLS) continue;
     over++;
@@ -163,7 +165,7 @@ test('a board holding more than 50 cells has no qualifying cut left', () => {
 
 test('the mask opens the room of a carved cell and keeps a pruned cell solid', () => {
   let pruned = 0, open = 0;
-  for (const bd of boards(carvedWorld, 0, 2)) {
+  for (const bd of boards(carvedWorld, -1, 0, 0, 2)) {
     const mask = boardMask(bd);
     for (let c = 0; c < NCELL; c++) {
       const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;

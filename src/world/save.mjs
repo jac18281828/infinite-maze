@@ -1,20 +1,20 @@
-// Save strings: `CODE4-CODE4:p` with p = W*y + x for the tomb width W of the
-// world the save belongs to, p possibly negative. The string omits the
-// difficulty; its reader supplies the size.
+// Save strings: `CODE4-CODE4:p`, p the pairing of the board's signed (x, y),
+// with |x| and |y| below 2^25. The string omits the difficulty.
 import { parseCode, formatCode } from './hash.mjs';
-import { boardOfPos, posOf } from './world.mjs';
-import { DIFFICULTY } from './band.mjs';
+import { boardOfPos, posOf, SAVE_LIMIT } from './world.mjs';
 
-export function encodeSave(code, x, y, size = DIFFICULTY.hard) {
-  return formatCode(code) + ':' + posOf(x, y, size);
+export function encodeSave(code, x, y) {
+  return formatCode(code) + ':' + posOf(x, y);
 }
 
-/** `{ code, p, x, y }` from a save string read at tomb `size`, or null when malformed. */
-export function decodeSave(text, size = DIFFICULTY.hard) {
-  const m = /^\s*([^:]+):\s*(-?\d+)\s*$/.exec(String(text));
+/** `{ code, p, x, y }` from a save string, or null when malformed or out of range. */
+export function decodeSave(text) {
+  const m = /^\s*([^:]+):\s*(\d+)\s*$/.exec(String(text));
   if (!m) return null;
   const code = parseCode(m[1]);
   const p = Number(m[2]);
   if (!code || !Number.isSafeInteger(p)) return null;
-  return { code, p, ...boardOfPos(p, size) };
+  const { x, y } = boardOfPos(p);
+  if (Math.abs(x) >= SAVE_LIMIT || Math.abs(y) >= SAVE_LIMIT) return null;
+  return { code, p, x, y };
 }

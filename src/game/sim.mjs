@@ -100,8 +100,10 @@ function recordWalk(trail, bd, cell, d, to) {
 
 /** Everything a Continue carries into the next run. */
 export function runCarry(s) {
-  return { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry, trail: s.trail };
+  return { time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail };
 }
+
+const tombKey = (bd) => `${bd.u},${bd.v}`;
 
 /** A run from `start` = { board, cell }, standing on the door's cell. */
 export function createSim(world, start, carry = null) {
@@ -111,9 +113,9 @@ export function createSim(world, start, carry = null) {
     facing: 1, moving: false, burn: BURN_S, ember: 0,
     tap: 0, buffer: 0, bufferTicks: 0, queued: 0, dismount: 0, noAirGrab: false,
     state: 'play', time: carry ? carry.time : 0,
-    startBand: carry ? carry.startBand : start.board.band,
-    maxBand: carry ? Math.max(carry.maxBand, start.board.band) : start.board.band,
-    lastEntry: start.board.routeIndex === 0 ? start.board.p : (carry ? carry.lastEntry : start.board.p),
+    // The score: the tombs solved, each counted once, keyed "u,v".
+    solved: carry && carry.solved ? carry.solved : new Set(),
+    lastEntry: start.board.entry ? start.board.p : (carry ? carry.lastEntry : start.board.p),
     touching: false, walked: 0, climbed: 0, carry: 0,
     stats: {
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
@@ -175,12 +177,21 @@ function engage(s, d, prog = 0) {
   s.dismount = 0;
 }
 
+/**
+ * Crossing a seam: a tomb is solved when the explorer crosses its exit door
+ * outward, the only door on its exit wall.
+ */
 function enterBoard(s, bd) {
   if (bd === s.bd) return;
   s.stats.seams++;
   s.events.push('seam');
-  if (bd.band > s.maxBand) { s.maxBand = bd.band; s.events.push('band'); }
-  if (bd.routeIndex === 0 && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
+  const from = s.bd;
+  if (bd.u !== from.u || bd.v !== from.v) {
+    const d = bd.u > from.u ? 0 : bd.v > from.v ? 1 : bd.u < from.u ? 2 : 3;
+    const key = tombKey(from);
+    if (s.world.tomb(from.u, from.v).exit === d && !s.solved.has(key)) { s.solved.add(key); s.events.push('solved'); }
+  }
+  if (bd.entry && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
 }
 
 /** Moves to the far cell of the current link. */

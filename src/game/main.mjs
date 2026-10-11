@@ -1,25 +1,29 @@
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
-import { createWorld, boardOfPos } from '../world/world.mjs';
+import { createWorld, boardOfPos, boardCoords } from '../world/world.mjs';
 import { DIFFICULTY, DIFFICULTIES } from '../world/band.mjs';
 import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
-import { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose } from './sim.mjs';
+import { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
 import { createTouch, layout, viewport, difficultyLabel, PANEL_X } from './touch.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
-import { frameOf, panFrame, mapModel, mapCells } from './map.mjs';
+import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
 import { RGB, idx } from './art.mjs';
 
-const KEY_SAVE = 'infinite-maze.save';
+// Saves and bests of the tomb plane keep keys of their own, so a stacked-world
+// value never reads as a position or a score.
+const KEY_SAVE = 'infinite-maze.plane.save';
 // The difficulty of the run that wrote KEY_SAVE; absent means HARD, the
 // only size before difficulties.
 const KEY_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
-const KEY_BEST = 'infinite-maze.best';
+const KEY_BEST = 'infinite-maze.plane.best';
+// A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
+const TYPED_MAX = 26;
 
 // Every storage access is guarded; the game runs without storage.
 function load(key) {
@@ -127,6 +131,7 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
+    planeLeg(world);
     touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
@@ -136,13 +141,40 @@ function selftest() {
 }
 
 /**
+ * Resumes at the first entry of tomb (1, 0), whose boards lie outside
+ * columns 0-5, and throws unless the frame draws the explorer's room as
+ * maze: its pixels must differ from the same frame drawn with the
+ * explorer's board as rock. The explorer stands on its first primary cell,
+ * which the carve keeps. Touches no storage and never boots.
+ */
+function planeLeg(world) {
+  const t = world.tomb(1, 0);
+  const at = boardCoords(1, 0, t.entries[0]);
+  const sim = createSim(world, world.resumePoint(at.x, at.y));
+  if (sim.bd.x < 6) throw new Error(`plane leg: board (${sim.bd.x},${sim.bd.y}) lies in columns 0-5`);
+  const cam = { x: 0, y: 0 };
+  snapCam(cam, sim);
+  // The inner 28x28 px of the explorer's 32 px room, in view pixels (y down).
+  const [nx, ny] = nodeXY(sim.bd, sim.cell);
+  const x0 = nx - 14 - Math.round(cam.x) + VIEW_W / 2, y0 = Math.round(cam.y) - (ny + 30) + VIEW_H / 2;
+  const room = (w) => {
+    createRenderer(view, w).scene(sim, cam, 0);
+    return view.getContext('2d').getImageData(x0, y0, 28, 28).data;
+  };
+  const rockBoard = { ...sim.bd, kind: 'rock', links: null, doors: [], doorMask: null };
+  const maze = room(world);
+  const rock = room({ ...world, board: (x, y) => (x === sim.bd.x && y === sim.bd.y ? rockBoard : world.board(x, y)) });
+  if (maze.every((v, i) => v === rock[i])) throw new Error(`plane leg: board (${at.x},${at.y}) draws as rock`);
+}
+
+/**
  * Boots the game and drives the real controls with dispatched touch pointer
  * events and clicks. One synchronous task: an animation frame landing
  * mid-leg would tick play and clear the press edges the leg reads. Throws
  * `touch <what>` on the first miss.
  */
 function touchLeg() {
-  // The leg writes the save, its difficulty, the setting and the best band;
+  // The leg writes the save, its difficulty, the setting and the best score;
   // it restores the player's own.
   const kept = [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST].map((k) => [k, load(k)]);
   // COPY writes through a fake clipboard, gone again however the leg ends.
@@ -185,15 +217,16 @@ function driveTouch(copied) {
     click(sid, 'copy');
     need(copied.length === 1 && copied[0] === want, `${sid} COPY writes ${want}`);
   };
-  // Another tree board of the explorer's band, keeping its last entry, so the
+  // Another tree board of the explorer's tomb, keeping its last entry, so the
   // pause screen's save code and the end screen's entry code differ.
   const offEntry = () => {
-    const s = g.sim, b = s.bd.band;
-    const carry = { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry };
+    const s = g.sim;
+    const carry = { time: s.time, solved: s.solved, lastEntry: s.lastEntry };
     const { w, h } = g.world.size;
     for (let i = 0; i < w * h; i++) {
-      const bd = g.world.board(i % w, h * b + Math.floor(i / w));
-      if (!bd.links || bd.routeIndex === 0 || bd === s.bd || bd.p === s.lastEntry) continue;
+      const { x, y } = boardCoords(s.bd.u, s.bd.v, i);
+      const bd = g.world.board(x, y);
+      if (!bd.links || bd.entry || bd === s.bd || bd.p === s.lastEntry) continue;
       g.sim = createSim(g.world, g.world.resumePoint(bd.x, bd.y), carry);
       break;
     }
@@ -304,15 +337,19 @@ function driveTouch(copied) {
   offEntry();
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
-  need(g.frame === g.sim.bd.band, 'PAUSE frames the explorer\'s band');
+  const home = frameOf(g.sim.bd);
+  const framed = (du, dv) => sameFrame(g.frame, { u: home.u + du, v: home.v + dv });
+  need(framed(0, 0), 'PAUSE frames the explorer\'s tomb');
   need(load(KEY_SAVE_DIFFICULTY) === g.world.difficulty, 'PAUSE stores the save\'s difficulty');
   press('ArrowUp', 'ArrowUp');
-  need(g.frame === g.sim.bd.band + 1, 'Up pans one band up');
+  need(framed(0, 1), 'Up pans one tomb up');
   press('ArrowUp', 'ArrowUp', true);
+  need(framed(0, 1), 'a held Up pans nothing');
   press('ArrowLeft', 'ArrowLeft');
-  need(g.frame === g.sim.bd.band + 1, 'a held Up and a Left pan nothing');
+  need(framed(-1, 1), 'Left pans one tomb left');
+  press('KeyD', 'd');
   press('KeyS', 's');
-  need(g.frame === g.sim.bd.band, 'S pans one band down');
+  need(framed(0, 0), 'D and S pan one tomb right and down');
   toggles('pause');
   copies('pause', hereCode(g));
   const before = pauseModel(g).explorer;
@@ -320,19 +357,19 @@ function driveTouch(copied) {
   press('ArrowUp', 'ArrowUp');
   click('pause', 'resume');
   need(g.screen === 'play', 'RESUME returns to play');
-  // Walk to another cell of the band, so a map kept from the last pause shows the old one.
-  const band = g.sim.bd.band, cell = g.sim.cell, bd = g.sim.bd;
+  // Walk to another cell of the tomb, so a map kept from the last pause shows the old one.
+  const frame = frameOf(g.sim.bd), cell = g.sim.cell, bd = g.sim.bd;
   for (const [h, v] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     for (let i = 0; i < 600 && g.sim.cell === cell && g.sim.bd === bd; i++) step(g.sim, h, v);
     if (g.sim.cell !== cell || g.sim.bd !== bd) break;
   }
-  need(g.sim.bd.band === band && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its band');
+  need(sameFrame(frameOf(g.sim.bd), frame) && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its tomb');
   // A torch and clock that a rebuild from the save would reset.
   const run = g.sim, runWorld = g.world, runCode = g.code;
   run.burn = BURN_S / 2;
   run.time = 77;
   click('play', 'pause');
-  need(g.frame === frameOf(g.sim.bd, g.world.size), 'PAUSE frames the explorer\'s band again');
+  need(sameFrame(g.frame, frameOf(g.sim.bd)), 'PAUSE frames the explorer\'s tomb again');
   const after = pauseModel(g).explorer;
   need(after && (!before || after.col !== before.col || after.row !== before.row), 'PAUSE draws the explorer where it now stands');
   click('pause', 'title');
@@ -390,7 +427,7 @@ function driveTouch(copied) {
   g.screen = 'play';
   g.keys.clear();
   press('Escape', 'Escape');
-  need(g.screen === 'pause' && g.frame === frameOf(g.sim.bd, g.world.size), 'Esc pauses on the explorer\'s band');
+  need(g.screen === 'pause' && sameFrame(g.frame, frameOf(g.sim.bd)), 'Esc pauses on the explorer\'s tomb');
   // The first pause frame lands half a second into the page and shows the explorer's dot.
   draw(g, 0.5);
   const e = pauseModel(g).explorer, o = mapOrigin(g.world);
@@ -504,11 +541,12 @@ function readBest(code, difficulty) {
   try { return JSON.parse(load(KEY_BEST) || '{}')[bestKey(code, difficulty)] ?? null; } catch { return null; }
 }
 
-function writeBest(code, difficulty, band) {
+/** Keeps the most tombs solved per seed and difficulty. */
+function writeBest(code, difficulty, solved) {
   const key = bestKey(code, difficulty);
   let all = {};
   try { all = JSON.parse(load(KEY_BEST) || '{}'); } catch { all = {}; }
-  if (all[key] === undefined || band > all[key]) { all[key] = band; store(KEY_BEST, JSON.stringify(all)); }
+  if (all[key] === undefined || solved > all[key]) { all[key] = solved; store(KEY_BEST, JSON.stringify(all)); }
 }
 
 /** State shared by input, tick and draw. */
@@ -524,8 +562,8 @@ function createGame() {
     // The run left for the title by Q: { code, world, renderer, preview, sim }.
     open: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
-    // The band the pause map frames, and its model.
-    frame: 0, pauseMap: null, pausedAt: null,
+    // The tomb { u, v } the pause map frames, and its model.
+    frame: { u: 0, v: 0 }, pauseMap: null, pausedAt: null,
   };
 }
 
@@ -539,7 +577,7 @@ function useCode(g, code) {
   g.code = code;
   g.world = createWorld(code, { difficulty: g.difficulty });
   g.renderer = createRenderer(view, g.world);
-  g.preview = createSim(g.world, g.world.resumePoint(g.world.tree(0).entryX, 0));
+  g.preview = createSim(g.world, g.world.startPoint());
   titleCam(g);
 }
 
@@ -565,10 +603,14 @@ function play(g) {
   g.jump = false;
 }
 
-/** Starts a new run at save position p, or at band 0's entry when p is null. */
+/** Starts a new run at save position p, or at tomb (0, 0)'s first entry when p is null. */
 function begin(g, p = null, carry = null) {
-  const at = p === null ? { x: g.world.tree(0).entryX, y: 0 } : boardOfPos(p, g.world.size);
-  g.sim = createSim(g.world, g.world.resumePoint(at.x, at.y), carry);
+  let start = g.world.startPoint();
+  if (p !== null) {
+    const { x, y } = boardOfPos(p);
+    start = g.world.resumePoint(x, y);
+  }
+  g.sim = createSim(g.world, start, carry);
   g.open = null;
   play(g);
 }
@@ -619,7 +661,7 @@ function typingKey(g, e) {
   if (e.key === 'Enter') submitTyped(g);
   else if (e.key === 'Escape') { g.typing = null; g.note = ''; }
   else if (e.key === 'Backspace') g.typing = g.typing.slice(0, -1);
-  else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < 22) g.typing += e.key.toUpperCase();
+  else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < TYPED_MAX) g.typing += e.key.toUpperCase();
 }
 
 function titleKey(g, e) {
@@ -708,10 +750,10 @@ function handleEvents(g) {
   const s = g.sim;
   for (const ev of s.events) {
     if (ev === 'relight') { g.audio.play('relight'); g.audio.relight(); }
-    else if (ev === 'ember' || ev === 'over' || ev === 'band') g.audio.play(ev);
-    if (ev === 'band') writeBest(g.code, g.world.difficulty, s.maxBand);
+    else if (ev === 'ember' || ev === 'over') g.audio.play(ev);
+    if (ev === 'solved') { g.audio.play('band'); writeBest(g.code, g.world.difficulty, s.solved.size); }
     if (ev === 'entry') writeSave(g, entryCode(g));
-    if (ev === 'seam') g.world.retain(s.bd.band - 1, s.bd.band + 1);
+    if (ev === 'seam') g.world.retain(s.bd.u, s.bd.v);
   }
 }
 
@@ -731,7 +773,7 @@ function soundCues(g) {
 
 function endRun(g) {
   g.screen = 'over';
-  writeBest(g.code, g.world.difficulty, g.sim.maxBand);
+  writeBest(g.code, g.world.difficulty, g.sim.solved.size);
   writeSave(g, entryCode(g));
 }
 
@@ -812,9 +854,9 @@ function mapOrigin(world) {
 
 /** The pause map's model for the frame, rebuilt when the frame changes. */
 function pauseModel(g) {
-  if (!g.pauseMap || g.pauseMap.b !== g.frame) {
+  if (!g.pauseMap || !sameFrame(g.pauseMap.frame, g.frame)) {
     const at = { bd: g.sim.bd, cell: g.sim.cell };
-    g.pauseMap = { b: g.frame, model: mapModel(g.world, g.sim.trail, g.frame, at) };
+    g.pauseMap = { frame: g.frame, model: mapModel(g.world, g.sim.trail, g.frame, at) };
   }
   return g.pauseMap.model;
 }
@@ -824,14 +866,14 @@ function drawPause(g, t = 0) {
   const r = g.renderer;
   r.panel(50, 2, 220, 176);
   r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
-  r.text(`TOMB ${g.frame}`, 267, 16, 'a', { align: 'right' });
+  r.text(`TOMB ${g.frame.u} ${g.frame.v}`, 267, 16, 'a', { align: 'right' });
   if (g.pausedAt === null) g.pausedAt = t;
   const o = mapOrigin(g.world);
   r.drawMap(pauseModel(g), o.x, o.y, t - g.pausedAt);
   r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
   r.text(`${hereCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 129, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });
-  r.text('P RESUME  UP/DOWN PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
+  r.text('P RESUME  ARROWS PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
   r.text('M MUTE  C COPY', VIEW_W / 2, 164, 'b', { align: 'center' });
 }
 
@@ -839,7 +881,7 @@ function drawOver(g) {
   const r = g.renderer, s = g.sim;
   r.panel(40, 34, 240, 112);
   r.text('THE TORCH IS OUT', VIEW_W / 2, 44, 'o', { align: 'center', scale: 2 });
-  r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
+  r.text(`TOMBS CLIMBED  ${s.solved.size}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
   r.text(saveLabel(g.copied), VIEW_W / 2, 96, 'a', { align: 'center' });
   r.text(`${entryCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 108, 'i', { align: 'center' });

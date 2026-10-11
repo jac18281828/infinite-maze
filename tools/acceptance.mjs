@@ -1,29 +1,27 @@
 // Spec section 10 acceptance harness. Each check is an exported function over
-// a world and returns { errors, ... }; it derives structure from boards, doors
-// and links alone.
+// a world and a window of tombs and returns { errors, ... }. Continuity,
+// Tree, Acyclic, Flames and Solvability derive structure from boards, doors
+// and links alone; Flow reads the generator's exits and checks them against
+// the doors.
 //
-// Every check reads the tomb size from its world. The run checks HARD over
-// bands -N..N and EASY and MEDIUM over -300..300, or -N..N when N is smaller.
+// Every check reads the tomb size from its world.
 //
-//   node tools/acceptance.mjs [--code XXXX-XXXX] [--bands N]
+//   node tools/acceptance.mjs [--code XXXX-XXXX] [--cols W] [--rows N]
 import { pathToFileURL } from 'node:url';
 import { sha3_256 } from '../src/world/keccak.mjs';
-import { parseCode, toHex } from '../src/world/hash.mjs';
-import {
-  createWorld, digestBands, serializeBoard, acrossDoor, posOf, boardOfPos, boardCoords, boardIndex,
-} from '../src/world/world.mjs';
+import { parseCode, toHex, u32 } from '../src/world/hash.mjs';
+import { createWorld, digestTombs, serializeBoard, acrossDoor, posOf, boardOfPos, boardCoords } from '../src/world/world.mjs';
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
 
 export const SEED = '00000000';
-export const DIGEST_0_99 = 'cc19954c165a0e9430f4738b7d3cbc54f3ba76c0dfe0951bffc9c7890e2c2b6e';
-// Pinned bands 0..99 digests of SEED per difficulty; HARD's is DIGEST_0_99.
+// Digest of tombs u in [-2, 2], v in [0, 19] for seed 0000-0000.
+export const DIGEST_TOMBS = 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01';
+// Pinned digests of SEED per difficulty; HARD's is DIGEST_TOMBS.
 export const DIGESTS = {
   easy: '6c1bca5a30810173ea1661bebd00c31a428c2bf457782750b46493c6efbe17ea',
   medium: '2a96d6100952937d01794be44522e90764046ecd3e2573d11011d5cbb6189bf0',
-  hard: DIGEST_0_99,
+  hard: DIGEST_TOMBS,
 };
-// EASY and MEDIUM run over at most -SMALL_BANDS..SMALL_BANDS.
-export const SMALL_BANDS = 300;
 export const GAP_LIMIT_MS = 150000;
 export const GALLERIES_MIN = 4;
 export const GALLERIES_MAX = 10;
@@ -42,6 +40,9 @@ const DX = [1, 0, -1, 0, 1, -1, -1, 1];
 const DY = [0, 1, 0, -1, 1, 1, -1, -1];
 // Walking time per link in ms over 48 px cells at 96, 48 and 72 px/s.
 const LINK_MS = [500, 1000, 500, 1000, 943, 943, 943, 943];
+const DIR_NAME = ['right', 'up', 'left', 'down'];
+// In-doors list in wall order floor, left, right.
+const WALL_ORDER = [3, 2, 0];
 
 function nbCell(c, d) {
   const x = (c % BW) + DX[d], y = ((c / BW) | 0) + DY[d];
@@ -52,85 +53,148 @@ function hasDoor(bd, dir, cell) {
   return !!bd.links && bd.doors.some((dr) => dr.dir === dir && dr.cell === cell);
 }
 
-function bandBoards(world, b) {
+/** A window of tombs u0..u1 by v0..v1. */
+export function tombWindow(u0, u1, v0, v1) {
+  return { u0, u1, v0, v1 };
+}
+
+function inWindow(win, u, v) {
+  return u >= win.u0 && u <= win.u1 && v >= win.v0 && v <= win.v1;
+}
+
+/** Tombs of the window as [u, v], v outer. */
+function tombsOf(win) {
+  const out = [];
+  for (let v = win.v0; v <= win.v1; v++) for (let u = win.u0; u <= win.u1; u++) out.push([u, v]);
+  return out;
+}
+
+function tombBoards(world, u, v) {
   const out = [];
   for (let i = 0; i < world.size.w * world.size.h; i++) {
-    const { x, y } = boardCoords(b, i, world.size);
+    const { x, y } = boardCoords(u, v, i);
     out.push(world.board(x, y));
   }
   return out;
 }
 
-/** The board across wall d of `bd` when both sides hold the door, else null. */
+function windowBoards(world, win) {
+  return tombsOf(win).flatMap(([u, v]) => tombBoards(world, u, v));
+}
+
+const tombOfBoard = (bd) => ({ u: Math.floor(bd.x / BANDW), v: Math.floor(bd.y / BANDH) });
+const indexOf = (bd) => (bd.y - BANDH * Math.floor(bd.y / BANDH)) * BANDW + (bd.x - BANDW * Math.floor(bd.x / BANDW));
+
+/** The board across door `dr` of `bd` when both sides hold the door, else null. */
 function throughDoor(world, bd, dr) {
-  const nx = bd.x + DX[dr.dir], ny = bd.y + DY[dr.dir];
-  if (nx < 0 || nx >= world.size.w) return null;
-  const nb = world.board(nx, ny);
+  const nb = world.board(bd.x + DX[dr.dir], bd.y + DY[dr.dir]);
   const nc = acrossDoor(dr.cell, dr.dir);
   return hasDoor(nb, dr.dir ^ 2, nc) ? { board: nb, cell: nc } : null;
 }
 
-/** Boards of band b holding a floor door (entries) and a ceiling door (exits). */
-function bandEnds(boards, b, { h }) {
-  const has = (bd, dir) => bd.links && bd.doors.some((d) => d.dir === dir);
-  const entries = boards.filter((bd) => bd.y === h * b && has(bd, 3));
-  const exits = boards.filter((bd) => bd.y === h * b + h - 1 && has(bd, 1));
-  const errors = [];
-  if (entries.length !== 1) errors.push(`band ${b}: ${entries.length} floor doors`);
-  if (exits.length !== 1) errors.push(`band ${b}: ${exits.length} ceiling doors`);
-  return { entries, exits, errors };
-}
-
-/** Board adjacency of band b through doors held on both sides. */
-function boardGraph(world, boards, b) {
-  const { size } = world;
-  const adj = boards.map(() => []);
-  for (const bd of boards) {
-    if (!bd.links) continue;
-    for (const dr of bd.doors) {
-      if (dr.dir === 1 && bd.y === size.h * b + size.h - 1) continue;
-      if (dr.dir === 3 && bd.y === size.h * b) continue;
-      const t = throughDoor(world, bd, dr);
-      if (t) adj[boardIndex(bd.x, bd.y, size)].push({ to: boardIndex(t.board.x, t.board.y, size), dir: dr.dir, cell: dr.cell });
-    }
+/** Doors that boards of tomb (u, v) hold on its wall d, as { bd, dr }. */
+function wallDoors(world, u, v, d) {
+  const out = [];
+  for (let k = 0; k < (d % 2 === 0 ? BANDH : BANDW); k++) {
+    const x = d === 0 ? BANDW * u + BANDW - 1 : d === 2 ? BANDW * u : BANDW * u + k;
+    const y = d === 1 ? BANDH * v + BANDH - 1 : d === 3 ? BANDH * v : BANDH * v + k;
+    const bd = world.board(x, y);
+    if (bd.links) for (const dr of bd.doors) if (dr.dir === d) out.push({ bd, dr });
   }
-  return adj;
-}
-
-/** Board path from `from` to `to` (empty when cut) and each board's distance from it. */
-function routeAndDepth(adj, from, to) {
-  const prev = new Array(adj.length).fill(-2);
-  prev[from] = -1;
-  const q = [from];
-  for (let h = 0; h < q.length; h++) {
-    for (const e of adj[q[h]]) if (prev[e.to] === -2) { prev[e.to] = q[h]; q.push(e.to); }
-  }
-  const route = [];
-  if (prev[to] !== -2) for (let i = to; i >= 0; i = prev[i]) route.unshift(i);
-  const depth = new Array(adj.length).fill(-1);
-  for (const i of route) depth[i] = 0;
-  const q2 = [...route];
-  for (let h = 0; h < q2.length; h++) {
-    for (const e of adj[q2[h]]) if (depth[e.to] < 0) { depth[e.to] = depth[q2[h]] + 1; q2.push(e.to); }
-  }
-  return { route, depth };
+  return out;
 }
 
 /**
- * Band structure from doors alone: entry and exit boards, the route between
- * them and each board's distance from the route.
+ * Exit direction of tomb (u, v) from doors alone, or -1. A ceiling door is
+ * the exit, since no tomb exits down. Otherwise the exit is a side door:
+ * along a row, the tombs joined by side doors hold one ceiling door among
+ * them, and every side door leads toward it.
  */
-export function bandShape(world, b) {
-  const boards = bandBoards(world, b);
-  const { entries, exits, errors } = bandEnds(boards, b, world.size);
-  const adj = boardGraph(world, boards, b);
-  const index = (bd) => boardIndex(bd.x, bd.y, world.size);
-  let route = [], depth = new Array(boards.length).fill(-1);
-  if (entries.length >= 1 && exits.length >= 1) {
-    ({ route, depth } = routeAndDepth(adj, index(entries[0]), index(exits[0])));
-    if (!route.length) errors.push(`band ${b}: no board route from entry to exit`);
+export function doorExit(world, u, v) {
+  if (wallDoors(world, u, v, 1).length) return 1;
+  const left = wallDoors(world, u, v, 2).length > 0, right = wallDoors(world, u, v, 0).length > 0;
+  if (!left || !right) return right ? 0 : left ? 2 : -1;
+  for (const d of [2, 0]) {
+    for (let cu = u + DX[d], n = 0; n < 100000; cu += DX[d], n++) {
+      if (wallDoors(world, cu, v, 1).length) return d;
+      if (!wallDoors(world, cu, v, d).length) break;
+    }
   }
-  return { boards, adj, route, depth, entry: entries[0], exit: exits[0], errors };
+  return -1;
+}
+
+/** Board path from `from` to `to` over `adj`, empty when cut. */
+function boardPath(adj, from, to) {
+  const prev = new Array(adj.length).fill(-2);
+  prev[from] = -1;
+  const q = [from];
+  for (let h = 0; h < q.length && prev[to] === -2; h++) {
+    for (const e of adj[q[h]]) if (prev[e.to] === -2) { prev[e.to] = q[h]; q.push(e.to); }
+  }
+  const path = [];
+  if (prev[to] !== -2) for (let i = to; i >= 0; i = prev[i]) path.unshift(i);
+  return path;
+}
+
+/**
+ * Tomb structure from doors alone: its wall doors, the exit door, the
+ * in-doors in wall order and their boards (the entries), the trunk from the
+ * first entry to the exit board X, a tributary from each later entry to the
+ * first board already in the tree, and each board's distance from a route.
+ * A source tomb holds no in-door; its entry board S, which no door marks,
+ * is the one value read from the generator.
+ */
+export function tombShape(world, u, v) {
+  const boards = tombBoards(world, u, v);
+  const errors = [];
+  const adj = boards.map(() => []);
+  for (const [i, bd] of boards.entries()) {
+    if (!bd.links) continue;
+    for (const dr of bd.doors) {
+      const t = throughDoor(world, bd, dr);
+      if (!t) continue;
+      const o = tombOfBoard(t.board);
+      if (o.u === u && o.v === v) adj[i].push({ to: indexOf(t.board), dir: dr.dir, cell: dr.cell });
+    }
+  }
+  const walls = [];
+  for (let d = 0; d < 4; d++) for (const { bd, dr } of wallDoors(world, u, v, d)) walls.push({ dir: d, i: indexOf(bd), cell: dr.cell });
+  const exit = doorExit(world, u, v);
+  const out = walls.filter((w) => w.dir === exit);
+  if (exit < 0) errors.push(`tomb (${u},${v}): no way on through its doors`);
+  else if (out.length !== 1) errors.push(`tomb (${u},${v}): ${out.length} doors on its exit wall`);
+  const ins = walls.filter((w) => w.dir !== exit).sort((p, q) => WALL_ORDER.indexOf(p.dir) - WALL_ORDER.indexOf(q.dir));
+  const source = ins.length === 0;
+  const entries = source ? [world.tomb(u, v).entries[0]] : ins.map((w) => w.i);
+  const routeIndex = new Array(boards.length).fill(-1), routeOf = new Array(boards.length).fill(-1);
+  const next = new Array(boards.length).fill(-1), depth = new Array(boards.length).fill(-1);
+  const routes = [], routeEntry = [];
+  const shape = { u, v, boards, adj, walls, exit, exitDoor: out[0], ins, entries, source, routes, routeEntry, routeIndex, routeOf, next, depth, errors };
+  if (errors.length) return shape;
+  const X = out[0].i;
+  const lay = (route, last, entryCell) => {
+    route.forEach((i, j) => {
+      routeIndex[i] = j; routeOf[i] = routes.length; depth[i] = 0;
+      next[i] = j + 1 < route.length ? route[j + 1] : last;
+    });
+    routes.push(route);
+    routeEntry.push(entryCell);
+  };
+  const trunk = boardPath(adj, entries[0], X);
+  if (!trunk.length) { errors.push(`tomb (${u},${v}): no board route from its first entry to its exit`); return shape; }
+  lay(trunk, -1, source ? -1 : ins[0].cell);
+  for (let j = 1; j < entries.length; j++) {
+    if (depth[entries[j]] === 0) continue;
+    const path = boardPath(adj, entries[j], X);
+    const k = path.findIndex((i) => depth[i] === 0);
+    if (k < 0) { errors.push(`tomb (${u},${v}): entry ${j + 1} does not join the tree`); continue; }
+    lay(path.slice(0, k), path[k], ins[j].cell);
+  }
+  const q = boards.map((_, i) => i).filter((i) => depth[i] === 0);
+  for (let h = 0; h < q.length; h++) {
+    for (const e of adj[q[h]]) if (depth[e.to] < 0) { depth[e.to] = depth[q[h]] + 1; next[e.to] = q[h]; q.push(e.to); }
+  }
+  return shape;
 }
 
 /**
@@ -207,21 +271,19 @@ export function checkKeccak() {
 }
 
 /** Every door has a partner at the same row or column across its wall. */
-export function checkContinuity(world, b0, b1) {
+export function checkContinuity(world, win) {
   const errors = [];
   let doors = 0;
-  for (let b = b0; b <= b1; b++) {
-    for (const bd of bandBoards(world, b)) {
-      if (!bd.links) continue;
-      for (const dr of bd.doors) {
-        doors++;
-        const col = dr.cell % BW, row = (dr.cell / BW) | 0;
-        const onWall = [col === BW - 1 && row >= 1 && row <= 5, row === BH - 1 && col >= 1 && col <= 10,
-          col === 0 && row >= 1 && row <= 5, row === 0 && col >= 1 && col <= 10][dr.dir];
-        if (!onWall) errors.push(`board (${bd.x},${bd.y}): door ${dr.dir} at cell ${dr.cell} is off its wall`);
-        if (!throughDoor(world, bd, dr)) {
-          errors.push(`board (${bd.x},${bd.y}): door ${dr.dir} at cell ${dr.cell} has no partner`);
-        }
+  for (const bd of windowBoards(world, win)) {
+    if (!bd.links) continue;
+    for (const dr of bd.doors) {
+      doors++;
+      const col = dr.cell % BW, row = (dr.cell / BW) | 0;
+      const onWall = [col === BW - 1 && row >= 1 && row <= 5, row === BH - 1 && col >= 1 && col <= 10,
+        col === 0 && row >= 1 && row <= 5, row === 0 && col >= 1 && col <= 10][dr.dir];
+      if (!onWall) errors.push(`board (${bd.x},${bd.y}): door ${dr.dir} at cell ${dr.cell} is off its wall`);
+      if (!throughDoor(world, bd, dr)) {
+        errors.push(`board (${bd.x},${bd.y}): door ${dr.dir} at cell ${dr.cell} has no partner`);
       }
     }
   }
@@ -229,21 +291,22 @@ export function checkContinuity(world, b0, b1) {
 }
 
 /**
- * Errors when band b's carved cells and doors are not one tree (edges =
- * nodes - 1). A carved cell holds a link or a door; the rest is rock.
+ * Errors unless tomb (u, v)'s carved cells and inner doors form one tree
+ * (edges = nodes - 1) that joins every door on the tomb's walls, its own
+ * and those its neighbours hold toward it. A carved cell holds a link or a
+ * door; the rest is rock.
  */
-function bandTreeErrors(world, b) {
+function tombTreeErrors(world, u, v) {
   const errors = [];
-  const boards = bandBoards(world, b);
-  const slot = new Map();
-  boards.forEach((bd, i) => { if (bd.links) slot.set(bd.p, i); });
+  const boards = tombBoards(world, u, v);
   const up = new Int32Array(boards.length * NCELL).map((_, i) => i);
   const carved = (bd, c) => bd.links[c] !== 0 || bd.doors.some((dr) => dr.cell === c);
   const find = (i) => { while (up[i] !== i) { up[i] = up[up[i]]; i = up[i]; } return i; };
-  const join = (u, v) => { up[find(u)] = find(v); };
+  const join = (a, b) => { up[find(a)] = find(b); };
+  const inTomb = (bd) => { const o = tombOfBoard(bd); return o.u === u && o.v === v; };
   let nodes = 0, edges = 0;
-  for (const i of slot.values()) {
-    const bd = boards[i];
+  for (const [i, bd] of boards.entries()) {
+    if (!bd.links) continue;
     for (let c = 0; c < NCELL; c++) {
       if (carved(bd, c)) nodes++;
       for (let d = 0; d < 8; d++) {
@@ -257,50 +320,112 @@ function bandTreeErrors(world, b) {
     for (const dr of bd.doors) {
       if (dr.dir !== 0 && dr.dir !== 1) continue;
       const t = throughDoor(world, bd, dr);
-      if (!t || !slot.has(t.board.p)) continue;
+      if (!t || !inTomb(t.board)) continue;
       edges++;
-      join(i * NCELL + dr.cell, slot.get(t.board.p) * NCELL + t.cell);
+      join(i * NCELL + dr.cell, indexOf(t.board) * NCELL + t.cell);
     }
   }
   const roots = new Set();
-  for (const i of slot.values()) {
-    for (let c = 0; c < NCELL; c++) if (carved(boards[i], c)) roots.add(find(i * NCELL + c));
+  for (const [i, bd] of boards.entries()) {
+    if (!bd.links) continue;
+    for (let c = 0; c < NCELL; c++) if (carved(bd, c)) roots.add(find(i * NCELL + c));
   }
-  if (roots.size !== 1) errors.push(`band ${b}: ${roots.size} components`);
-  if (edges !== nodes - 1) errors.push(`band ${b}: ${edges} edges for ${nodes} nodes`);
+  if (roots.size !== 1) errors.push(`tomb (${u},${v}): ${roots.size} components`);
+  if (edges !== nodes - 1) errors.push(`tomb (${u},${v}): ${edges} edges for ${nodes} nodes`);
+  for (let d = 0; d < 4; d++) {
+    for (const { bd, dr } of wallDoors(world, u + DX[d], v + DY[d], d ^ 2)) {
+      if (!throughDoor(world, bd, dr)) errors.push(`tomb (${u},${v}): the door from board (${bd.x},${bd.y}) is unjoined`);
+    }
+  }
   return errors;
 }
 
-/** Errors unless exactly one door joins bands b-1 and b, held on both sides. */
-function seamErrors(world, b) {
-  let down = 0, upward = 0;
-  for (let x = 0; x < world.size.w; x++) {
-    const top = world.board(x, world.size.h * b - 1), bottom = world.board(x, world.size.h * b);
-    if (top.links) upward += top.doors.filter((d) => d.dir === 1).length;
-    if (bottom.links) down += bottom.doors.filter((d) => d.dir === 3).length;
-  }
-  return down === 1 && upward === 1 ? [] : [`bands ${b - 1}/${b}: ${upward} ceiling and ${down} floor doors`];
-}
-
-/** Per band: cells and doors form one tree; one door joins each band pair. */
-export function checkTree(world, b0, b1) {
+/** Per tomb: cells and doors form one tree joining all of its wall doors. */
+export function checkTree(world, win) {
   const errors = [];
-  for (let b = b0; b <= b1; b++) errors.push(...bandTreeErrors(world, b));
-  for (let b = b0; b <= b1 + 1; b++) errors.push(...seamErrors(world, b));
+  for (const [u, v] of tombsOf(win)) errors.push(...tombTreeErrors(world, u, v));
   return { errors };
 }
 
 /**
- * Primary pair of board i in band shape s: route boards join the doors to
- * their route neighbours; a dead end pairs its parent door with -1 (deepest).
+ * Each tomb exits left, right or up; its exit wall holds exactly one door,
+ * matched on both sides; every other wall door faces a neighbour that exits
+ * into it; no two side neighbours exit into each other. Reports the shares
+ * of up, left and right exits and the mean sideways run: the side exits a
+ * way on takes from a window tomb before it exits up.
  */
-function primaryPair(s, i, bd) {
+export function checkFlow(world, win) {
+  const errors = [];
+  const counts = [0, 0, 0, 0];
+  let runs = 0, tombs = 0;
+  const exitOf = (u, v) => world.tomb(u, v).exit;
+  for (const [u, v] of tombsOf(win)) {
+    tombs++;
+    const e = exitOf(u, v);
+    counts[e] = (counts[e] || 0) + 1;
+    if (e !== 0 && e !== 1 && e !== 2) errors.push(`tomb (${u},${v}): exits ${DIR_NAME[e] ?? e}`);
+    for (let d = 0; d < 4; d++) {
+      const doors = wallDoors(world, u, v, d);
+      if (d === e) {
+        if (doors.length !== 1) errors.push(`tomb (${u},${v}): ${doors.length} doors on its exit wall`);
+        else if (!throughDoor(world, doors[0].bd, doors[0].dr)) errors.push(`tomb (${u},${v}): its exit door has no partner`);
+        continue;
+      }
+      if (doors.length && exitOf(u + DX[d], v + DY[d]) !== (d ^ 2)) {
+        errors.push(`tomb (${u},${v}): a door on its ${DIR_NAME[d]} wall faces a tomb that does not exit into it`);
+      }
+    }
+    if (e === 0 && exitOf(u + 1, v) === 2) errors.push(`tombs (${u},${v}) and (${u + 1},${v}) exit into each other`);
+    for (let cu = u, n = 0; n < 1000; n++) {
+      const d = exitOf(cu, v);
+      if (d !== 0 && d !== 2) break;
+      runs++;
+      cu += DX[d];
+    }
+  }
+  const share = (n) => (tombs ? n / tombs : 0);
+  return { errors, tombs, up: share(counts[1]), left: share(counts[2]), right: share(counts[0]), meanRun: tombs ? runs / tombs : 0 };
+}
+
+/** The window's tombs, joined by the doors held on both sides of their walls, form a forest. */
+export function checkAcyclic(world, win) {
+  const errors = [];
+  const up = new Map();
+  const find = (k) => { while (up.has(k) && up.get(k) !== k) k = up.get(k); return k; };
+  let doors = 0;
+  for (const [u, v] of tombsOf(win)) {
+    for (const d of [0, 1]) {
+      const nu = u + DX[d], nv = v + DY[d];
+      if (!inWindow(win, nu, nv)) continue;
+      for (const { bd, dr } of wallDoors(world, u, v, d)) {
+        if (!throughDoor(world, bd, dr)) continue;
+        doors++;
+        const a = find(`${u},${v}`), b = find(`${nu},${nv}`);
+        if (a === b) errors.push(`tombs (${u},${v}) and (${nu},${nv}): a door closes a cycle`);
+        else up.set(a, b);
+      }
+    }
+  }
+  return { errors, doors };
+}
+
+const flameCellOf = (world, bd) => u32(world.H('flame', bd.x, bd.y), 4) % NCELL;
+
+/**
+ * Primary pair of board i in tomb shape s: a route board joins the door it
+ * enters its route by (its in-door, or the flame cell on S) to the door it
+ * leads on by (the exit door on X); a dead end pairs its parent door with
+ * -1 (deepest).
+ */
+function primaryPair(world, s, i, bd) {
   const doorTo = (j) => s.adj[i].find((e) => e.to === j)?.cell;
-  const r = s.route.indexOf(i);
-  if (r < 0) return [s.adj[i].find((e) => s.depth[e.to] === s.depth[i] - 1).cell, -1];
-  const a = r === 0 ? bd.doors.find((d) => d.dir === 3).cell : doorTo(s.route[r - 1]);
-  const c = r === s.route.length - 1 ? bd.doors.find((d) => d.dir === 1).cell : doorTo(s.route[r + 1]);
-  return [a, c];
+  const r = s.routeIndex[i];
+  if (r < 0) return [doorTo(s.next[i]), -1];
+  const route = s.routes[s.routeOf[i]];
+  let a = r > 0 ? doorTo(route[r - 1]) : s.routeEntry[s.routeOf[i]];
+  if (a < 0) a = flameCellOf(world, bd);
+  const b = s.next[i] >= 0 ? doorTo(s.next[i]) : i === s.exitDoor.i ? s.exitDoor.cell : -1;
+  return [a, b];
 }
 
 /**
@@ -309,12 +434,11 @@ function primaryPair(s, i, bd) {
  * section 4 or flag fallback; a run of `minBoards` boards or more keeps
  * fallbacks at or under 2%. Reports route lengths and rock boards.
  */
-export function checkBounds(world, b0, b1, minBoards = CEILING_MIN_BOARDS) {
+export function checkBounds(world, win, minBoards = CEILING_MIN_BOARDS) {
   const errors = [], tombs = [];
   let boards = 0, fallbacks = 0;
-  for (let b = b0; b <= b1; b++) {
-    errors.push(...outsideErrors(world, b));
-    const s = bandShape(world, b);
+  for (const [u, v] of tombsOf(win)) {
+    const s = tombShape(world, u, v);
     errors.push(...s.errors);
     if (s.errors.length) continue;
     errors.push(...routeErrors(world, s, b));
@@ -323,9 +447,9 @@ export function checkBounds(world, b0, b1, minBoards = CEILING_MIN_BOARDS) {
       if (!bd.links) return;
       boards++;
       if (bd.fallback) fallbacks++;
-      if (s.depth[i] < 0) { errors.push(`board (${bd.x},${bd.y}): cut off from the route`); return; }
+      if (s.depth[i] < 0) { errors.push(`board (${bd.x},${bd.y}): cut off from the routes`); return; }
       if (s.depth[i] > 2) errors.push(`board (${bd.x},${bd.y}): dead-end branch ${s.depth[i]} boards deep`);
-      const [a, c] = primaryPair(s, i, bd);
+      const [a, c] = primaryPair(world, s, i, bd);
       const m = measureTargets(bd.links, a, c, bd.doors.map((d) => d.cell));
       if (!m.ok && !bd.fallback) {
         errors.push(`board (${bd.x},${bd.y}): misses targets (path ${m.pathLen}, junctions ${m.junctions}, short ${m.shortBranches}) without fallback`);
@@ -364,31 +488,29 @@ function tombFigures(tombs) {
  * Every gallery owns its 2x2 block: no other link joins two of its cells and
  * no cell lies in two blocks. Galleries average 4-10 per board.
  */
-export function checkGalleries(world, b0, b1) {
+export function checkGalleries(world, win) {
   const errors = [];
   let boards = 0, galleries = 0, conflicts = 0;
-  for (let b = b0; b <= b1; b++) {
-    for (const bd of bandBoards(world, b)) {
-      if (!bd.links) continue;
-      boards++;
-      const owner = new Array(NCELL).fill(-1);
-      for (let c = 0; c < NCELL; c++) {
-        for (const d of [4, 5]) {
-          if (!(bd.links[c] & (1 << d))) continue;
-          galleries++;
-          const x0 = (c % BW) - (d === 5 ? 1 : 0), a = ((c / BW) | 0) * BW + x0;
-          const block = [a, a + 1, a + BW, a + BW + 1];
-          // Each in-block link counts once from each end; the gallery is one.
-          let ends = 0;
-          for (const u of block) {
-            for (let e = 0; e < 8; e++) if (bd.links[u] & (1 << e) && block.includes(nbCell(u, e))) ends++;
-          }
-          const shared = ends > 2, overlap = block.some((u) => owner[u] >= 0);
-          for (const u of block) owner[u] = c;
-          if (!shared && !overlap) continue;
-          conflicts++;
-          errors.push(`board (${bd.x},${bd.y}): gallery ${c} dir ${d} ${shared ? 'shares its block with another link' : 'overlaps another block'}`);
+  for (const bd of windowBoards(world, win)) {
+    if (!bd.links) continue;
+    boards++;
+    const owner = new Array(NCELL).fill(-1);
+    for (let c = 0; c < NCELL; c++) {
+      for (const d of [4, 5]) {
+        if (!(bd.links[c] & (1 << d))) continue;
+        galleries++;
+        const x0 = (c % BW) - (d === 5 ? 1 : 0), a = ((c / BW) | 0) * BW + x0;
+        const block = [a, a + 1, a + BW, a + BW + 1];
+        // Each in-block link counts once from each end; the gallery is one.
+        let ends = 0;
+        for (const u of block) {
+          for (let e = 0; e < 8; e++) if (bd.links[u] & (1 << e) && block.includes(nbCell(u, e))) ends++;
         }
+        const shared = ends > 2, overlap = block.some((u) => owner[u] >= 0);
+        for (const u of block) owner[u] = c;
+        if (!shared && !overlap) continue;
+        conflicts++;
+        errors.push(`board (${bd.x},${bd.y}): gallery ${c} dir ${d} ${shared ? 'shares its block with another link' : 'overlaps another block'}`);
       }
     }
   }
@@ -404,23 +526,21 @@ export function checkGalleries(world, b0, b1) {
  * cells and the mean stays within 48-56. A cell is carved when it holds a
  * link, doors aside.
  */
-export function checkCarve(world, b0, b1) {
+export function checkCarve(world, win) {
   const errors = [];
   let boards = 0, carved = 0;
-  for (let b = b0; b <= b1; b++) {
-    for (const bd of bandBoards(world, b)) {
-      if (!bd.links) continue;
-      boards++;
-      let n = 0;
-      for (let c = 0; c < NCELL; c++) if (bd.links[c]) n++;
-      carved += n;
-      if (n < CARVE_MIN) errors.push(`board (${bd.x},${bd.y}): ${n} carved cells, under ${CARVE_MIN}`);
-      for (const dr of bd.doors) {
-        if (!bd.links[dr.cell]) errors.push(`board (${bd.x},${bd.y}): door cell ${dr.cell} is pruned`);
-      }
-      for (const c of world.flamesAt(bd.x, bd.y)) {
-        if (!bd.links[c]) errors.push(`board (${bd.x},${bd.y}): flame cell ${c} is pruned`);
-      }
+  for (const bd of windowBoards(world, win)) {
+    if (!bd.links) continue;
+    boards++;
+    let n = 0;
+    for (let c = 0; c < NCELL; c++) if (bd.links[c]) n++;
+    carved += n;
+    if (n < CARVE_MIN) errors.push(`board (${bd.x},${bd.y}): ${n} carved cells, under ${CARVE_MIN}`);
+    for (const dr of bd.doors) {
+      if (!bd.links[dr.cell]) errors.push(`board (${bd.x},${bd.y}): door cell ${dr.cell} is pruned`);
+    }
+    for (const c of world.flamesAt(bd.x, bd.y)) {
+      if (!bd.links[c]) errors.push(`board (${bd.x},${bd.y}): flame cell ${c} is pruned`);
     }
   }
   const mean = boards ? carved / boards : 0;
@@ -460,63 +580,102 @@ export function walkMs(world, boards, A, B) {
 const sameFlame = (f, g) => f.x === g.x && f.y === g.y && f.cell === g.cell;
 
 /**
- * Chain faults of band b: wrong ends, flames off the route or out of order,
- * unlit chain flames and route-board flames missing from every chain.
+ * Boards of entry j's way on in tomb shape s: the board path from the entry
+ * to X, then the board across the exit door. Empty when cut.
  */
-function chainErrors(world, b, s, span) {
+export function entrySpan(world, s, j) {
+  const path = boardPath(s.adj, s.entries[j], s.exitDoor.i);
+  if (!path.length) return [];
+  const X = s.boards[s.exitDoor.i];
+  const across = throughDoor(world, X, { dir: s.exit, cell: s.exitDoor.cell });
+  return across ? [...path.map((i) => s.boards[i]), across.board] : [];
+}
+
+/**
+ * Chain faults of entry j: wrong ends, flames off the way on or out of
+ * order, and unlit chain flames.
+ */
+function chainErrors(world, s, j, chain, span) {
   const errors = [];
-  const chain = world.bandFlames(b).chain;
-  const chainNext = world.bandFlames(b + 1).chain;
-  const chainPrev = world.bandFlames(b - 1).chain;
-  if (!chain.length || chain[0].x !== s.entry.x || chain[0].y !== s.entry.y) errors.push(`band ${b}: chain does not start at the entry`);
-  if (!sameFlame(chain[chain.length - 1], chainNext[0])) errors.push(`band ${b}: chain does not end at band ${b + 1}'s entry flame`);
+  const at = `tomb (${s.u},${s.v}) entry ${j + 1}`;
+  const entry = span[0], down = span[span.length - 1];
+  if (!chain.length || chain[0].x !== entry.x || chain[0].y !== entry.y) errors.push(`${at}: chain does not start on the entry board`);
+  const end = chain[chain.length - 1];
+  if (!end || end.x !== down.x || end.y !== down.y) errors.push(`${at}: chain does not end on the downstream entry board`);
   let last = 0;
   for (const f of chain) {
     const o = span.findIndex((bd) => bd.x === f.x && bd.y === f.y);
-    if (o < 0) errors.push(`band ${b}: chain flame on board (${f.x},${f.y}) is off the route`);
-    else if (o < last) errors.push(`band ${b}: chain runs backwards at board (${f.x},${f.y})`);
+    if (o < 0) errors.push(`${at}: chain flame on board (${f.x},${f.y}) is off the way on`);
+    else if (o < last) errors.push(`${at}: chain runs backwards at board (${f.x},${f.y})`);
     else last = o;
-    if (!world.flamesAt(f.x, f.y).includes(f.cell)) errors.push(`band ${b}: chain flame (${f.x},${f.y}):${f.cell} is not lit`);
+    if (!world.flamesAt(f.x, f.y).includes(f.cell)) errors.push(`${at}: chain flame (${f.x},${f.y}):${f.cell} is not lit`);
   }
-  span.slice(0, -1).forEach((bd, r) => {
-    for (const cell of world.flamesAt(bd.x, bd.y)) {
-      const f = { x: bd.x, y: bd.y, cell };
-      const known = chain.some((g) => sameFlame(f, g)) || (r === 0 && chainPrev.some((g) => sameFlame(f, g)));
-      if (!known) errors.push(`band ${b}: route flame (${bd.x},${bd.y}):${cell} is missing from the chain`);
-    }
-  });
   return errors;
 }
 
-/** Band entries hold flames; consecutive route flames lie <= 150 s apart. */
-export function checkFlames(world, b0, b1) {
+/**
+ * Entries hold flames; along each entry's way on, consecutive chain flames
+ * lie <= 150 s apart; every flame on a route board belongs to a chain.
+ */
+export function checkFlames(world, win) {
   const errors = [];
   const gaps = [];
-  for (let b = b0; b <= b1; b++) {
-    const s = bandShape(world, b);
+  for (const [u, v] of tombsOf(win)) {
+    const s = tombShape(world, u, v);
     errors.push(...s.errors);
     if (s.errors.length) continue;
-    if (world.flamesAt(s.entry.x, s.entry.y).length === 0) errors.push(`band ${b}: entry holds no flame`);
-    const next = bandShape(world, b + 1);
-    if (next.errors.length) { errors.push(...next.errors); continue; }
-    const span = [...s.route.map((i) => s.boards[i]), next.entry];
-    errors.push(...chainErrors(world, b, s, span));
-    const chain = world.bandFlames(b).chain;
-    for (let i = 0; i + 1 < chain.length; i++) {
-      const t = walkMs(world, span, chain[i], chain[i + 1]);
-      gaps.push(t);
-      if (t > GAP_LIMIT_MS) errors.push(`band ${b}: flame gap ${(t / 1000).toFixed(1)} s exceeds 150 s`);
+    const fs = world.tombFlames(u, v);
+    if (fs.chains.length !== s.entries.length) errors.push(`tomb (${u},${v}): ${fs.chains.length} chains for ${s.entries.length} entries`);
+    for (const i of s.entries) {
+      const bd = s.boards[i];
+      if (world.flamesAt(bd.x, bd.y).length === 0) errors.push(`tomb (${u},${v}): entry board (${bd.x},${bd.y}) holds no flame`);
     }
+    fs.chains.forEach((chain, j) => {
+      if (j >= s.entries.length) return;
+      const span = entrySpan(world, s, j);
+      if (!span.length) { errors.push(`tomb (${u},${v}) entry ${j + 1}: no way on through doors`); return; }
+      errors.push(...chainErrors(world, s, j, chain, span));
+      for (let i = 0; i + 1 < chain.length; i++) {
+        const t = walkMs(world, span, chain[i], chain[i + 1]);
+        gaps.push(t);
+        if (t > GAP_LIMIT_MS) errors.push(`tomb (${u},${v}) entry ${j + 1}: flame gap ${(t / 1000).toFixed(1)} s exceeds 150 s`);
+      }
+    });
+    // Upstream chains end on this tomb's entry boards.
+    const upstream = s.ins.map((w) => ({ i: w.i, chains: world.tombFlames(u + DX[w.dir], v + DY[w.dir]).chains }));
+    s.boards.forEach((bd, i) => {
+      if (s.routeIndex[i] < 0) return;
+      for (const cell of world.flamesAt(bd.x, bd.y)) {
+        const f = { x: bd.x, y: bd.y, cell };
+        const known = fs.chains.some((c) => c.some((g) => sameFlame(f, g)))
+          || upstream.some((w) => w.i === i && w.chains.some((c) => c.some((g) => sameFlame(f, g))));
+        if (!known) errors.push(`tomb (${u},${v}): route flame (${bd.x},${bd.y}):${cell} is missing from every chain`);
+      }
+    });
   }
   return { errors, gaps };
 }
 
-/** BFS over cells and doors from band b0's entry reaches band b1's exit. */
-export function checkSolvability(world, b0, b1) {
-  const s0 = bandShape(world, b0), s1 = bandShape(world, b1);
-  if (s0.errors.length || s1.errors.length) return { errors: [...s0.errors, ...s1.errors], cells: 0 };
-  const startCell = s0.entry.doors.find((d) => d.dir === 3).cell;
-  const goalCell = s1.exit.doors.find((d) => d.dir === 1).cell;
+/**
+ * Follows the generator's exits from tomb (u, v0) until a tomb in row v1,
+ * leaving the window sideways if the walk does; a BFS over cells and doors,
+ * confined to those tombs, reaches the last tomb's exit door from the first
+ * tomb's first entry.
+ */
+export function checkSolvability(world, win, u = 0) {
+  const walk = [[u, win.v0]];
+  for (let n = 0; walk[walk.length - 1][1] < win.v1 && n < 1000000; n++) {
+    const [cu, cv] = walk[walk.length - 1];
+    const d = world.tomb(cu, cv).exit;
+    if (d !== 0 && d !== 1 && d !== 2) return { errors: [`tomb (${cu},${cv}) has no way on up`], cells: 0, tombs: walk.length };
+    walk.push([cu + DX[d], cv + DY[d]]);
+  }
+  const keys = new Set(walk.map(([a, b]) => `${a},${b}`));
+  const s0 = tombShape(world, ...walk[0]), s1 = tombShape(world, ...walk[walk.length - 1]);
+  if (s0.errors.length || s1.errors.length) return { errors: [...s0.errors, ...s1.errors], cells: 0, tombs: walk.length };
+  const first = s0.boards[s0.entries[0]], last = s1.boards[s1.exitDoor.i];
+  const startCell = s0.source ? flameCellOf(world, first) : s0.ins[0].cell;
+  const goalCell = s1.exitDoor.cell;
   const seen = new Map();
   const mark = (p, c) => {
     let m = seen.get(p);
@@ -525,30 +684,32 @@ export function checkSolvability(world, b0, b1) {
     m[c] = 1;
     return true;
   };
-  const q = [s0.entry.p * 128 + startCell];
-  mark(s0.entry.p, startCell);
-  const { size } = world;
-  const lo = size.h * b0, hi = size.h * b1 + size.h - 1;
+  const q = [[first, startCell]];
+  mark(first.p, startCell);
   let reached = false, cells = 0;
   for (let h = 0; h < q.length; h++) {
-    const p = Math.floor(q[h] / 128), c = q[h] - p * 128;
+    const [bd, c] = q[h];
     cells++;
-    const { x, y } = boardOfPos(p, size);
-    if (p === s1.exit.p && c === goalCell) { reached = true; break; }
-    const bd = world.board(x, y);
+    if (bd.p === last.p && c === goalCell) { reached = true; break; }
     for (let d = 0; d < 8; d++) {
       if (!(bd.links[c] & (1 << d))) continue;
       const t = nbCell(c, d);
-      if (mark(p, t)) q.push(p * 128 + t);
+      if (mark(bd.p, t)) q.push([bd, t]);
     }
     for (const dr of bd.doors) {
       if (dr.cell !== c) continue;
       const t = throughDoor(world, bd, dr);
-      if (!t || t.board.y < lo || t.board.y > hi) continue;
-      if (mark(t.board.p, t.cell)) q.push(t.board.p * 128 + t.cell);
+      if (!t) continue;
+      const o = tombOfBoard(t.board);
+      if (!keys.has(`${o.u},${o.v}`)) continue;
+      if (mark(t.board.p, t.cell)) q.push([t.board, t.cell]);
     }
   }
-  return { errors: reached ? [] : [`band ${b1}'s exit is unreachable from band ${b0}'s entry`], cells };
+  const [lu, lv] = walk[walk.length - 1];
+  return {
+    errors: reached ? [] : [`tomb (${lu},${lv})'s exit is unreachable from tomb (${u},${win.v0})'s first entry`],
+    cells, tombs: walk.length,
+  };
 }
 
 /**
@@ -567,56 +728,70 @@ export function checkSaves(world, positions) {
       errors.push(`save ${text} does not round-trip`);
     }
     const a = serializeBoard(world, x, y), b = serializeBoard(fresh, x, y);
-    if (a.length !== b.length || a.some((v, i) => v !== b[i])) errors.push(`board at p=${p} differs when resumed`);
+    if (a.length !== b.length || a.some((val, i) => val !== b[i])) errors.push(`board at p=${p} differs when resumed`);
   }
   return { errors, saves: positions.length };
 }
 
-/** A fixed seed code yields the pinned digest of bands 0..99 at a difficulty. */
-export function checkDeterminism(code = SEED, want = DIGEST_0_99, difficulty = 'hard') {
-  const got = digestBands(createWorld(code, { difficulty }), 0, 99);
-  return { errors: got === want ? [] : [`digest of bands 0..99 is ${got}, pinned ${want}`], digest: got };
+/**
+ * A fixed seed code yields the pinned digest of tombs u in [-2, 2], v in
+ * [0, 19] at a difficulty.
+ */
+export function checkDeterminism(code = SEED, want = DIGEST_TOMBS, difficulty = 'hard') {
+  const got = digestTombs(createWorld(code, { difficulty }), -2, 2, 0, 19);
+  return { errors: got === want ? [] : [`digest of tombs [-2, 2] x [0, 19] is ${got}, pinned ${want}`], digest: got };
 }
 
 function percentile(sorted, q) {
   return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
 }
 
-function saveSamples(world, b0, b1) {
-  const { size } = world, { w, h } = size;
+/** The first entry board and one other board of tombs sampled across the window, signs mixed. */
+function saveSamples(world, win) {
   const samples = [];
-  for (let b = b0; b <= b1; b += Math.max(1, Math.floor((b1 - b0) / 20))) {
-    samples.push(posOf(world.tree(b).entryX, h * b, size), posOf(((b % w) + w) % w, h * b + (h >> 1), size));
+  const du = Math.max(1, Math.floor((win.u1 - win.u0) / 2)), dv = Math.max(1, Math.floor((win.v1 - win.v0) / 6));
+  for (let v = win.v0; v <= win.v1; v += dv) {
+    for (let u = win.u0; u <= win.u1; u += du) {
+      const { x, y } = boardCoords(u, v, world.tomb(u, v).entries[0]);
+      const o = boardCoords(u, v, (u * 7 + v * 5 + 48) % 24);
+      samples.push(posOf(x, y), posOf(o.x, o.y));
+    }
   }
   return samples;
 }
 
 /** Runs every world check; returns [name, result, detail] rows and summary figures. */
-function runChecks(world, code, b0, b1) {
+function runChecks(world, code, win) {
   const rows = [];
-  const flames = checkFlames(world, b0, b1);
-  const gaps = flames.gaps.slice().sort((u, v) => u - v);
+  const flames = checkFlames(world, win);
+  const gaps = flames.gaps.slice().sort((p, q) => p - q);
   const gapText = `max ${(gaps.at(-1) / 1000).toFixed(1)} s, p99 ${(percentile(gaps, 0.99) / 1000).toFixed(1)} s`;
-  const c = checkContinuity(world, b0, b1);
+  const c = checkContinuity(world, win);
   rows.push(['continuity', c, `${c.doors} doors`]);
-  rows.push(['tree', checkTree(world, b0, b1), 'edges = nodes - 1 per band; one door per band pair']);
-  const bounds = checkBounds(world, b0, b1);
+  rows.push(['tree', checkTree(world, win), 'edges = nodes - 1 per tomb, every wall door joined']);
+  const flow = checkFlow(world, win);
+  const pct = (f) => `${(100 * f).toFixed(1)}%`;
+  const flowText = `up ${pct(flow.up)}, left ${pct(flow.left)}, right ${pct(flow.right)}; mean sideways run ${flow.meanRun.toFixed(2)}`;
+  rows.push(['flow', flow, flowText]);
+  const acyclic = checkAcyclic(world, win);
+  rows.push(['acyclic', acyclic, `${acyclic.doors} tomb doors, no cycle`]);
+  const bounds = checkBounds(world, win);
   rows.push(['bounds', bounds, `${bounds.boards} boards, ${bounds.fallbacks} on best-attempt fallback`]);
-  const galleries = checkGalleries(world, b0, b1);
+  const galleries = checkGalleries(world, win);
   rows.push(['galleries', galleries, `${galleries.mean.toFixed(2)} per board, ${galleries.conflicts} block conflicts`]);
-  const carve = checkCarve(world, b0, b1);
+  const carve = checkCarve(world, win);
   rows.push(['carve', carve, `${carve.mean.toFixed(1)} carved cells per board`]);
   rows.push(['flames', flames, `${gaps.length} gaps, ${gapText}`]);
-  const solve = checkSolvability(world, b0, b1);
-  rows.push(['solvability', solve, `${solve.cells} cells searched`]);
-  const saves = checkSaves(world, saveSamples(world, b0, b1));
+  const solve = checkSolvability(world, win);
+  rows.push(['solvability', solve, `${solve.tombs} tombs, ${solve.cells} cells searched`]);
+  const saves = checkSaves(world, saveSamples(world, win));
   rows.push(['saves', saves, `${saves.saves} positions`]);
   const d = world.difficulty;
   const det = code === SEED
     ? checkDeterminism(SEED, DIGESTS[d], d)
-    : { errors: [], digest: digestBands(createWorld(code, { difficulty: d }), 0, 99) };
-  rows.push(['determinism', det, `bands 0..99 digest ${det.digest.slice(0, 16)}...`]);
-  return { rows, bounds, galleries, carve, gapText, digest: det.digest };
+    : { errors: [], digest: digestTombs(createWorld(code, { difficulty: d }), -2, 2, 0, 19) };
+  rows.push(['determinism', det, `tombs [-2, 2] x [0, 19] digest ${det.digest.slice(0, 16)}...`]);
+  return { rows, bounds, galleries, carve, gapText, flowText, digest: det.digest };
 }
 
 function printRows(rows, tag) {
@@ -650,16 +825,20 @@ async function main(argv) {
   const t0 = performance.now();
   const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
   const code = parseCode(arg('--code', SEED));
-  const half = Number(arg('--bands', 1000));
-  if (!code || !Number.isInteger(half) || half < 1) { console.error('usage: acceptance.mjs [--code XXXX-XXXX] [--bands N]'); return 2; }
+  const W = Number(arg('--cols', 10)), N = Number(arg('--rows', 50));
+  if (!code || !Number.isInteger(W) || W < 0 || !Number.isInteger(N) || N < 1) {
+    console.error('usage: acceptance.mjs [--code XXXX-XXXX] [--cols W] [--rows N]');
+    return 2;
+  }
+  const win = tombWindow(-W, W, -N, N);
   const k = checkKeccak();
   let failed = printRows([['keccak', k, `${k.vectors} FIPS 202 vectors`]], '');
   const summaries = [];
-  for (const [difficulty, n] of [['hard', half], ['easy', Math.min(SMALL_BANDS, half)], ['medium', Math.min(SMALL_BANDS, half)]]) {
+  for (const difficulty of ['hard', 'easy', 'medium']) {
     const world = createWorld(code, { difficulty });
-    const r = runChecks(world, code, -n, n);
+    const r = runChecks(world, code, win);
     failed += printRows(r.rows, difficulty.toUpperCase());
-    summaries.push({ difficulty, n, size: world.size, ...r });
+    summaries.push({ difficulty, size: world.size, ...r });
   }
   for (const summary of summaries) printSummary(summary, code);
   console.log('');

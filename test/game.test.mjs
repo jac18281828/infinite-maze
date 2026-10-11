@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld } from '../src/world/world.mjs';
+import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL, cellNeighbor, DX, DY } from '../src/world/board.mjs';
 import { boardMask, rockAt, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import {
@@ -15,7 +15,7 @@ const world = createWorld('00000000');
 const UP = [1, 4, 5];
 const has = (bd, c, d) => !!world.step(bd, c, d);
 
-/** First cell over bands -3..3 where pred(bd, cell) holds. */
+/** First cell over tombs (0, -3)..(0, 3) where pred(bd, cell) holds. */
 function findCell(pred) {
   for (let b = -3; b <= 3; b++) {
     for (let i = 0; i < 24; i++) {
@@ -305,7 +305,6 @@ function boxRock(w, s, masks) {
     const by = Math.floor(y / BOARD_H);
     for (let x = X - 5; x < X + 5; x++) {
       const bx = Math.floor(x / BOARD_W);
-      if (bx < 0 || bx > 5) { n++; continue; }
       const bd = w.board(bx, by);
       if (!masks.has(bd)) masks.set(bd, boardMask(bd));
       if (rockAt(masks.get(bd), x - bx * BOARD_W, y - by * BOARD_H)) n++;
@@ -787,15 +786,16 @@ test('an engaged link spends a buffered tap in its direction', () => {
 });
 
 test('the explorer never leaves a cell except along a link or door, nor enters rock', () => {
-  // Random arrows and jumps from the entries of 7 bands in each of 4 seeds.
+  // Random arrows and jumps from the first entries of 7 tombs in each of 4 seeds.
   let seed = 7;
   const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed >>> 16; };
-  let moves = 0, jumps = 0, air = 0, bands = 0, dismounts = 0, letGos = 0, overStair = 0, boxes = 0;
+  let moves = 0, jumps = 0, air = 0, tombs = 0, dismounts = 0, letGos = 0, overStair = 0, boxes = 0;
   for (const code of ['00000000', '000001C3', 'K7Q2M9XA', 'ZZZZZZZZ']) {
     const w = createWorld(code);
     for (let b = -3; b <= 3; b++) {
-      bands++;
-      const s = createSim(w, w.resumePoint(w.tree(b).entryX, 4 * b));
+      tombs++;
+      const e = boardCoords(b, b, w.tomb(b, b).entries[0]);
+      const s = createSim(w, w.resumePoint(e.x, e.y));
       const masks = new Map();
       let h = 0, v = 0, ph = 0, pv = 0, prev = [s.bd, s.cell];
       for (let i = 0; i < 3000; i++) {
@@ -827,7 +827,7 @@ test('the explorer never leaves a cell except along a link or door, nor enters r
       letGos += s.stats.letGos;
     }
   }
-  assert.ok(bands >= 25);
+  assert.ok(tombs >= 25);
   assert.ok(moves > 300, `only ${moves} moves`);
   assert.ok(jumps > 500, `only ${jumps} jumps`);
   assert.ok(air > 30, `only ${air} air grabs and stair landings`);
@@ -860,7 +860,7 @@ test('a torch burns 300 s, gutters to a 10 s ember, then ends the run', () => {
 });
 
 test('standing in a flame keeps the torch full and the run alive', () => {
-  const f = world.bandFlames(0).chain[0];
+  const f = world.tombFlames(0, 0).chains[0][0];
   const s = createSim(world, { board: world.board(f.x, f.y), cell: f.cell });
   run(s, Math.round(330 / TICK), 0, 0);
   assert.equal(s.burn, BURN_S);
@@ -1013,6 +1013,8 @@ test('crossing a door records it on both boards and the model shows a gap in eac
   let found = null;
   for (let b = -1; b <= 1 && !found; b++) {
     for (let i = 0; i < 24 && !found; i++) {
+      // Both boards lie in tomb (0, b), so one frame shows them.
+      if (i % 6 === 5) continue;
       const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
       const dr = bd.doors.find((q) => q.dir === 0);
       if (dr && !(bd.links[dr.cell] & 1) && world.step(bd, dr.cell, 0)) found = { bd, cell: dr.cell, b };
@@ -1025,11 +1027,49 @@ test('crossing a door records it on both boards and the model shows a gap in eac
   const to = { bd: s.bd, cell: s.cell };
   assert.equal(walkedAt(s, found.bd, found.cell), 1 << 0);
   assert.equal(walkedAt(s, to.bd, to.cell), 1 << 2);
-  const m = mapModel(world, s.trail, found.b, to);
+  const m = mapModel(world, s.trail, { u: 0, v: found.b }, to);
   const gap = (x, y, cell, d) => m.outlines.some((o) => o.col === x * 12 && o.row === (y - 4 * found.b) * 7
     && o.gaps.some((g) => g.d === d && g.col === x * 12 + (cell % BW) && g.row === (y - 4 * found.b) * 7 + Math.floor(cell / BW)));
   assert.ok(gap(found.bd.x, found.bd.y, found.cell, 0), 'the near board opens its door');
   assert.ok(gap(to.bd.x, to.bd.y, to.cell, 2), 'the far board opens its door');
+});
+
+/** Drives (h, v) until the explorer stands on another board; returns the events of those ticks. */
+function crossSeam(s, h, v) {
+  const go = driver(s), from = s.bd, events = [];
+  for (let i = 0; i < 600 && s.bd === from; i++) { go(h, v); events.push(...s.events); }
+  assert.notEqual(s.bd, from, 'the explorer crosses the seam');
+  go(0, 0);
+  return events;
+}
+
+test('crossing a tomb\'s exit door outward solves it once; going back in through the door solves nothing', () => {
+  const kinds = new Set();
+  for (let v = 0; v <= 6 && kinds.size < 2; v++) {
+    for (let u = -2; u <= 2; u++) {
+      const t = world.tomb(u, v);
+      const kind = t.exit === 1 ? 'up' : 'side';
+      if (kinds.has(kind)) continue;
+      kinds.add(kind);
+      const at = boardCoords(u, v, t.X);
+      const bd = world.board(at.x, at.y);
+      const door = bd.doors.find((d) => d.dir === t.exit);
+      const s = simOn({ bd, cell: door.cell });
+      const [h, vv] = [DX[t.exit], DY[t.exit]];
+      const out = crossSeam(s, h, vv);
+      assert.deepEqual([s.bd.u, s.bd.v], [u + DX[t.exit], v + DY[t.exit]], `${kind} exit leaves tomb (${u},${v})`);
+      assert.ok(out.includes('solved'), `${kind}: solving fires an event`);
+      assert.deepEqual([...s.solved], [`${u},${v}`]);
+      // Back through the same door: the tomb entered is no exit of the one left.
+      const back = crossSeam(s, -h, -vv);
+      assert.deepEqual([s.bd.u, s.bd.v], [u, v]);
+      assert.ok(!back.includes('solved'));
+      const again = crossSeam(s, h, vv);
+      assert.ok(!again.includes('solved'), `${kind}: a tomb counts once`);
+      assert.equal(s.solved.size, 1);
+    }
+  }
+  assert.deepEqual([...kinds].sort(), ['side', 'up']);
 });
 
 test('createSim carries the trail and every field runCarry returns; a fresh run holds only its start', () => {
@@ -1038,9 +1078,9 @@ test('createSim carries the trail and every field runCarry returns; a fresh run 
   const go = driver(s);
   until(go, s, 1, 0, (q) => q.cell !== start.cell);
   s.time = 42;
-  s.maxBand = 5;
+  s.solved.add('3,5');
   const c = runCarry(s);
-  assert.deepEqual(Object.keys(c).sort(), ['lastEntry', 'maxBand', 'startBand', 'time', 'trail']);
+  assert.deepEqual(Object.keys(c).sort(), ['lastEntry', 'solved', 'time', 'trail']);
   const before = stoodCells(s);
   const next = world.resumePoint(start.bd.x, start.bd.y);
   const n = createSim(world, next, c);
@@ -1048,8 +1088,8 @@ test('createSim carries the trail and every field runCarry returns; a fresh run 
   assert.equal(walkedAt(n, start.bd, start.cell), 1 << 0);
   assert.ok(stoodCells(n) >= before);
   assert.equal(n.time, 42);
-  assert.equal(n.startBand, s.startBand);
-  assert.equal(n.maxBand, 5);
+  assert.equal(n.solved, s.solved);
+  assert.deepEqual([...n.solved], ['3,5']);
   assert.equal(n.lastEntry, s.lastEntry);
   const fresh = createSim(world, next);
   assert.equal(stoodCells(fresh), 1);

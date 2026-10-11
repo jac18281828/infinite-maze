@@ -1,23 +1,30 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, digestBands, serializeBoard, posOf, bandOf, boardCoords, midpointIndex } from '../src/world/world.mjs';
-import { COST, DX, DY, NCELL, growTree, repairTree, analyze } from '../src/world/board.mjs';
+import {
+  createWorld, digestTombs, serializeBoard, posOf, boardOfPos, tombOf, boardCoords, midpointIndex, SAVE_LIMIT,
+} from '../src/world/world.mjs';
+import { COST, DX, DY, NCELL, growTree, repairTree, analyze, flameCell } from '../src/world/board.mjs';
 import { parseCode, formatCode, codeFromBytes, makeHasher, worldKey, sfc32 } from '../src/world/hash.mjs';
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
 import { MAX_DEPTH, DIFFICULTY, minRoute } from '../src/world/band.mjs';
-import { checkFlames, checkDeterminism, bandShape, walkMs, measureTargets } from '../tools/acceptance.mjs';
+import { createFlow, exitDir, wallRight, UP, LEFT, RIGHT } from '../src/world/flow.mjs';
+import {
+  checkFlames, checkFlow, checkTree, checkBounds, checkDeterminism, tombShape, tombWindow, entrySpan, walkMs,
+  measureTargets,
+} from '../tools/acceptance.mjs';
 
-// Pinned digests of bands 0..99 for seed code 0000-0000; HARD is the world
-// from before difficulties.
-const DIGEST = 'cc19954c165a0e9430f4738b7d3cbc54f3ba76c0dfe0951bffc9c7890e2c2b6e';
+// Pinned digest of tombs u in [-2, 2], v in [0, 19] for seed code 0000-0000;
+// HARD is the world from before difficulties.
+const DIGEST = 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01';
 const DIGESTS = {
   easy: '6c1bca5a30810173ea1661bebd00c31a428c2bf457782750b46493c6efbe17ea',
   medium: '2a96d6100952937d01794be44522e90764046ecd3e2573d11011d5cbb6189bf0',
   hard: DIGEST,
 };
+const world = createWorld('00000000');
 
-test('seed 0000-0000 yields the pinned digest over bands 0..99', () => {
-  assert.equal(digestBands(createWorld('00000000'), 0, 99), DIGEST);
+test('seed 0000-0000 yields the pinned digest over tombs u -2..2, v 0..19', () => {
+  assert.equal(digestTombs(createWorld('00000000'), -2, 2, 0, 19), DIGEST);
   assert.deepEqual(checkDeterminism('00000000', DIGEST).errors, []);
 });
 
@@ -86,7 +93,7 @@ test('a board outside the tomb is rock and never stands in for a board inside it
 });
 
 test('a different seed yields a different digest', () => {
-  assert.notEqual(digestBands(createWorld('K7Q2M9XA'), 0, 3), digestBands(createWorld('00000000'), 0, 3));
+  assert.notEqual(digestTombs(createWorld('K7Q2M9XA'), 0, 0, 0, 3), digestTombs(createWorld('00000000'), 0, 0, 0, 3));
 });
 
 test('seed codes canonicalise Crockford aliases and reject bad input', () => {
@@ -99,17 +106,30 @@ test('seed codes canonicalise Crockford aliases and reject bad input', () => {
   assert.equal(codeFromBytes([255, 255, 255, 255, 255]), 'ZZZZZZZZ');
 });
 
-test('saves round-trip, negative p included', () => {
-  for (const [x, y] of [[0, 0], [5, 3], [2, -1], [0, -4000], [4, 999999], [3, -7]]) {
+test('saves round-trip for negative and mixed-sign boards', () => {
+  const edge = SAVE_LIMIT - 1;
+  for (const [x, y] of [[0, 0], [5, 3], [-2, -1], [-7, 4000], [4, -999999], [-6, 0], [edge, -edge], [-edge, edge]]) {
     const text = encodeSave('K7Q2M9XA', x, y);
-    assert.match(text, /^K7Q2-M9XA:-?\d+$/);
+    assert.match(text, /^K7Q2-M9XA:\d+$/);
+    assert.ok(text.length <= 26, text);
     const back = decodeSave(text);
     assert.deepEqual(back, { code: 'K7Q2M9XA', p: posOf(x, y), x, y });
   }
-  assert.equal(encodeSave('K7Q2M9XA', 2, -1), 'K7Q2-M9XA:-4');
-  assert.deepEqual(decodeSave('k7q2m9xa:4813'), { code: 'K7Q2M9XA', p: 4813, x: 1, y: 802 });
+  assert.equal(encodeSave('K7Q2M9XA', -edge, -edge).length, 26);
+  // The pairing is one-to-one over a block of signed boards.
+  const seen = new Set();
+  for (let x = -20; x <= 20; x++) {
+    for (let y = -20; y <= 20; y++) {
+      const p = posOf(x, y);
+      assert.ok(!seen.has(p));
+      seen.add(p);
+      assert.deepEqual(boardOfPos(p), { x, y });
+    }
+  }
+  assert.deepEqual(decodeSave('k7q2m9xa:13'), { code: 'K7Q2M9XA', p: 13, ...boardOfPos(13) });
   assert.equal(decodeSave('K7Q2-M9XA'), null);
   assert.equal(decodeSave('K7Q2-M9XA:1.5'), null);
+  assert.equal(decodeSave('K7Q2-M9XA:-4'), null);
   assert.equal(decodeSave('K7Q2-M9XU:3'), null);
 });
 
@@ -146,64 +166,189 @@ test('at each difficulty a board resumed from p equals the same board reached al
   assert.equal(encodeSave('00000000', 1, 4, DIFFICULTY.easy), '0000-0000:13');
 });
 
+test('saves of boards at or past 2^25 in either axis decode to null', () => {
+  for (const [x, y] of [[SAVE_LIMIT, 0], [-SAVE_LIMIT, 0], [0, SAVE_LIMIT], [3, -SAVE_LIMIT], [SAVE_LIMIT, -SAVE_LIMIT]]) {
+    assert.equal(decodeSave(encodeSave('K7Q2M9XA', x, y)), null, `(${x}, ${y})`);
+  }
+});
+
 test('a board resumed from p equals the same board generated in sequence', () => {
   const seq = createWorld('00000000');
-  for (let b = -3; b <= 3; b++) {
-    for (let i = 0; i < 24; i++) seq.board(i % 6, 4 * b + Math.floor(i / 6));
-    seq.bandFlames(b);
+  for (let v = -2; v <= 2; v++) {
+    for (let u = -2; u <= 2; u++) {
+      for (let i = 0; i < 24; i++) { const { x, y } = boardCoords(u, v, i); seq.board(x, y); }
+      seq.tombFlames(u, v);
+    }
   }
-  for (const p of [posOf(seq.tree(-2).entryX, -8), posOf(1, -3), posOf(seq.tree(0).entryX, 0), posOf(4, 6), posOf(2, 13)]) {
+  const starts = [[-2, -2], [1, -1], [0, 0], [-1, 2], [2, 1]].map(([u, v]) => boardCoords(u, v, seq.tomb(u, v).entries[0]));
+  for (const { x, y } of [...starts, { x: -1, y: -3 }, { x: 4, y: 6 }, { x: -9, y: 7 }, { x: 13, y: -5 }]) {
+    const p = posOf(x, y);
     const fresh = createWorld('00000000');
-    const y = Math.floor(p / 6), x = p - 6 * y;
-    assert.deepEqual(serializeBoard(fresh, x, y), serializeBoard(seq, x, y), `p=${p}`);
+    const back = boardOfPos(p);
+    assert.deepEqual(serializeBoard(fresh, back.x, back.y), serializeBoard(seq, x, y), `p=${p}`);
   }
 });
 
-test('a resume lands on the door leading back toward the band entry', () => {
+test('a resume lands on the first primary cell; a rock board resumes at its tomb\'s first entry', () => {
   const w = createWorld('00000000');
-  const t = w.tree(5);
-  const entry = w.resumePoint(t.entryX, 20);
-  assert.equal(entry.cell, entry.board.doors.find((d) => d.dir === 3).cell);
-  const second = t.route[1];
-  const r = w.resumePoint(second % 6, 20 + Math.floor(second / 6));
-  assert.equal(r.cell, r.board.a);
-  const rock = t.depth.findIndex((d) => d < 0);
-  if (rock >= 0) assert.equal(w.resumePoint(rock % 6, 20 + Math.floor(rock / 6)).board.p, posOf(t.entryX, 20));
+  let entries = 0, sources = 0, rocks = 0;
+  for (let v = 0; v <= 6; v++) {
+    for (let u = -3; u <= 3; u++) {
+      const t = w.tomb(u, v);
+      const e = boardCoords(u, v, t.entries[0]);
+      const r = w.resumePoint(e.x, e.y);
+      if (t.source) {
+        assert.equal(r.cell, flameCell(w.H, e.x, e.y));
+        sources++;
+      } else {
+        const wall = t.walls[1].dir;
+        assert.equal(r.cell, r.board.doors.find((d) => d.dir === wall).cell);
+        entries++;
+      }
+      const second = t.routes[0][1];
+      if (second !== undefined) {
+        const b = boardCoords(u, v, second);
+        assert.equal(w.resumePoint(b.x, b.y).cell, w.board(b.x, b.y).a);
+      }
+      const rock = t.depth.findIndex((d) => d < 0);
+      if (rock >= 0) {
+        const b = boardCoords(u, v, rock);
+        assert.equal(w.resumePoint(b.x, b.y).board.p, posOf(e.x, e.y));
+        rocks++;
+      }
+    }
+  }
+  assert.ok(entries > 0 && sources > 0 && rocks > 0);
+  const start = w.startPoint();
+  const t0 = w.tomb(0, 0);
+  assert.equal(start.board.p, posOf(...Object.values(boardCoords(0, 0, t0.entries[0]))));
+  assert.equal(start.cell, start.board.a);
 });
 
-test('band trees keep a route of 12+ boards and dead ends at most 2 deep', () => {
-  const w = createWorld('00000000');
-  for (let b = -40; b <= 40; b++) {
-    const t = w.tree(b);
-    assert.ok(t.route.length >= minRoute(DIFFICULTY.hard));
-    assert.ok(Math.max(...t.depth) <= MAX_DEPTH);
-    assert.equal(t.route[0], t.entryX);
-    assert.equal(t.route.at(-1), 18 + w.tree(b + 1).entryX);
-    const shape = bandShape(w, b);
-    assert.deepEqual(shape.route, t.route, `band ${b}`);
+test('tomb trees keep a trunk of 12+ boards, dead ends at most 2 deep, and match their doors', () => {
+  for (let v = -12; v <= 12; v++) {
+    for (let u = -4; u <= 4; u++) {
+      const t = world.tomb(u, v);
+      const at = `tomb (${u},${v})`;
+      assert.ok(t.routes[0].length >= minRoute(DIFFICULTY.hard) || t.entries[0] === t.X, at);
+      assert.ok(Math.max(...t.depth) <= MAX_DEPTH, at);
+      assert.equal(t.routes[0][0], t.entries[0], at);
+      assert.equal(t.routes[0].at(-1), t.X, at);
+      assert.notEqual(t.exit, 3, at);
+      const shape = tombShape(world, u, v);
+      assert.deepEqual(shape.errors, [], at);
+      assert.equal(shape.exit, t.exit, at);
+      assert.deepEqual(shape.entries, t.entries, at);
+      assert.deepEqual(shape.routes, t.routes, at);
+    }
   }
 });
 
-test('bandOf floors toward negative infinity', () => {
-  assert.equal(bandOf(-1), -1);
-  assert.equal(bandOf(-4), -1);
-  assert.equal(bandOf(-5), -2);
-  assert.equal(bandOf(3), 0);
+test('tombOf floors toward negative infinity on both axes', () => {
+  assert.deepEqual(tombOf(-1, -1), { u: -1, v: -1 });
+  assert.deepEqual(tombOf(-6, -4), { u: -1, v: -1 });
+  assert.deepEqual(tombOf(-7, -5), { u: -2, v: -2 });
+  assert.deepEqual(tombOf(5, 3), { u: 0, v: 0 });
+  assert.deepEqual(tombOf(6, 4), { u: 1, v: 1 });
+});
+
+test('a tomb exits up, or through the side its walls open, and never down', () => {
+  const H = makeHasher(worldKey('00000000'));
+  const flow = createFlow(H);
+  let sides = 0;
+  for (let v = -20; v <= 20; v++) {
+    for (let u = -20; u <= 20; u++) {
+      const e = flow.exit(u, v);
+      assert.equal(e, exitDir(H, u, v));
+      if (e === RIGHT) assert.ok(wallRight(H, u, v));
+      if (e === LEFT) assert.ok(!wallRight(H, u - 1, v));
+      if (e !== UP) sides++;
+      assert.ok(!(e === RIGHT && flow.exit(u + 1, v) === LEFT));
+      assert.ok([UP, LEFT, RIGHT].includes(e));
+    }
+  }
+  assert.ok(sides > 0);
+});
+
+const DEFAULT = tombWindow(-10, 10, -50, 50);
+
+test('over the default window, flow passes and at least 10% of exits go each way sideways', () => {
+  // Stacked bands exit up every time, so this fails on a revert.
+  const r = checkFlow(world, DEFAULT);
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.tombs, 2121);
+  assert.ok(r.left >= 0.1, `left ${r.left}`);
+  assert.ok(r.right >= 0.1, `right ${r.right}`);
+});
+
+/** First tomb from v 0 upward, u -10..10, whose tree passes `pred`. */
+function findTomb(pred) {
+  for (let v = 0; v <= 200; v++) {
+    for (let u = -10; u <= 10; u++) if (pred(world.tomb(u, v))) return world.tomb(u, v);
+  }
+  throw new Error('no tomb matches');
+}
+
+/** Tree, bounds and flames pass on tomb t, and its doors join every entry to its exit. */
+function soundTomb(t) {
+  const win = tombWindow(t.u, t.u, t.v, t.v);
+  assert.deepEqual(checkTree(world, win).errors, []);
+  assert.deepEqual(checkBounds(world, win).errors, []);
+  const r = checkFlames(world, win);
+  assert.deepEqual(r.errors, []);
+  assert.ok(r.gaps.every((g) => g <= 150000));
+  const fs = world.tombFlames(t.u, t.v);
+  assert.equal(fs.chains.length, t.entries.length);
+  const shape = tombShape(world, t.u, t.v);
+  for (let j = 0; j < t.entries.length; j++) assert.ok(entrySpan(world, shape, j).length >= 2, `entry ${j + 1} reaches the exit`);
+  return fs;
+}
+
+test('a tomb with three in-doors joins them all, a tributary included, and every chain keeps gaps to 150 s', () => {
+  const t = findTomb((q) => q.walls.length === 4 && q.routes.length >= 2);
+  assert.equal(t.entries.length, 3);
+  assert.deepEqual(t.walls.slice(1).map((w) => w.dir), [3, 2, 0]);
+  const fs = soundTomb(t);
+  // Every entry holds a flame at its flame cell, and its chain starts there.
+  fs.chains.forEach((chain, j) => {
+    const e = boardCoords(t.u, t.v, t.entries[j]);
+    assert.deepEqual([chain[0].x, chain[0].y, chain[0].cell], [e.x, e.y, flameCell(world.H, e.x, e.y)]);
+  });
+});
+
+test('a source tomb starts its trunk at S and builds a tree that keeps gaps to 150 s', () => {
+  const t = findTomb((q) => q.source);
+  assert.equal(t.entries.length, 1);
+  assert.equal(t.walls.length, 1);
+  soundTomb(t);
+  const s = boardCoords(t.u, t.v, t.entries[0]);
+  const bd = world.board(s.x, s.y);
+  assert.equal(bd.a, flameCell(world.H, s.x, s.y));
+  assert.equal(bd.aDir, -1);
+});
+
+test('a tomb whose first entry board is its exit board builds a one-board trunk with dead ends', () => {
+  const t = findTomb((q) => q.entries[0] === q.X);
+  assert.deepEqual(t.routes[0], [t.X]);
+  assert.ok(t.depth.some((d) => d > 0), 'dead ends hang off the trunk');
+  soundTomb(t);
 });
 
 test('gap splitting adds midpoint flames until every gap fits the limit', () => {
   const limit = 20000;
   const w = createWorld('00000000', { gapLimitMs: limit });
   let extra = 0;
-  for (let b = 0; b <= 4; b++) {
-    const fs = w.bandFlames(b);
-    extra += fs.flames.filter((f) => f.kind === 'gap').length;
-    assert.ok(fs.gaps.every((g) => g <= limit), `band ${b}`);
-    assert.equal(fs.gaps.length, fs.chain.length - 1);
+  for (let v = 0; v <= 2; v++) {
+    for (let u = -1; u <= 1; u++) {
+      const fs = w.tombFlames(u, v);
+      extra += fs.flames.filter((f) => f.kind === 'gap').length;
+      assert.ok(fs.gaps.every((g) => g <= limit), `tomb (${u},${v})`);
+      assert.equal(fs.gaps.length, fs.chains.reduce((n, c) => n + c.length - 1, 0));
+    }
   }
   assert.ok(extra > 0);
   // The harness re-measures the same gaps through the cell graph.
-  const r = checkFlames(w, 0, 4);
+  const r = checkFlames(w, tombWindow(-1, 1, 0, 2));
   assert.deepEqual(r.errors, []);
   assert.ok(r.gaps.every((g) => g <= limit));
 });
@@ -215,40 +360,43 @@ test('the midpoint index is the first at or past half the total', () => {
 });
 
 test('a split gap gets its flame at the first path cell at or past half the walk', () => {
-  const b = 0;
+  const u = 0, v = 0;
   // One below the largest gap: that gap splits once, every other gap stays.
-  const limit = Math.max(...createWorld('00000000').bandFlames(b).gaps) - 1;
+  const limit = Math.max(...createWorld('00000000').tombFlames(u, v).gaps) - 1;
   const w = createWorld('00000000', { gapLimitMs: limit });
-  const fs = w.bandFlames(b);
-  const shape = bandShape(w, b), next = bandShape(w, b + 1);
-  const span = [...shape.route.map((i) => shape.boards[i]), next.entry];
+  const fs = w.tombFlames(u, v);
+  const shape = tombShape(w, u, v);
   let checked = 0;
-  fs.chain.forEach((m, i) => {
-    if (m.kind !== 'gap') return;
-    const A = fs.chain[i - 1], B = fs.chain[i + 1];
-    const total = walkMs(w, span, A, B), tm = walkMs(w, span, A, m);
-    assert.equal(tm + walkMs(w, span, m, B), total, 'the flame lies on the path');
-    let before = null;
-    const bm = w.board(m.x, m.y);
-    for (let d = 0; d < 8; d++) {
-      const n = w.step(bm, m.cell, d);
-      if (!n) continue;
-      const tn = walkMs(w, span, A, { x: n.board.x, y: n.board.y, cell: n.cell });
-      if (tn + COST[d] === tm) before = tn;
-    }
-    assert.notEqual(before, null, 'the path cell before the flame exists');
-    assert.ok(2 * tm >= total, `flame at ${tm} ms of ${total} ms sits before the midpoint`);
-    assert.ok(2 * before < total, `cell before the flame at ${before} ms of ${total} ms is already past the midpoint`);
-    checked++;
+  fs.chains.forEach((chain, j) => {
+    const span = entrySpan(w, shape, j);
+    chain.forEach((m, i) => {
+      if (m.kind !== 'gap') return;
+      const A = chain[i - 1], B = chain[i + 1];
+      const total = walkMs(w, span, A, B), tm = walkMs(w, span, A, m);
+      assert.equal(tm + walkMs(w, span, m, B), total, 'the flame lies on the path');
+      let before = null;
+      const bm = w.board(m.x, m.y);
+      for (let d = 0; d < 8; d++) {
+        const n = w.step(bm, m.cell, d);
+        if (!n) continue;
+        const tn = walkMs(w, span, A, { x: n.board.x, y: n.board.y, cell: n.cell });
+        if (tn + COST[d] === tm) before = tn;
+      }
+      assert.notEqual(before, null, 'the path cell before the flame exists');
+      assert.ok(2 * tm >= total, `flame at ${tm} ms of ${total} ms sits before the midpoint`);
+      assert.ok(2 * before < total, `cell before the flame at ${before} ms of ${total} ms is already past the midpoint`);
+      checked++;
+    });
   });
   assert.ok(checked >= 1);
 });
 
-/** The growTree tree of attempt k of board (x, y) in band 0, with its primary pair. */
+/** The growTree tree of attempt k of board (x, y) in tomb (0, 0), with its primary pair. */
 function attempt(x, y, k) {
   const bd = createWorld('00000000').board(x, y);
   const H = makeHasher(worldKey('00000000'));
   const cell = (dir) => bd.doors.find((d) => d.dir === dir).cell;
+  assert.ok(bd.aDir >= 0, `(${x},${y}) enters by a door`);
   const isDoor = new Uint8Array(NCELL);
   for (const d of bd.doors) isDoor[d.cell] = 1;
   const links = growTree(sfc32(H('board', x, y, k)), new Uint8Array(NCELL));
@@ -256,7 +404,7 @@ function attempt(x, y, k) {
 }
 
 test('the repair brings a tree that misses the targets to a spanning tree that meets them', () => {
-  for (const [x, y] of [[0, 1], [2, 1]]) {
+  for (const [x, y] of [[5, 1], [3, 2]]) {
     const { bd, links, isDoor, a, b } = attempt(x, y, 0);
     const doorCells = bd.doors.map((d) => d.cell);
     assert.ok(!measureTargets(links, a, b, doorCells).ok, `(${x},${y}) attempt 0 meets the targets before the repair`);
