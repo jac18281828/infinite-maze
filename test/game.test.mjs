@@ -59,13 +59,24 @@ function sampleBoards() {
   return out;
 }
 
-// Zone of a cell: its room plus the floor slab beneath it, in y-up pixels.
-function zoneOwner() {
+// Zone of a cell: its room plus the floor slab beneath it, in y-up pixels. The
+// notch under a gallery's ceiling line, in the slab of the cell above, belongs
+// to the gallery's lower cell.
+function zoneOwner(bd) {
   const owner = new Int16Array(MASK_W * MASK_H).fill(-1);
   for (let c = 0; c < NCELL; c++) {
     const X = (c % BW) * 48, Y = Math.floor(c / BW) * 48;
     for (let y = Math.max(0, Y - 8); y < Y + 40; y++) {
       for (let x = X + 8; x < X + 40; x++) owner[(MASK_H - 1 - y) * MASK_W + x] = c;
+    }
+  }
+  for (let c = 0; c < NCELL; c++) {
+    const X = (c % BW) * 48, Y = Math.floor(c / BW) * 48;
+    for (const [bit, x0] of [[16, X + 32], [32, X + 8]]) {
+      if (!(bd.links[c] & bit)) continue;
+      for (let y = Y + 40; y < Y + 48; y++) {
+        for (let x = x0; x < x0 + 8; x++) owner[(MASK_H - 1 - y) * MASK_W + x] = c;
+      }
     }
   }
   return owner;
@@ -100,10 +111,9 @@ function joined(mask, owner, a, b) {
 }
 
 test('the rendered maze joins two cells exactly when the tree links them', () => {
-  const owner = zoneOwner();
   let pairs = 0, links = 0;
   for (const bd of sampleBoards()) {
-    const mask = boardMask(bd);
+    const owner = zoneOwner(bd), mask = boardMask(bd);
     for (let c = 0; c < NCELL; c++) {
       for (const d of [0, 1, 4, 5]) {
         const n = cellNeighbor(c, d);

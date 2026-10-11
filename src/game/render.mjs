@@ -122,7 +122,7 @@ export function createRenderer(canvas, world) {
 
   /** Ladders, stairs, sconces, signs and braziers of board `bd`, in board pixels. */
   function boardFixtures(bd, mask) {
-    if (!bd) return { flights: [], stairs: null, ladders: [], sconces: [], signs: [], braziers: [] };
+    if (!bd) return { flights: [], stairs: null, ledge: null, ladders: [], sconces: [], signs: [], braziers: [] };
     const fx = fixtureSets(bd, mask);
     fx.signs = signs(world, bd).map(({ cell, dir }) => signSpot(cell, signSide(world, bd, cell), dir));
     fx.braziers = world.flamesAt(bd.x, bd.y).map((cell) => nodeXY({ x: 0, y: 0 }, cell));
@@ -131,22 +131,23 @@ export function createRenderer(canvas, world) {
 
   /**
    * Rock and shadow pixels from the mask, so every opening drawn is a tree
-   * link or a door. `p` picks the rock tile variants. Rock shading also
-   * counts the `stairs` pixels as solid, which leaves no highlight under a
-   * flight; air shadows read the mask alone.
+   * link or a door. `p` picks the rock tile variants. The `ledge` pixels
+   * shade as rock, and rock shading counts them and the `stairs` pixels as
+   * solid, which leaves no highlight under a flight; air shadows read the
+   * mask alone.
    */
-  function shadeMask(g, mask, p, stairs) {
+  function shadeMask(g, mask, p, stairs, ledge) {
     const W = BOARD_W, H = BOARD_H;
     const img = g.createImageData(W, H);
     const d = img.data;
     const at = (x, y) => Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x));
     const solid = (x, y) => mask[at(x, y)];
-    const filled = stairs ? (x, y) => mask[at(x, y)] || stairs[at(x, y)] : solid;
+    const filled = stairs ? (x, y) => mask[at(x, y)] || stairs[at(x, y)] || ledge[at(x, y)] : solid;
     const [ar, ag, ab] = RGB[0];
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const o = (y * W + x) * 4;
-        if (mask[y * W + x]) {
+        if (mask[y * W + x] || (ledge && ledge[y * W + x])) {
           const tile = ROCK[hash3(x >> 4, y >> 4, p) % ROCK.length];
           let ch = tile[y & 15][x & 15];
           if (!filled(x, y - 1)) ch = 'b';
@@ -198,7 +199,7 @@ export function createRenderer(canvas, world) {
     const g = c.getContext('2d');
     const mask = boardMask(bd);
     const fx = boardFixtures(bd, mask);
-    shadeMask(g, mask, bd ? bd.p : 0, fx.stairs);
+    shadeMask(g, mask, bd ? bd.p : 0, fx.stairs, fx.ledge);
     drawFixtures(g, fx);
     return { canvas: c, sconces: fx.sconces, braziers: fx.braziers };
   }

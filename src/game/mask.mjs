@@ -4,10 +4,11 @@
 //   door, so a pruned cell stays rock; corridor: the 16 px wall between rooms;
 // - ladder: a 16 px shaft through the slab above the lower room's centre;
 // - gallery: a 45-degree tunnel from the lower room's centre to the upper
-//   room's centre, 24 px tall over its stair. A gallery's 2x2 block holds no
-//   other link, so the walls and slabs it crosses hold no other passage. Its
-//   air stays under the lower room's ceiling, so it meets other passages only
-//   in the zone (room plus floor slab) of a cell it links.
+//   room's centre, 24 px tall over its stair, in the lower room as outside it.
+//   A gallery's 2x2 block holds no other link, so the walls and slabs it
+//   crosses hold no other passage. Its air reaches the lower room's ceiling
+//   corner but stops 8 px under the room above, so it meets other passages
+//   only in the zones (room plus floor slab) of the cells it links.
 import { BW, NCELL } from '../world/board.mjs';
 
 export const MASK_W = 576;
@@ -45,8 +46,7 @@ export function boardMask(bd) {
         // NE columns run right from local x 24; NW mirrors them about 23.5.
         const lx = ne ? 24 + i : 23 - i;
         const x = X + lx, f = Y + 8 + i;
-        const inRoom = ne ? lx < 40 : lx >= 8;
-        set(x, f + 1, x + 1, inRoom ? Math.min(f + 25, Y + 40) : f + 25, 0);
+        set(x, f + 1, x + 1, f + 25, 0);
       }
     }
   }

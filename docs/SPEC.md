@@ -493,10 +493,16 @@ behind at 0.5× for depth. Dust motes hang in the world, never with the explorer
 or the camera, and show in torchlight: drawn inside the torch radius and
 fading toward its edge.
 
-**Stairs.** A stair draws as one solid flight, flush with the lower floor and
-the upper floor, in air the mask already cuts. Where a gallery starts in a
-cell, a ladder in that cell ends at the floor, and a bottom door's sconce
-stands clear of the flight.
+**Stairs.** A stair draws as one solid flight in stone, flush with the lower
+floor and the upper floor. Over the cut air it fills each column from its
+tread down; from the lower room's wall on it also fills the rock under that
+air, down to a flat underside on the lower floor that rises at 45° from the
+wall, and stops at any air. Steps that overhang a ladder shaft or a bottom
+door rest on a 4-row rock ledge, which the ladder draws over. The lower
+room's ceiling corner gives way under the gallery's ceiling line, so a
+climbing explorer's head stays in air. Where a gallery starts in a cell, a
+ladder in that cell ends at the floor, and a bottom door's sconce stands
+clear of the flight.
 
 **Signs.** A sign is a carved arrow, at most 7×7 px, in one of eight glyphs,
 one per link direction (E N W S NE NW SW SE). It sits in an upper corner of its

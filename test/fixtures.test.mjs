@@ -4,7 +4,7 @@ import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import { createSim, nodeXY } from '../src/game/sim.mjs';
-import { RGB, idx, SIGNS, SCONCE_FLAME, COIN, JAR } from '../src/game/art.mjs';
+import { RGB, idx, SIGNS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
 import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import {
   fixtureSets, ladderPixels, sconcePixels, signPixels, signSpot, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
@@ -34,22 +34,36 @@ const flights = boards.flatMap(({ bd, mask, fx }) => fx.flights.map((f) => ({ bd
 const treadOf = (Y, t) => Y + 11 + 4 * (t >> 2);
 const supportOf = (Y, t) => (t < 16 ? Y + 7 : Y + 8 + t);
 const colX = (X, t, dir) => (dir > 0 ? X + 24 + t : X + 23 - t);
+// The band rule's last row of column t >= 16: down from the support to Y+t-8, stopping at air.
+const bandBottom = (mask, Y, x, t) => {
+  let y = supportOf(Y, t);
+  while (y >= Y + t - 8 && mask[px(x, y)] === 1) y--;
+  return y + 1;
+};
 
 test('the sample holds the stairs the diagnosis counted', () => {
   assert.equal(flights.length, 1183);
 });
 
-test('every stair pixel is mask air, at row Y+8 or above, inside its 48 columns and outside the side room', () => {
-  for (const { bd, mask, fx, X, Y, dir, runs } of flights) {
+test('every stair pixel is mask air above its support or band rock at or below it, inside its 48 columns and off the side room', () => {
+  let rock = 0;
+  for (const { bd, mask, X, Y, dir, runs } of flights) {
     assert.equal(runs.length > 0, true);
     for (const { t, x, top, bot } of runs) {
       assert.equal(x, colX(X, t, dir), 'inside its columns');
       assert.ok(bot >= Y + 8, 'no row under the room floor');
-      // The side room lies under the gallery's rock from column 32 on.
-      if (t >= 32) assert.ok(bot > Y + 40, `board ${bd.p}: column ${t} reaches into the side room`);
-      for (let y = bot; y <= top; y++) assert.equal(mask[px(x, y)], 0, `board ${bd.p}: column ${t} row ${y} is rock`);
+      for (let y = bot; y <= top; y++) {
+        if (y > supportOf(Y, t)) { assert.equal(mask[px(x, y)], 0, `board ${bd.p}: column ${t} row ${y} is rock`); continue; }
+        // At or below the support only the band occurs: rock of a column t >= 16, down to row Y+t-8.
+        assert.ok(t >= 16 && y >= Y + t - 8, `board ${bd.p}: column ${t} row ${y} is below the band`);
+        assert.equal(mask[px(x, y)], 1, `board ${bd.p}: column ${t} row ${y} is air`);
+        rock++;
+      }
+      // The side room's columns are t >= 32; its air holds no stair pixel.
+      if (t >= 32) for (let y = bot; y <= top; y++) if (y >= Y + 8 && y < Y + 40) assert.equal(mask[px(x, y)], 1, `board ${bd.p}: column ${t} row ${y} is side-room air`);
     }
   }
+  assert.ok(rock > 100000, `${rock} band pixels`);
   // The role map holds those pixels and no others.
   for (const { fx } of boards) {
     const want = new Set(fx.flights.flatMap(({ runs }) => runs.flatMap(({ x, top, bot }) => Array.from({ length: top - bot + 1 }, (_, i) => px(x, bot + i)))));
@@ -59,12 +73,13 @@ test('every stair pixel is mask air, at row Y+8 or above, inside its 48 columns 
   }
 });
 
-test('every stair column is contiguous from its tread down to the row above its support', () => {
-  for (const { fx, X, Y, dir } of flights) {
+test('every stair column is contiguous from its tread down to row Y+8, or for t >= 16 to the band rule\'s last row', () => {
+  for (const { mask, fx, X, Y, dir } of flights) {
     for (let t = 0; t < 48; t++) {
-      const x = colX(X, t, dir), top = treadOf(Y, t), sup = supportOf(Y, t);
+      const x = colX(X, t, dir), top = treadOf(Y, t);
+      const last = t < 16 ? Y + 8 : bandBottom(mask, Y, x, t);
       const want = [];
-      for (let y = sup + 1; y <= top; y++) want.push(y);
+      for (let y = last; y <= top; y++) want.push(y);
       const got = [];
       for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(x, y)]) got.push(y);
       // Each pixel's ROLE label: a tread on top, a riser face in a step's first column, else body.
@@ -83,11 +98,16 @@ test('the first tread sits 4 px over the floor and the last is flush with the up
     for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(c0, y)]) top0 = y;
     assert.equal(top0 - (Y + 7), 4);
     assert.equal(fx.stairs[px(c0, top0)], ROLE.tread);
-    // The rock edge carries the last tread: column 46 ends at Y+55 and column 47 holds no stair pixel.
-    let top46 = -1;
-    for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(colX(X, 44, dir), y)]) top46 = y;
-    assert.equal(top46, Y + 55);
-    for (let y = Y + 8; y <= Y + 60; y++) assert.equal(fx.stairs[px(c47, y)], 0);
+    // The last step's four columns share one tread on the upper floor's top row, Y+55.
+    let top44 = -1;
+    for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(colX(X, 44, dir), y)]) top44 = y;
+    assert.equal(top44, Y + 55);
+    // Column 47 holds stone under that tread.
+    let top47 = -1, n47 = 0;
+    for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(c47, y)]) { top47 = y; n47++; }
+    assert.equal(top47, Y + 55);
+    assert.equal(fx.stairs[px(c47, top47)], ROLE.tread);
+    assert.ok(n47 > 1, 'column 47 holds stone under its tread');
     assert.equal(treadOf(Y, 47), Y + 55);
   }
 });
@@ -343,12 +363,13 @@ test('both corners of every sign junction hold room air and no ladder, stair, sc
 });
 
 test('rock shading counts the stair as solid: no highlight under a flight, and a lone tread keeps its second row', () => {
+  // Only stair pixels that are mask air: a band pixel is rock and its tile may carry b itself.
   let lone = 0;
   for (const { bd, mask, fx } of boards.filter((_, i) => i % 3 === 1)) {
     const { art } = renderBoard(bd);
     const bad = [];
     for (let k = MASK_W; k < MASK_W * (MASK_H - 1); k++) {
-      if (!fx.stairs[k] || !mask[k + MASK_W]) continue;
+      if (!fx.stairs[k] || mask[k] || !mask[k + MASK_W]) continue;
       // The rock pixel directly beneath a stair pixel is no top row.
       if (isColour(art.shaded, (k + MASK_W) * 4, 'b')) bad.push(`b under (${k % MASK_W}, ${MASK_H - 1 - ((k / MASK_W) | 0)})`);
       // A stair column of one pixel leaves the rock's second row under it.
@@ -360,6 +381,118 @@ test('rock shading counts the stair as solid: no highlight under a flight, and a
     assert.deepEqual(bad.slice(0, 5), [], `board ${bd.p}`);
   }
   assert.ok(lone > 0, 'the sample holds a one-pixel stair column');
+});
+
+// The §2 fixture: the default world's board (4, 0), cell 57 at (432, 192), a north-east flight.
+const fixture = boards.find(({ bd }) => bd.x === 4 && bd.y === 0);
+const fixtureFlight = fixture.fx.flights.find(({ c }) => c === 57);
+
+test('the fixture flight draws column 24 as stone on rows 208 to 227 and column 27 from its tread down to row 211', () => {
+  const { mask, fx, bd } = fixture;
+  assert.deepEqual([fixtureFlight.X, fixtureFlight.Y, fixtureFlight.dir], [432, 192, 1]);
+  const { art } = renderBoard(bd);
+  const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  // The flight spans rows 200 to 252; the cell below holds its own flight in the same columns.
+  const rows = (x) => range(200, 252).filter((y) => fx.stairs[px(x, y)]);
+  // Column 24 (riser face): tread on 227 over air, rock on 208 to 224 under the support at 224.
+  assert.deepEqual(rows(480), range(208, 227));
+  assert.equal(fx.stairs[px(480, 227)], ROLE.tread);
+  for (const y of range(208, 224)) assert.equal(mask[px(480, y)], 1, `row ${y} is rock`);
+  // Column 27: the tread is the support row, so the stair starts on rock.
+  assert.deepEqual(rows(483), range(211, 227));
+  assert.equal(fx.stairs[px(483, 227)], ROLE.tread);
+  assert.equal(mask[px(483, 227)], 1);
+  for (const [x, role] of [[480, 'a'], [483, '8']]) {
+    for (const y of rows(x)) {
+      const want = fx.stairs[px(x, y)] === ROLE.tread ? 'b' : role;
+      assert.equal(art.touched[px(x, y)], 1);
+      assert.ok(isColour(art.data, px(x, y) * 4, want), `(${x}, ${y}) paints ${want}`);
+    }
+  }
+});
+
+test('the fixture ledge shades rows 196 to 199 of columns 456 to 463 as rock, and the ladder draws over it', () => {
+  const { mask, fx, bd } = fixture;
+  const { art } = renderBoard(bd);
+  const ladder = new Set(fx.ladders.flatMap(ladderPixels).map(([x, y]) => px(x, y)));
+  let over = 0, bare = 0;
+  for (let x = 456; x < 464; x++) {
+    for (let y = 196; y < 200; y++) {
+      const k = px(x, y);
+      assert.equal(mask[k], 0, `(${x}, ${y}) is mask air`);
+      assert.equal(fx.ledge[k], 1);
+      assert.ok(['6', '7', '8', '9', 'a', 'b'].some((ch) => isColour(art.shaded, k * 4, ch)), `(${x}, ${y}) shades as rock`);
+      if (ladder.has(k)) { assert.equal(art.touched[k], 1, 'the ladder draws over the ledge'); over++; } else { assert.equal(art.touched[k], 0); bare++; }
+    }
+  }
+  assert.ok(over > 0 && bare > 0, `${over} ladder pixels over the ledge, ${bare} bare`);
+});
+
+/** Opaque pixels of the top 12 rows of the gallery frames, with feet at (fx, fy) and the sprite facing `dir`, on mask rock. */
+function hatRock(mask, fx, fy, dir) {
+  let n = 0;
+  for (const frame of EXPLORER.gallery) {
+    for (let r = 0; r < 12; r++) {
+      for (let c = 0; c < 16; c++) {
+        const x = fx - 8 + (dir > 0 ? c : 15 - c), y = fy + 23 - r;
+        if (idx(frame[r][c]) >= 0 && x >= 0 && x < MASK_W && y >= 0 && y < MASK_H && mask[px(x, y)] === 1) n++;
+      }
+    }
+  }
+  return n;
+}
+
+test('along the fixture flight the explorer\'s upper half meets no mask rock', () => {
+  const { mask } = fixture;
+  for (let k = 0; k <= 48; k++) assert.equal(hatRock(mask, 432 + 24 + k, 192 + 8 + k, 1), 0, `k = ${k}`);
+});
+
+test('along every flight in the sample, either direction, the explorer\'s upper half meets no mask rock', () => {
+  let ne = 0, nw = 0;
+  for (const { mask, X, Y, dir } of flights) {
+    for (let k = 0; k <= 48; k++) assert.equal(hatRock(mask, colX(X, k, dir), Y + 8 + k, dir), 0, `flight at (${X}, ${Y}) dir ${dir}, k = ${k}`);
+    if (dir > 0) ne++; else nw++;
+  }
+  assert.ok(ne > 100 && nw > 100, `${ne} north-east and ${nw} north-west flights`);
+});
+
+test('a flight\'s band reaches row Y+t-8 in every column, or stops at a carved side room', () => {
+  let full = 0, stopped = 0;
+  for (const { mask, fx, X, Y, dir } of flights) {
+    let all = true;
+    for (let t = 16; t < 48; t++) {
+      let low = Y + 60;
+      for (let y = Y + 60; y >= Y + 8; y--) if (fx.stairs[px(colX(X, t, dir), y)]) low = y;
+      if (low !== Y + t - 8) all = false;
+    }
+    if (all) full++; else stopped++;
+  }
+  assert.deepEqual([full, stopped], [718, 465]);
+});
+
+test('every ledge pixel is mask air on rows Y+4 to Y+7 of a column t < 16 over air, and each such column holds all four rows', () => {
+  let ne = 0, nw = 0, columns = 0;
+  const want = new Set();
+  for (const { bd, mask, fx, X, Y, dir } of flights) {
+    let over = false;
+    for (let t = 0; t < 16; t++) {
+      const x = colX(X, t, dir);
+      if (mask[px(x, Y + 7)] !== 0) continue;
+      over = true;
+      columns++;
+      for (let y = Y + 4; y <= Y + 7; y++) { assert.equal(fx.ledge[px(x, y)], 1, `board ${bd.p}: column ${t} row ${y - Y}`); want.add(`${bd.p}|${px(x, y)}`); }
+    }
+    if (over) { if (dir > 0) ne++; else nw++; }
+  }
+  for (const { bd, mask, fx } of boards) {
+    for (let k = 0; k < fx.ledge.length; k++) {
+      if (!fx.ledge[k]) continue;
+      assert.equal(mask[k], 0, `board ${bd.p}: ledge pixel ${k} is rock`);
+      assert.ok(want.has(`${bd.p}|${k}`), `board ${bd.p}: ledge pixel ${k} is off every shaft-side column`);
+    }
+  }
+  assert.deepEqual([ne, nw], [230, 242]);
+  assert.ok(columns > 0);
 });
 
 // Motes.
