@@ -9,9 +9,7 @@ export const DIFFICULTY = {
   medium: { w: 4, h: 3 },
   hard: { w: 6, h: 4 },
 };
-export const DIFFICULTIES = ['easy', 'medium', 'hard'];
-// HARD's route minimum.
-export const MIN_ROUTE = minRoute(DIFFICULTY.hard);
+export const DIFFICULTIES = Object.keys(DIFFICULTY);
 export const MAX_DEPTH = 2;
 
 /** The route's minimum length: half the tomb's boards. */

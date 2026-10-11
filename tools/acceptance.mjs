@@ -310,21 +310,15 @@ function primaryPair(s, i, bd) {
  * fallbacks at or under 2%. Reports route lengths and rock boards.
  */
 export function checkBounds(world, b0, b1, minBoards = CEILING_MIN_BOARDS) {
-  const { w, h } = world.size;
-  const errors = [];
-  let boards = 0, fallbacks = 0, rock = 0, routeMin = Infinity, routeSum = 0, tombs = 0;
+  const errors = [], tombs = [];
+  let boards = 0, fallbacks = 0;
   for (let b = b0; b <= b1; b++) {
-    for (let y = h * b; y < h * b + h; y++) {
-      for (const x of [-1, w]) if (world.board(x, y).links) errors.push(`board (${x},${y}): outside the tomb's ${w} columns holds links`);
-    }
+    errors.push(...outsideErrors(world, b));
     const s = bandShape(world, b);
     errors.push(...s.errors);
     if (s.errors.length) continue;
-    tombs++;
-    routeSum += s.route.length;
-    routeMin = Math.min(routeMin, s.route.length);
-    rock += s.boards.filter((bd) => !bd.links).length;
-    if (2 * s.route.length < w * h) errors.push(`band ${b}: route of ${s.route.length} boards holds under half of ${w * h}`);
+    errors.push(...routeErrors(world, s, b));
+    tombs.push({ route: s.route.length, rock: s.boards.filter((bd) => !bd.links).length });
     s.boards.forEach((bd, i) => {
       if (!bd.links) return;
       boards++;
@@ -341,8 +335,29 @@ export function checkBounds(world, b0, b1, minBoards = CEILING_MIN_BOARDS) {
   if (boards >= minBoards && 100 * fallbacks > CEILING_PERCENT * boards) {
     errors.push(`${fallbacks} of ${boards} boards (${(100 * fallbacks / boards).toFixed(1)}%) fall back, over the ${CEILING_PERCENT}% ceiling`);
   }
-  const routeMean = tombs ? routeSum / tombs : 0, rockMean = tombs ? rock / tombs : 0;
-  return { errors, boards, fallbacks, routeMin, routeMean, rockMean };
+  return { errors, boards, fallbacks, ...tombFigures(tombs) };
+}
+
+/** Errors for each board of band b at x = -1 or x = W that holds links. */
+function outsideErrors(world, b) {
+  const { w, h } = world.size;
+  const errors = [];
+  for (let y = h * b; y < h * b + h; y++) {
+    for (const x of [-1, w]) if (world.board(x, y).links) errors.push(`board (${x},${y}): outside the tomb's ${w} columns holds links`);
+  }
+  return errors;
+}
+
+/** An error unless band shape s's route holds at least half the tomb's boards. */
+function routeErrors(world, s, b) {
+  const n = world.size.w * world.size.h;
+  return 2 * s.route.length < n ? [`band ${b}: route of ${s.route.length} boards holds under half of ${n}`] : [];
+}
+
+/** Shortest and mean route, and mean rock boards, over tombs of { route, rock }. */
+function tombFigures(tombs) {
+  const mean = (key) => (tombs.length ? tombs.reduce((sum, t) => sum + t[key], 0) / tombs.length : 0);
+  return { routeMin: Math.min(...tombs.map((t) => t.route)), routeMean: mean('route'), rockMean: mean('rock') };
 }
 
 /**
@@ -616,6 +631,21 @@ function printRows(rows, tag) {
   return failed;
 }
 
+/** One difficulty's figures: tomb size, range, routes, rock, fallbacks, galleries, carve, gaps and digest. */
+function printSummary({ difficulty, n, size, bounds, galleries, carve, gapText, digest }, code) {
+  console.log('');
+  console.log(`${difficulty.toUpperCase()}: tombs of ${size.w}x${size.h} = ${size.w * size.h} rooms`);
+  console.log(`bands checked:  ${-n}..${n} (${2 * n + 1}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
+  console.log(`route:          mean ${bounds.routeMean.toFixed(2)}, min ${bounds.routeMin} rooms (half the tomb: ${(size.w * size.h) >> 1})`);
+  console.log(`rock rooms:     ${bounds.rockMean.toFixed(2)} per tomb`);
+  console.log(`fallback boards: ${bounds.fallbacks} of ${bounds.boards} (${(100 * bounds.fallbacks / bounds.boards).toFixed(1)}%)`);
+  console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
+  console.log(`block conflicts: ${galleries.conflicts}`);
+  console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
+  console.log(`flame gap:      ${gapText}`);
+  console.log(`digest 0..99:   ${digest}`);
+}
+
 async function main(argv) {
   const t0 = performance.now();
   const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -631,19 +661,7 @@ async function main(argv) {
     failed += printRows(r.rows, difficulty.toUpperCase());
     summaries.push({ difficulty, n, size: world.size, ...r });
   }
-  for (const { difficulty, n, size, bounds, galleries, carve, gapText, digest } of summaries) {
-    console.log('');
-    console.log(`${difficulty.toUpperCase()}: tombs of ${size.w}x${size.h} = ${size.w * size.h} rooms`);
-    console.log(`bands checked:  ${-n}..${n} (${2 * n + 1}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
-    console.log(`route:          mean ${bounds.routeMean.toFixed(2)}, min ${bounds.routeMin} rooms (half the tomb: ${(size.w * size.h) >> 1})`);
-    console.log(`rock rooms:     ${bounds.rockMean.toFixed(2)} per tomb`);
-    console.log(`fallback boards: ${bounds.fallbacks} of ${bounds.boards} (${(100 * bounds.fallbacks / bounds.boards).toFixed(1)}%)`);
-    console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
-    console.log(`block conflicts: ${galleries.conflicts}`);
-    console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
-    console.log(`flame gap:      ${gapText}`);
-    console.log(`digest 0..99:   ${digest}`);
-  }
+  for (const summary of summaries) printSummary(summary, code);
   console.log('');
   console.log(`run time:       ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   console.log(failed ? `FAILED: ${failed} check(s)` : 'ALL CHECKS PASS');

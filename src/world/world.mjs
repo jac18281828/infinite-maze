@@ -54,6 +54,11 @@ export function acrossDoor(cell, d) {
   }
 }
 
+/** A rock board: no doors, links or door mask. */
+function rock(base) {
+  return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
+}
+
 function dirBetween(i, n) {
   if (n === i + 1) return 0;
   if (n === i - 1) return 2;
@@ -163,8 +168,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
 
   // Its p is null: posOf there names a board inside the tomb.
   function outside(x, y) {
-    const base = { x, y, p: null, band: bandOf(y, size), index: -1, routeIndex: -1, depth: -1 };
-    return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
+    return rock({ x, y, p: null, band: bandOf(y, size), index: -1, routeIndex: -1, depth: -1 });
   }
 
   function buildBoard(x, y, p) {
@@ -172,7 +176,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
     const t = tree(band);
     const i = boardIndex(x, y, size);
     const base = { x, y, p, band, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i] };
-    if (t.depth[i] < 0) return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
+    if (t.depth[i] < 0) return rock(base);
     const { aDir, bDir, dirs } = boardLinks(t, i);
     const doors = dirs.map((d) => ({ dir: d, cell: doorCell(H, x, y, d) }));
     const doorMask = new Uint8Array(NCELL);

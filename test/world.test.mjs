@@ -4,7 +4,7 @@ import { createWorld, digestBands, serializeBoard, posOf, bandOf, boardCoords, m
 import { COST, DX, DY, NCELL, growTree, repairTree, analyze } from '../src/world/board.mjs';
 import { parseCode, formatCode, codeFromBytes, makeHasher, worldKey, sfc32 } from '../src/world/hash.mjs';
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
-import { MIN_ROUTE, MAX_DEPTH, DIFFICULTY } from '../src/world/band.mjs';
+import { MAX_DEPTH, DIFFICULTY, minRoute } from '../src/world/band.mjs';
 import { checkFlames, checkDeterminism, bandShape, walkMs, measureTargets } from '../tools/acceptance.mjs';
 
 // Pinned digests of bands 0..99 for seed code 0000-0000; HARD is the world
@@ -175,7 +175,7 @@ test('band trees keep a route of 12+ boards and dead ends at most 2 deep', () =>
   const w = createWorld('00000000');
   for (let b = -40; b <= 40; b++) {
     const t = w.tree(b);
-    assert.ok(t.route.length >= MIN_ROUTE);
+    assert.ok(t.route.length >= minRoute(DIFFICULTY.hard));
     assert.ok(Math.max(...t.depth) <= MAX_DEPTH);
     assert.equal(t.route[0], t.entryX);
     assert.equal(t.route.at(-1), 18 + w.tree(b + 1).entryX);

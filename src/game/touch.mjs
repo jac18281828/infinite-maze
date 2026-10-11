@@ -190,9 +190,14 @@ export function screenId({ screen, typing }) {
   return screen === 'title' && typing ? 'typing' : screen;
 }
 
+/** The on-screen name of a difficulty: 'easy' reads EASY. */
+export function difficultyLabel(difficulty) {
+  return difficulty.toUpperCase();
+}
+
 /** The soft keys shown for a game state, with labels resolved. */
 export function softKeys(state) {
-  const text = (k) => (k.setting && state.difficulty ? state.difficulty.toUpperCase() : state.muted && k.alt ? k.alt : k.label);
+  const text = (k) => (k.setting && state.difficulty ? difficultyLabel(state.difficulty) : state.muted && k.alt ? k.alt : k.label);
   return (SOFT[screenId(state)] || [])
     .filter((k) => !k.when || state[k.when])
     .map((k) => ({ ...k, text: text(k) }));

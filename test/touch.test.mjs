@@ -257,6 +257,9 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
       ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 3) % 3', /^fail: touch ArrowRight steps the setting to HARD/],
       ["return difficulty === 'hard' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
+      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_SAVE_DIFFICULTY, 'medium')", /^fail: touch RESUME plays a save with no stored difficulty at HARD/],
+      ['{ if (!e.repeat) resume(g); }', '{ resume(g); }', /^fail: touch the title ignores an auto-repeated Esc/],
+      ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
     ]) {
       const broken = html.replace(from, to);
       assert.notEqual(broken, html, from);

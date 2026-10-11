@@ -8,7 +8,7 @@ import { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose } from './sim.
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
-import { createTouch, layout, viewport } from './touch.mjs';
+import { createTouch, layout, viewport, difficultyLabel, PANEL_X } from './touch.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, mapModel, mapCells } from './map.mjs';
 import { RGB, idx } from './art.mjs';
@@ -27,6 +27,9 @@ function load(key) {
 }
 function store(key, value) {
   try { globalThis.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
+}
+function unstore(key) {
+  try { globalThis.localStorage.removeItem(key); } catch { /* storage unavailable */ }
 }
 
 const display = document.getElementById('screen');
@@ -150,7 +153,7 @@ function touchLeg() {
   } finally {
     delete navigator.clipboard;
     for (const [k, v] of kept) {
-      try { if (v === null) globalThis.localStorage.removeItem(k); else store(k, v); } catch { /* storage unavailable */ }
+      if (v === null) unstore(k); else store(k, v);
     }
   }
   if (kept.some(([k, v]) => load(k) !== v)) throw new Error('touch storage restored');
@@ -160,9 +163,10 @@ function touchLeg() {
 /** `copied` records each clipboard write; writeText runs within the click. */
 function driveTouch(copied) {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
+  // Boot reads the player's setting; with none stored, a new player starts at MEDIUM.
+  unstore(KEY_DIFFICULTY);
   const g = boot();
-  // Boot reads the player's setting; the leg starts from its own.
-  setDifficulty(g, 'medium');
+  need(g.difficulty === 'medium' && g.world.difficulty === 'medium', 'a new player starts at MEDIUM');
   need(touch && !touch.on, 'starts in keyboard mode');
   need(touch.soft('title', 'begin').getBoundingClientRect().width === 0, 'controls hidden in keyboard mode');
   // A dispatched click fires on a hidden button, so a control must have a box first.
@@ -384,13 +388,13 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   need(sized('easy'), 'the setting starts at EASY');
   for (const d of ['medium', 'hard', 'easy']) {
     click('title', 'difficulty');
-    need(sized(d), `the difficulty key moves to ${d.toUpperCase()}`);
+    need(sized(d), `the difficulty key moves to ${difficultyLabel(d)}`);
   }
   // The arrows step it and stop at the ends.
   for (const [code, d] of [['ArrowRight', 'medium'], ['ArrowRight', 'hard'], ['ArrowRight', 'hard'],
     ['ArrowLeft', 'medium'], ['ArrowLeft', 'easy'], ['ArrowLeft', 'easy']]) {
     press(code, code);
-    need(sized(d), `${code} steps the setting to ${d.toUpperCase()}`);
+    need(sized(d), `${code} steps the setting to ${difficultyLabel(d)}`);
   }
 
   // A save resumes at the difficulty that wrote it, with no run open, as at startup.
@@ -399,7 +403,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
     click('title', 'begin');
     offEntry();
     click('play', 'pause');
-    need(load(KEY_SAVE_DIFFICULTY) === d, `PAUSE stores ${d.toUpperCase()} with the save`);
+    need(load(KEY_SAVE_DIFFICULTY) === d, `PAUSE stores ${difficultyLabel(d)} with the save`);
     const where = { x: g.sim.bd.x, y: g.sim.bd.y, sim: g.sim };
     click('pause', 'title');
     g.open = null;
@@ -407,14 +411,28 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   };
   const resumesAt = (d, where) => {
     click('title', 'resume');
-    need(g.screen === 'play' && sized(d), `RESUME rebuilds the save at ${d.toUpperCase()} and moves the setting`);
-    need(g.sim !== where.sim && g.sim.bd.x === where.x && g.sim.bd.y === where.y, `the ${d.toUpperCase()} save resumes on its board`);
+    need(g.screen === 'play' && sized(d), `RESUME rebuilds the save at ${difficultyLabel(d)} and moves the setting`);
+    need(g.sim !== where.sim && g.sim.bd.x === where.x && g.sim.bd.y === where.y, `the ${difficultyLabel(d)} save resumes on its board`);
   };
   const hard = saveAt('hard');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   need(sized('easy'), 'the setting moves to EASY over a HARD save');
   resumesAt('hard', hard);
+  click('play', 'pause');
+  click('pause', 'title');
+  g.open = null;
+  // A save from before difficulties, with none stored beside it, plays at HARD.
+  const old = saveAt('hard');
+  unstore(KEY_SAVE_DIFFICULTY);
+  press('ArrowLeft', 'ArrowLeft');
+  press('ArrowLeft', 'ArrowLeft');
+  need(sized('easy'), 'the setting moves to EASY over a save with no difficulty');
+  // A held Esc repeats; the title ignores the repeat, as it does Space's.
+  press('Escape', 'Escape', true);
+  need(g.screen === 'title', 'the title ignores an auto-repeated Esc');
+  click('title', 'resume');
+  need(g.screen === 'play' && sized('hard') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays a save with no stored difficulty at HARD on its board');
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
@@ -442,7 +460,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   store(KEY_BEST, JSON.stringify({ [g.code]: 5, [`${g.code}:EASY`]: 2, [`${g.code}:MEDIUM`]: 3 }));
   for (const [d, best] of [['easy', 2], ['medium', 3], ['hard', 5]]) {
     setDifficulty(g, d);
-    need(titleBest(g) === best, `BEST TOMB reads ${best} at ${d.toUpperCase()}`);
+    need(titleBest(g) === best, `BEST TOMB reads ${best} at ${difficultyLabel(d)}`);
   }
   draw(g, 0);
 }
@@ -457,7 +475,7 @@ const SETTING_STEP = { ArrowLeft: -1, KeyA: -1, ArrowRight: 1, KeyD: 1 };
 
 // HARD keeps the bare seed code, so bests from before difficulties carry over.
 function bestKey(code, difficulty) {
-  return difficulty === 'hard' ? code : `${code}:${difficulty.toUpperCase()}`;
+  return difficulty === 'hard' ? code : `${code}:${difficultyLabel(difficulty)}`;
 }
 
 function readBest(code, difficulty) {
@@ -728,21 +746,14 @@ function drawTitle(g, t) {
     r.text('SAVE  XXXX-XXXX:P', 72, 130, '9');
   } else {
     r.text('ENTER  BEGIN', 72, 74, 'c');
-    // The setting row: all three names, the current one lit.
-    r.text('L', 72, 86, 'b');
-    let x = 114;
-    for (const d of DIFFICULTIES) {
-      const name = d.toUpperCase();
-      r.text(name, x, 86, d === g.difficulty ? 'p' : '7');
-      x += (name.length + 1) * 6;
-    }
+    drawSettingRow(g, 86);
     r.text('R      RESET', 72, 98, 'b');
     r.text('K COPY', 248, 98, 'b', { align: 'right' });
     r.text('T      TYPE A CODE', 72, 110, 'b');
     // At most 26 characters right of ESC: a 9-character p and MEDIUM fit the panel.
     if (saved) {
       r.text('ESC', 72, 122, 'b');
-      r.text(`${formatCode(saved.code)}:${saved.p} ${saved.difficulty.toUpperCase()}`, 248, 122, 'b', { align: 'right' });
+      r.text(`${formatCode(saved.code)}:${saved.p} ${difficultyLabel(saved.difficulty)}`, 248, 122, 'b', { align: 'right' });
     }
     r.text(best === null ? 'NO TOMB REACHED YET' : `BEST TOMB  ${best}`, VIEW_W / 2, saved ? 136 : 124, 'p', { align: 'center' });
   }
@@ -750,10 +761,31 @@ function drawTitle(g, t) {
   r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
-/** Top left of the pause map and its rows: centred in HARD's 216x84 px frame, the largest. */
+/** The title's setting row at y: all three names after L, the current one lit. */
+function drawSettingRow(g, y) {
+  const r = g.renderer;
+  r.text('L', 72, y, 'b');
+  let x = 114;
+  for (const d of DIFFICULTIES) {
+    const name = difficultyLabel(d);
+    r.text(name, x, y, d === g.difficulty ? 'p' : '7');
+    x += (name.length + 1) * 6;
+  }
+}
+
+// The HARD map, the largest, spans the pause panel inside its 2 px rules,
+// from y 28 under the PAUSED title; smaller maps centre in that frame.
+const PAUSE_MAP_LEFT = PANEL_X.pause[0] + 2;
+const PAUSE_MAP_TOP = 28;
+
+/** Top left of the pause map and its rows, for the world's tomb size. */
 function mapOrigin(world) {
-  const { cols, rows } = mapCells(world.size);
-  return { x: 52 + (216 - cols * MAP_SCALE) / 2, y: 28 + Math.floor((84 - rows * MAP_SCALE) / 2), rows };
+  const hard = mapCells(DIFFICULTY.hard), { cols, rows } = mapCells(world.size);
+  return {
+    x: PAUSE_MAP_LEFT + ((hard.cols - cols) * MAP_SCALE) / 2,
+    y: PAUSE_MAP_TOP + Math.floor(((hard.rows - rows) * MAP_SCALE) / 2),
+    rows,
+  };
 }
 
 /** The pause map's model for the frame, rebuilt when the frame changes. */
@@ -775,7 +807,7 @@ function drawPause(g, t = 0) {
   const o = mapOrigin(g.world);
   r.drawMap(pauseModel(g), o.x, o.y, t - g.pausedAt);
   r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
-  r.text(`${hereCode(g)}  ${g.world.difficulty.toUpperCase()}`, VIEW_W / 2, 129, 'i', { align: 'center' });
+  r.text(`${hereCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 129, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });
   r.text('ESC RESUME  UP/DOWN PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
   r.text('M MUTE  C COPY', VIEW_W / 2, 164, 'b', { align: 'center' });
@@ -788,7 +820,7 @@ function drawOver(g) {
   r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
   r.text(saveLabel(g.copied), VIEW_W / 2, 96, 'a', { align: 'center' });
-  r.text(`${entryCode(g)}  ${g.world.difficulty.toUpperCase()}`, VIEW_W / 2, 108, 'i', { align: 'center' });
+  r.text(`${entryCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 108, 'i', { align: 'center' });
   r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 126, 'b', { align: 'center' });
 }
 
