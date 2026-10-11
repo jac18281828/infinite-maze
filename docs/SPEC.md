@@ -208,8 +208,9 @@ at deficit 0, when no swap lowers the deficit, or after 24 swaps.
 Reroll `k` from 0 until an attempt meets the targets. After 32 rerolls the
 board takes the attempt with the lowest deficit, the earliest on a tie. The
 cap bounds generation time, and the band and board seeds stay fixed, so the
-chosen attempt is deterministic too. Over bands −1000 to 1000 of seed
-`0000-0000`, under 1% of boards take that fallback.
+chosen attempt is deterministic too. Over tombs `u ∈ [−10, 10]`,
+`v ∈ [−50, 50]` of seed `0000-0000`, under 1% of boards take that fallback at
+every difficulty.
 
 The carve runs once on the chosen attempt, passing or fallback, and leaves
 `k` and the fallback flag as they were. It roots the tree at the first
@@ -233,8 +234,9 @@ The cells that remain form a tree, and the rest is rock: the game opens a
 room only for a cell that holds a link or a door. Boards average about 51
 carved cells and 5 galleries.
 
-Generation is lazy. The game holds the current band and its neighbours, and
-builds a board when it first comes within one board of the camera.
+Generation is lazy. The game holds the tombs within one of the explorer's in
+both axes, and builds a board when it first comes within one board of the
+camera.
 
 ## 5. Save code
 
@@ -466,7 +468,8 @@ torch sputtering at low burn.
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
 `requestAnimationFrame`. Building a board takes 0.7 ms on average and 17 ms
-at most, and a band under 0.1 ms, measured on node 26.7.0 and an Apple M3 Max.
+at most, and a tomb's board tree 0.04 ms on average and under 1 ms at most,
+measured on node 26.7.0 and an Apple M3 Max.
 Audio starts on the first key press or touch, as browser autoplay policy
 requires.
 
