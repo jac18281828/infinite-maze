@@ -166,6 +166,17 @@ test('PANEL_X matches the panels main.mjs draws', () => {
   assert.deepEqual(PANEL_X.over, extent('drawOver'));
 });
 
+test('the title\'s typing line fits its panel at TYPED_MAX characters', () => {
+  const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
+  const max = Number(src.match(/const TYPED_MAX = (\d+);/)[1]);
+  const line = src.match(/r\.text\(`([^`$]*)\$\{g\.typing\}\$\{[^}]*\}`, (\d+), \d+/);
+  assert.ok(line, 'drawTitle draws the typing line');
+  // The label, TYPED_MAX characters and the cursor.
+  const end = Number(line[2]) + textWidth(`${line[1]}${'W'.repeat(max)}_`);
+  // The title keeps 10 px inside its panel on both sides, as K COPY does at 248.
+  assert.ok(end <= PANEL_X.typing[1] - 10, `the line ends at x ${end}`);
+});
+
 test('soft keys follow the game state', () => {
   const ids = (st) => softKeys(st).map((k) => k.id);
   assert.deepEqual(ids({ screen: 'title', typing: false, resume: false }), ['begin', 'reset', 'type', 'difficulty', 'copy', 'sound']);

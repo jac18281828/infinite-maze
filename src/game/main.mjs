@@ -809,7 +809,8 @@ function drawTitle(g, t) {
   r.panel(62, 50, 196, saved || g.typing !== null ? 100 : 88);
   r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 58, 'i', { align: 'center' });
   if (g.typing !== null) {
-    r.text(`CODE  ${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 74, 'c');
+    // No label, so TYPED_MAX characters and the cursor fit the panel.
+    r.text(`${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 74, 'c');
     r.text('ENTER  ACCEPT', 72, 90, 'b');
     r.text('ESC    CANCEL', 72, 102, 'b');
     r.text('SEED  XXXX-XXXX', 72, 118, '9');
