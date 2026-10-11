@@ -91,7 +91,7 @@ test('each skeleton tier holds 0.8 to 1.2 per tomb at every level over tombs u -
       junc += junctions(w, bd).length;
       arrowed += arrows(w, bd).length;
     }
-    assert.ok(junc > 1000, `${level}: ${junc} sign junctions`);
+    assert.ok(junc > 2000, `${level}: ${junc} sign junctions`);
     const share = arrowed / junc;
     assert.ok(Math.abs(share - ARROW_SHARE[level]) <= 0.15 * ARROW_SHARE[level], `${level}: arrow share ${share} (${arrowed}/${junc})`);
   }
@@ -240,24 +240,34 @@ test('junctions lists exactly the cells on a path from an in-cell to the out-doo
   }
 });
 
-test('every pointer sits on a route board and its link leads to the next cell of the path toward the out-door', () => {
-  const dirs = new Set();
-  let n = 0;
-  for (const level of DIFFICULTIES) {
-    const w = worlds[level];
-    for (const bd of boardsOf(level, 0, 19)) {
-      for (const { cell, dir } of [...skeletons(w, bd), ...boostSkeletons(w, bd), ...arrows(w, bd)]) {
-        assert.equal(bd.kind, 'route');
-        const next = w.step(bd, cell, dir);
-        assert.equal(next.board, bd);
-        assert.equal(next.cell, cellPath(bd.links, cell, outCell(bd)).cells[1]);
-        dirs.add(dir);
-        n++;
+test('every pointer\'s dir is the first step of its cell\'s path to the out-door, for arrows and both skeleton tiers, over seeds 00000000, 00000004 and 00000009', () => {
+  for (const seed of ['00000000', '00000004', '00000009']) {
+    const dirs = new Set();
+    let n = 0;
+    for (const level of DIFFICULTIES) {
+      const w = createWorld(seed, { difficulty: level });
+      for (let v = 0; v <= 19; v++) {
+        for (let u = -2; u <= 2; u++) {
+          for (let i = 0; i < w.size.w * w.size.h; i++) {
+            const { x, y } = boardCoords(u, v, i, w.size);
+            const bd = w.board(x, y);
+            for (const { cell, dir } of [...skeletons(w, bd), ...boostSkeletons(w, bd), ...arrows(w, bd)]) {
+              assert.equal(bd.kind, 'route');
+              const path = cellPath(bd.links, cell, outCell(bd));
+              assert.equal(dir, path.dirs[0], `${seed} ${level} board ${bd.p} cell ${cell}`);
+              const next = w.step(bd, cell, dir);
+              assert.equal(next.board, bd);
+              assert.equal(next.cell, path.cells[1]);
+              dirs.add(dir);
+              n++;
+            }
+          }
+        }
       }
     }
+    assert.ok(n > 1400, `${seed}: ${n} pointers`);
+    assert.equal(dirs.size, 8, `${seed}: the sample holds a pointer for each direction`);
   }
-  assert.ok(n > 1500);
-  assert.equal(dirs.size, 8, 'the sample holds a pointer for each direction');
 });
 
 test('dead-end boards carry no pointer, and the sample holds dead-end cells with three or more ways out', () => {
@@ -291,7 +301,6 @@ test('the eight glyphs differ pairwise, fit 7 x 7 and point their direction', ()
     assert.equal(tips, 1, `glyph ${d} has one tip`);
   });
 });
-
 
 test('a way-on cell with three links and doors but under three real choices is no junction and holds no pointer', () => {
   const want = { easy: 7, medium: 4, hard: 6, ultimate: 5 };
