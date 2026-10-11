@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld, boardCoords, cellPath } from '../src/world/world.mjs';
-import { DX, DY, NCELL } from '../src/world/board.mjs';
+import { DX, DY, NCELL, cellNeighbor } from '../src/world/board.mjs';
 import { BDX, BDY, DIFFICULTIES } from '../src/world/band.mjs';
 import { u32 } from '../src/world/hash.mjs';
 import { SIGN_MOD, SIGN_THRESHOLD, junctions, signs } from '../src/world/signs.mjs';
@@ -41,16 +41,29 @@ function inCells(world, bd) {
   return ins;
 }
 
-/** The oracle's sign junctions of a route board: cell -> direction. */
-function expected(world, bd) {
+/** A stub: a door-free cell with one link, a source board's flame cell excepted. */
+const isStub = (bd, c) => bits(bd.links[c]) === 1 && !bd.doorMask[c] && !(bd.aDir === -1 && c === bd.a);
+/** Ways out of cell `c`: its links and doors, less its links into a stub. */
+function choices(bd, c) {
+  let n = bits(bd.links[c]) + bits(bd.doorMask[c]);
+  for (let d = 0; d < 8; d++) if ((bd.links[c] & (1 << d)) && isStub(bd, cellNeighbor(c, d))) n--;
+  return n;
+}
+
+/** Cells of the way on of route board `bd`, the out-door excepted, with the direction toward it. */
+function wayCells(world, bd) {
   const o = outCell(bd), got = new Map();
   for (const c of inCells(world, bd).keys()) {
     const path = cellPath(bd.links, c, o);
-    for (let k = 0; k + 1 < path.cells.length; k++) {
-      const cell = path.cells[k];
-      if (bits(bd.links[cell]) + bits(bd.doorMask[cell]) >= 3) got.set(cell, path.dirs[k]);
-    }
+    for (let k = 0; k + 1 < path.cells.length; k++) got.set(path.cells[k], path.dirs[k]);
   }
+  return got;
+}
+
+/** The oracle's sign junctions of a route board: cell -> direction. */
+function expected(world, bd) {
+  const got = new Map();
+  for (const [cell, dir] of wayCells(world, bd)) if (choices(bd, cell) >= 3) got.set(cell, dir);
   return got;
 }
 
@@ -160,4 +173,65 @@ test('the eight glyphs differ pairwise, fit 7 x 7 and point their direction', ()
     }));
     assert.equal(tips, 1, `glyph ${d} has one tip`);
   });
+});
+
+// Per level: [skeleton threshold t, arrow band width a]. The pointer bands are [0, 2t + a).
+const BANDS = { easy: [94, 85], medium: [30, 64], hard: [17, 43], ultimate: [11, 32] };
+const pointerLists = (w, bd) => [signs(w, bd)];
+const hashOf = (w, bd, cell) => u32(w.H('sign', bd.x, bd.y, cell)) % 1024;
+
+test('a way-on cell with three links and doors but under three real choices is no junction and holds no pointer', () => {
+  const want = { easy: 7, medium: 4, hard: 6, ultimate: 5 };
+  let banded = 0;
+  for (const level of DIFFICULTIES) {
+    const w = worlds[level], [t, a] = BANDS[level];
+    let n = 0;
+    for (const bd of boardsOf(level, 0, 19)) {
+      if (bd.kind !== 'route') continue;
+      const got = new Set(junctions(w, bd).map((j) => j.cell));
+      for (const [cell] of wayCells(w, bd)) {
+        if (bits(bd.links[cell]) + bits(bd.doorMask[cell]) < 3 || choices(bd, cell) >= 3) continue;
+        n++;
+        assert.ok(!got.has(cell), `${level} board ${bd.p} cell ${cell}: a junction`);
+        for (const list of pointerLists(w, bd)) assert.ok(!list.some((s) => s.cell === cell), `${level} board ${bd.p} cell ${cell}: a pointer`);
+        if (hashOf(w, bd, cell) < 2 * t + a) banded++;
+      }
+    }
+    assert.equal(n, want[level], `${level}: cells without a choice`);
+  }
+  assert.ok(banded >= 6, `${banded} removed cells with a hash in a pointer band`);
+});
+
+test('a way-on cell linked to the source board\'s flame cell stays a junction when its other ways, less their stubs, number two', () => {
+  const want = { easy: 3, medium: 5, hard: 6, ultimate: 3 };
+  for (const level of DIFFICULTIES) {
+    const w = worlds[level];
+    let n = 0;
+    for (const bd of boardsOf(level, 0, 19)) {
+      if (bd.kind !== 'route' || bd.aDir !== -1 || bits(bd.links[bd.a]) !== 1 || bd.doorMask[bd.a]) continue;
+      const got = new Set(junctions(w, bd).map((j) => j.cell));
+      for (const [cell] of wayCells(w, bd)) {
+        let toFlame = 0;
+        for (let d = 0; d < 8; d++) if ((bd.links[cell] & (1 << d)) && cellNeighbor(cell, d) === bd.a) toFlame++;
+        // choices counts the flame link as a way; the other ways, less their stubs, are the rest.
+        if (toFlame !== 1 || choices(bd, cell) - 1 !== 2) continue;
+        n++;
+        assert.ok(got.has(cell), `${level} board ${bd.p} cell ${cell}: the flame cell was counted as a stub`);
+      }
+    }
+    assert.equal(n, want[level], `${level}: flame-cell cases`);
+  }
+});
+
+test('the owner\'s case: seed 00000004 at HARD, board (7, 69) in tomb (1, 17), cell 59 holds a door and a stub and offers no choice', () => {
+  const w = createWorld('00000004', { difficulty: 'hard' }), bd = w.board(7, 69);
+  assert.deepEqual([Math.floor(7 / w.size.w), Math.floor(69 / w.size.h)], [1, 17]);
+  assert.equal(bd.kind, 'route');
+  assert.equal(bd.links[59], (1 << 3) | (1 << 5), 'links S and NW');
+  assert.equal(bd.doorMask[59], 1, 'a door E');
+  assert.equal(cellNeighbor(59, 5), 70);
+  assert.equal(bd.links[70], 1 << 7, 'cell 70 holds one link');
+  assert.equal(bd.doorMask[70], 0, 'and no door');
+  assert.ok(!junctions(w, bd).some((j) => j.cell === 59));
+  for (const list of pointerLists(w, bd)) assert.ok(!list.some((s) => s.cell === 59));
 });

@@ -62,15 +62,23 @@ export function wayOn(world, bd) {
 /**
  * The sign junctions of route board `bd` as { cell, dir }, ascending by
  * cell. A sign junction lies on the way on, `o` excepted, with three or more
- * ways out counting links and doors. `dir` is the link from the cell toward
- * `o`. A board that is not a route board has none.
+ * real ways out: its links plus its doors, less its links into a stub. A stub
+ * is a door-free cell with one link, a source board's flame cell excepted: the
+ * player arrives from that cell, so a link into it is a way. `dir` is the link
+ * from the cell toward `o`. A board that is not a route board has none.
  */
 export function junctions(world, bd) {
   const way = wayOn(world, bd);
   if (!way) return [];
   const { o, toward, on } = way;
+  const stub = (c) => ways(bd.links[c]) === 1 && !bd.doorMask[c] && !(bd.aDir < 0 && c === bd.a);
+  const choices = (c) => {
+    let n = ways(bd.links[c]) + ways(bd.doorMask[c]);
+    for (let d = 0; d < 8; d++) if (bd.links[c] & (1 << d) && stub(cellNeighbor(c, d))) n--;
+    return n;
+  };
   return [...on]
-    .filter((c) => c !== o && ways(bd.links[c]) + ways(bd.doorMask[c]) >= 3)
+    .filter((c) => c !== o && choices(c) >= 3)
     .sort((p, q) => p - q)
     .map((cell) => ({ cell, dir: toward[cell] }));
 }

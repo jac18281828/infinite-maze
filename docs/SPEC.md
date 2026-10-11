@@ -255,7 +255,11 @@ MEDIUM, 50.6 and 5.03 at HARD and 50.7 and 5.02 at ULTIMATE.
 
 **Signs.** A sign junction is a cell of a route board (§3) on the tree path
 from an in-cell to the out-door's cell `o`, `o` excepted, with three or more
-ways out. A way out is a tree link or a door. The out-door is the door in the
+real ways out. A way out is a tree link or a door. A tree link into a **stub**
+is no real way out: a stub is a carved cell with exactly one tree link and no
+door, and a source board's flame cell is never a stub, because the player
+arrives from it and does not see it as a closed room. Only a one-room stub
+drops out, and a longer dead end still counts. The out-door is the door in the
 board's route-exit direction, which leads toward the tomb's exit. The in-cells
 are where routes enter: the cell of each door whose far board is a route board
 leading back through it, which covers a route's predecessor, a tributary
@@ -264,7 +268,10 @@ flame cell of a source board `S`. These differ from the junctions above, which
 count cells on the primary path with a tree link off it, `b` included and doors
 not counted. Paths run from every in-cell, `o` has no sign because a sconce
 already marks its door, and doors count as ways out. A route board holds 3.9
-sign junctions on average at EASY and 5.7 at the other levels.
+sign junctions on average at EASY, 5.7 at MEDIUM and 5.6 at HARD and ULTIMATE.
+The stub rule changes where signs stand and never the board: over tombs
+`u ∈ [−2, 2]` by `v ∈ [0, 19]` of seed `0000-0000` it removes 7, 4, 6 and 5
+cells out of 1158, 3478, 5844 and 9507 at EASY to ULTIMATE.
 
 A sign junction carries a sign when `u32(H("sign", x, y, cell)) mod 48` is
 under the level's threshold: 8 at EASY, 6 at MEDIUM, 4 at HARD and 3 at
