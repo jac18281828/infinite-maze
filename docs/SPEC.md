@@ -652,6 +652,19 @@ largest.
 pixels. It scrolls freely across board seams, and rock fills every position
 outside the band trees.
 
+**Frames between ticks.** In play, the explorer's feet and the camera centre
+draw between the last two ticks, linearly at the fraction of a tick elapsed
+since the latest. The follow still runs once a tick and the simulation is
+untouched; a frame never extrapolates, so the picture trails the simulation by
+under one tick. Pose, facing, torch burn and the HUD show the latest tick. One
+camera serves every world-space draw of the frame, and the torch, its light and
+the dust follow the drawn explorer. A frame draws the latest state, with no
+blend:
+- on every screen but play;
+- after any entry into play, until the next tick;
+- when the latest tick moved the feet more than 16 px on either axis, which is
+  a placement, since legitimate motion moves them at most 9 px a tick (§6).
+
 **Explorer.** A khaki-clad figure in a fedora, carrying a torch, with these
 animations:
 
@@ -679,7 +692,7 @@ torch sputtering at low burn.
 ## 9. Runtime
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
-`requestAnimationFrame`. Building a board takes 0.7 ms on average and 17 ms
+`requestAnimationFrame`, interpolated between ticks (§8). Building a board takes 0.7 ms on average and 17 ms
 at most, and a tomb's board tree 0.04 ms on average and under 1 ms at most,
 measured on node 26.7.0 and an Apple M3 Max.
 Audio starts on the first key press or touch, as browser autoplay policy

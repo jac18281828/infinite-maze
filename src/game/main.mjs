@@ -11,6 +11,7 @@ import {
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { createProbe } from './perf.mjs';
+import { advance, snapshot, blend } from './smooth.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
   COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
@@ -802,7 +803,14 @@ function coinLeg(g, { need, click }) {
   need(g.screen === 'play' && g.earned === g.wallet - start, 'CONTINUE keeps the coins earned this run');
   oneTombOn(g, 1);
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
-  draw(g, 0);
+  const [fx, fy] = feet(g.sim);
+  need(g.prev && (g.prev.x !== fx || g.prev.y !== fy), 'a tick stores the snapshot before it steps');
+  // Halfway between ticks, so the blended path draws in Chrome.
+  draw(g, 0, 0.5);
+  click('play', 'pause');
+  tick(g);
+  need(g.prev === null, 'a tick off the play screen clears the snapshot');
+  click('pause', 'resume');
 }
 
 /**
@@ -981,6 +989,8 @@ function createGame() {
     // The milestone the splash shows: { k, paid }, where paid is whether this crossing paid.
     splash: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
+    // The explorer and camera as of the start of the latest tick, which a frame between ticks blends from.
+    prev: null,
     // The tomb { u, v } the pause map frames, and its model.
     frame: { u: 0, v: 0 }, pauseMap: null, pausedAt: null,
   };
@@ -1242,8 +1252,10 @@ function milestoneHit(g, was) {
 }
 
 function tick(g) {
-  if (g.screen !== 'play') return;
+  // Any entry into play draws the latest state until its first tick.
+  if (g.screen !== 'play') { g.prev = null; return; }
   const was = tombCount(g.sim);
+  g.prev = snapshot(g.sim, g.cam);
   stepSim(g);
   handleEvents(g);
   const hit = milestoneHit(g, was);
@@ -1396,11 +1408,20 @@ function drawProbe(r, s) {
   lines.forEach((l, i) => r.text(l, 5, 36 + 8 * i, 'c'));
 }
 
-function draw(g, t) {
+/**
+ * Draws one frame. In play, `alpha` in [0, 1] places the explorer and the
+ * camera between the last two ticks; every other screen draws the latest state.
+ */
+function draw(g, t, alpha = 1) {
   if (g.screen === 'title') {
     drawTitle(g, t);
   } else {
-    g.renderer.scene(g.sim, g.cam, t);
+    if (g.screen === 'play') {
+      const b = blend(g.prev, snapshot(g.sim, g.cam), alpha);
+      g.renderer.scene(g.sim, { x: b.cx, y: b.cy }, t, [b.x, b.y]);
+    } else {
+      g.renderer.scene(g.sim, g.cam, t);
+    }
     g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
@@ -1417,14 +1438,14 @@ function runLoop(g) {
   let last = performance.now(), acc = 0, published = 0;
   function frame(now) {
     const interval = now - last;
-    acc += Math.min(0.25, interval / 1000);
     last = now;
-    let ran = 0;
-    while (acc >= TICK) { tick(g); acc -= TICK; ran++; }
+    const spent = advance(acc, interval / 1000);
+    acc = spent.acc;
+    for (let i = 0; i < spent.ticks; i++) tick(g);
     const began = probe ? performance.now() : 0;
-    draw(g, now / 1000);
+    draw(g, now / 1000, acc / TICK);
     if (probe) {
-      probe.frame(interval, ran, performance.now() - began);
+      probe.frame(interval, spent.ticks, performance.now() - began);
       // About once a second, so the DOM write stays out of the frames measured.
       if (now - published >= 1000) {
         published = now;

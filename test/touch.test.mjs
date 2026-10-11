@@ -482,6 +482,8 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.code === 'KeyP' || (e.key === 'Escape' && !e.repeat)) { resume(g); }", /^fail: touch the title ignores an auto-repeated P/],
       ["if (e.code === 'KeyP' || e.key === 'Escape') {\n    g.screen = 'pause';", "if (e.key === 'Escape') {\n    g.screen = 'pause';", /^fail: touch PAUSE reaches pause and stores a save/],
       ["if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", "if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", /^fail: touch RESUME returns to play/],
+      ['  g.prev = snapshot(g.sim, g.cam);\n  stepSim(g);', '  stepSim(g);', /^fail: touch a tick stores the snapshot before it steps/],
+      ["if (g.screen !== 'play') { g.prev = null; return; }", "if (g.screen !== 'play') return;", /^fail: touch a tick off the play screen clears the snapshot/],
       ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
       ['function readCoinState() {\n', 'function readCoinState() {\n  return { wallet: 0, coins: new Map(), paid: new Map() };\n', /^fail: touch boot reads the wallet and the collected set/],
       ["if (ev === 'coin') collectCoin(g);", "if (ev === 'coin') void g;", /^fail: touch touching the first coin adds one to the wallet/],
