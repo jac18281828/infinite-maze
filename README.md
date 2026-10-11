@@ -119,10 +119,17 @@ private S3 bucket behind CloudFront. `cdk/` defines the bucket, certificate,
 distribution and DNS records in the shared `2ad.com` zone, which the stack
 imports read-only.
 
-A trial build for a phone play-test goes to `beta/<name>.html` in the bucket,
-copied by hand, and is served at `https://maze.2ad.com/beta/<name>.html` until
-the next deploy removes it. It shares the live game's origin, and with it the
-wallet, saves and records in local storage.
+A trial build for a phone play-test goes to `beta/<name>.html` in the bucket
+and is served at `https://maze.2ad.com/beta/<name>.html` until the next deploy
+removes it. It shares the live game's origin, and with it the wallet, saves and
+records in local storage. Copy it uncached, so a re-copy under the same name
+serves at once:
+
+```sh
+aws s3 cp trial.html s3://maze-us-east-1-504242000181/beta/<name>.html \
+  --cache-control "no-cache, no-store, must-revalidate" \
+  --content-type "text/html; charset=utf-8"
+```
 
 The workflow signs in through OIDC as `GithubDeployCI`. One-time setup outside
 this repo: the role must trust
@@ -139,6 +146,7 @@ bun run cdk:deploy -- StackMaze2adCom --require-approval never
 aws s3 cp infinite-maze.html s3://maze-us-east-1-504242000181/index.html \
   --cache-control "no-cache, no-store, must-revalidate" \
   --content-type "text/html; charset=utf-8"
+aws s3 rm s3://maze-us-east-1-504242000181/beta/ --recursive
 aws cloudfront create-invalidation --paths "/*" \
   --distribution-id "$(aws cloudformation describe-stacks --stack-name StackMaze2adCom \
     --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)"
