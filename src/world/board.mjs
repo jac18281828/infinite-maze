@@ -369,10 +369,10 @@ const stack = new Int16Array(NCELL);
  * A cut at c removes c and every cell beyond it away from a. It qualifies
  * when it removes no `protect`ed cell, at most cells - target cells, and
  * leaves a deficit (with primary pair a, b, against `targets`) of at most
- * `limit`. Each step
- * draws one qualifying cut at random, preferring cuts that remove no gallery
- * link, and stops at `target` cells or when no cut qualifies. A cut never
- * touches the a-b path, so a cut changes only the branch it lies in.
+ * `limit`. Each step draws one qualifying cut at random, preferring cuts
+ * that remove no gallery link, and stops at `target` cells or when no cut
+ * qualifies. A cut never touches the a-b path, so a cut changes only the
+ * branch it lies in.
  */
 function carve(links, a, b, isDoor, protect, target, limit, rng, targets) {
   for (;;) {

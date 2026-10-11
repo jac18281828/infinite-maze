@@ -37,17 +37,26 @@ export const LEVELS = {
   ultimate: { carve: 50, path: 22, junctions: 6, branch: 3, depth: 2 },
 };
 
+// Mean bounds per board as fractions of the carve count C, each
+// [numerator, denominator]: carved cells C·96/100..C·112/100, galleries
+// 4·C/50..10·C/50.
+const MEAN_BOUNDS = { carve: [[96, 100], [112, 100]], galleries: [[4, 50], [10, 50]] };
+
 /**
- * A level's thresholds from its carve count C: every tree board carves at
- * least C cells, the mean lies within C·96/100..C·112/100, and galleries
- * average 4·C/50..10·C/50 per board. The checks compare in integers.
+ * A level's thresholds: every tree board carves at least `carveMin` cells,
+ * and `carveMean` and `galleries` hold the mean's [low, high] bounds as
+ * [numerator, denominator] pairs with C folded into the numerator.
  */
 export function thresholds(difficulty) {
   const C = levelOf(difficulty).carve;
-  return {
-    carveMin: C, carveMeanMin: (C * 96) / 100, carveMeanMax: (C * 112) / 100,
-    galleriesMin: (4 * C) / 50, galleriesMax: (10 * C) / 50,
-  };
+  const scale = (pairs) => pairs.map(([n, d]) => [n * C, d]);
+  return { carveMin: C, carveMean: scale(MEAN_BOUNDS.carve), galleries: scale(MEAN_BOUNDS.galleries) };
+}
+
+/** An error unless `total / count` lies within `bounds`, compared in integers. */
+function meanErrors(what, total, count, [[ln, ld], [hn, hd]]) {
+  if (ld * total >= ln * count && hd * total <= hn * count) return [];
+  return [`${what} average ${(count ? total / count : 0).toFixed(2)}, outside ${ln / ld}-${hn / hd}`];
 }
 
 function levelOf(difficulty) {
@@ -582,7 +591,6 @@ function tombFigures(tombs) {
  */
 export function checkGalleries(world, win) {
   const errors = [];
-  const C = levelOf(world.difficulty).carve, th = thresholds(world.difficulty);
   let boards = 0, galleries = 0, conflicts = 0;
   for (const bd of windowBoards(world, win)) {
     if (!bd.links) continue;
@@ -607,11 +615,8 @@ export function checkGalleries(world, win) {
       }
     }
   }
-  const mean = boards ? galleries / boards : 0;
-  if (50 * galleries < 4 * C * boards || 50 * galleries > 10 * C * boards) {
-    errors.push(`galleries per board average ${mean.toFixed(2)}, outside ${th.galleriesMin}-${th.galleriesMax}`);
-  }
-  return { errors, boards, galleries, conflicts, mean };
+  errors.push(...meanErrors('galleries per board', galleries, boards, thresholds(world.difficulty).galleries));
+  return { errors, boards, galleries, conflicts, mean: boards ? galleries / boards : 0 };
 }
 
 /**
@@ -621,7 +626,7 @@ export function checkGalleries(world, win) {
  */
 export function checkCarve(world, win) {
   const errors = [];
-  const C = levelOf(world.difficulty).carve, th = thresholds(world.difficulty);
+  const th = thresholds(world.difficulty), C = th.carveMin;
   let boards = 0, carved = 0;
   for (const bd of windowBoards(world, win)) {
     if (!bd.links) continue;
@@ -637,11 +642,8 @@ export function checkCarve(world, win) {
       if (!bd.links[c]) errors.push(`board (${bd.x},${bd.y}): flame cell ${c} is pruned`);
     }
   }
-  const mean = boards ? carved / boards : 0;
-  if (100 * carved < 96 * C * boards || 100 * carved > 112 * C * boards) {
-    errors.push(`carved cells per board average ${mean.toFixed(2)}, outside ${th.carveMeanMin}-${th.carveMeanMax}`);
-  }
-  return { errors, boards, mean };
+  errors.push(...meanErrors('carved cells per board', carved, boards, th.carveMean));
+  return { errors, boards, mean: boards ? carved / boards : 0 };
 }
 
 /**

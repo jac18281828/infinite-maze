@@ -460,6 +460,8 @@ function driveTouch(copied) {
   // The first pause frame lands half a second into the page and shows the explorer's dot.
   draw(g, 0.5);
   const e = pauseModel(g).explorer, o = mapOrigin(g.world);
+  // Every level centres in ULTIMATE's 72x28-cell frame: EASY's 24 columns from x 124.
+  need(o.x === 52 && mapOrigin({ size: DIFFICULTY.easy }).x === 124, 'the pause map centres in ULTIMATE\'s 72x28-cell frame');
   const dot = view.getContext('2d').getImageData(o.x + e.col * MAP_SCALE + 1, o.y + (o.rows - 1 - e.row) * MAP_SCALE + 1, 1, 1).data;
   need(RGB[idx('p')].every((v, i) => dot[i] === v), 'the pause map shows the explorer first');
 }

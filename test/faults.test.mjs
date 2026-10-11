@@ -728,12 +728,19 @@ test('galleries rejects a world averaging just under the level\'s floor and acce
 
 test('the harness thresholds follow the carve count: carve mean C·96/100 to C·112/100, galleries 4·C/50 to 10·C/50', () => {
   assert.deepEqual(LEVELS, LADDER);
-  assert.deepEqual(Object.fromEntries(Object.keys(LADDER).map((d) => [d, thresholds(d)])), {
-    easy: { carveMin: 40, carveMeanMin: 38.4, carveMeanMax: 44.8, galleriesMin: 3.2, galleriesMax: 8 },
-    medium: { carveMin: 45, carveMeanMin: 43.2, carveMeanMax: 50.4, galleriesMin: 3.6, galleriesMax: 9 },
-    hard: { carveMin: 50, carveMeanMin: 48, carveMeanMax: 56, galleriesMin: 4, galleriesMax: 10 },
-    ultimate: { carveMin: 50, carveMeanMin: 48, carveMeanMax: 56, galleriesMin: 4, galleriesMax: 10 },
+  const shown = (pairs) => pairs.map(([n, d]) => n / d);
+  const got = Object.fromEntries(Object.keys(LADDER).map((d) => {
+    const th = thresholds(d);
+    return [d, { carveMin: th.carveMin, carveMean: shown(th.carveMean), galleries: shown(th.galleries) }];
+  }));
+  assert.deepEqual(got, {
+    easy: { carveMin: 40, carveMean: [38.4, 44.8], galleries: [3.2, 8] },
+    medium: { carveMin: 45, carveMean: [43.2, 50.4], galleries: [3.6, 9] },
+    hard: { carveMin: 50, carveMean: [48, 56], galleries: [4, 10] },
+    ultimate: { carveMin: 50, carveMean: [48, 56], galleries: [4, 10] },
   });
+  // Integer numerators and denominators, C folded into the numerator.
+  assert.deepEqual(thresholds('easy'), { carveMin: 40, carveMean: [[3840, 100], [4480, 100]], galleries: [[160, 50], [400, 50]] });
 });
 
 test('bounds passes MEDIUM\'s 4-room trunks and EASY\'s one-room trunk, and rejects a MEDIUM trunk cut to 3 rooms', () => {

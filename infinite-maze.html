@@ -624,10 +624,10 @@ const stack = new Int16Array(NCELL);
  * A cut at c removes c and every cell beyond it away from a. It qualifies
  * when it removes no `protect`ed cell, at most cells - target cells, and
  * leaves a deficit (with primary pair a, b, against `targets`) of at most
- * `limit`. Each step
- * draws one qualifying cut at random, preferring cuts that remove no gallery
- * link, and stops at `target` cells or when no cut qualifies. A cut never
- * touches the a-b path, so a cut changes only the branch it lies in.
+ * `limit`. Each step draws one qualifying cut at random, preferring cuts
+ * that remove no gallery link, and stops at `target` cells or when no cut
+ * qualifies. A cut never touches the a-b path, so a cut changes only the
+ * branch it lies in.
  */
 function carve(links, a, b, isDoor, protect, target, limit, rng, targets) {
   for (;;) {
@@ -5523,6 +5523,8 @@ function driveTouch(copied) {
   // The first pause frame lands half a second into the page and shows the explorer's dot.
   draw(g, 0.5);
   const e = pauseModel(g).explorer, o = mapOrigin(g.world);
+  // Every level centres in ULTIMATE's 72x28-cell frame: EASY's 24 columns from x 124.
+  need(o.x === 52 && mapOrigin({ size: DIFFICULTY.easy }).x === 124, 'the pause map centres in ULTIMATE\'s 72x28-cell frame');
   const dot = view.getContext('2d').getImageData(o.x + e.col * MAP_SCALE + 1, o.y + (o.rows - 1 - e.row) * MAP_SCALE + 1, 1, 1).data;
   need(RGB[idx('p')].every((v, i) => dot[i] === v), 'the pause map shows the explorer first');
 }
