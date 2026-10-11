@@ -341,8 +341,8 @@ record, and a resumed save counts from 0 and pays once its run climbs past the
 record. A milestone pays on top: for each k with `record < 100k ≤ count`, the
 wallet gains 100 × k, once per seed and level because the record passes it. A
 record already past 100k counts as paid. The game holds the three values in
-memory from boot and writes each through on every change. Absent, blocked or malformed storage reads as empty,
-and the game plays on.
+memory from boot and writes each through on every change. Absent, blocked or
+malformed storage reads as empty, and the game plays on.
 
 ## 6. Movement
 

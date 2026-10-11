@@ -317,12 +317,14 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['const COIN_RATE = { easy: 1, medium: 2, hard: 5 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1 };', /^fail: touch a new best tomb pays 5 at HARD/],
       ['const record = g.paid.get(key) || 0;', 'const record = 0;', /^fail: touch a replay at the record pays nothing at EASY/],
       ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
-      ['else if (k > Math.floor(was / MILESTONE))', 'else if (false)', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
+      ['else if (hit) showSplash(g, hit.k, hit.paid);', 'else if (false) showSplash(g, hit.k, hit.paid);', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
+      ['else if (hit) showSplash(g, hit.k, hit.paid);', 'if (hit) showSplash(g, hit.k, hit.paid);', /^fail: touch a run that ends on the crossing of tomb 100 shows the end screen/],
+      ['  g.splash = { k, paid };\n  writeSave(g, hereCode(g));', '  g.splash = { k, paid };', /^fail: touch the EASY splash stores the save/],
       ['return tombs + milestones;', 'return tombs;', /^fail: touch tomb 100 pays 1 plus 100 at EASY/],
       ['function splashKey(g, e) {\n  if (e.repeat) return;\n', 'function splashKey(g, e) {\n', /^fail: touch a repeated Enter leaves the splash showing/],
       ["if (e.key === 'Enter') {\n    g.splash = null;", "if (e.key === 'Enter' || e.code === 'KeyP') {\n    g.splash = null;", /^fail: touch P leaves the splash showing/],
       ['const first = Math.floor(record / MILESTONE) + 1;', 'const first = last;', /^fail: touch a second crossing of tomb 100 pays nothing/],
-      ['g.open = { code, world, renderer, preview, sim };', 'g.open = null;', /^fail: touch Q reaches the title with the run open/],
+      ['g.splash = null;\n    leaveOpen(g);', "g.splash = null;\n    g.screen = 'title';\n    titleCam(g);", /^fail: touch Q reaches the title with the run open/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

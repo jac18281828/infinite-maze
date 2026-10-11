@@ -4971,8 +4971,8 @@ const { MILESTONE, rankName } = __m8;
 const { copyWithStatus, saveLabel } = __m20;
 const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m15;
 const { RGB, idx } = __m11;
-// Boot, input, the fixed 60 Hz loop and the title, play, pause and end
-// screens. `#selftest` in the URL runs the self-test instead.
+// Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
+// milestone splash screens. `#selftest` in the URL runs the self-test instead.
 
 
 
@@ -5553,10 +5553,11 @@ function runTicks(g, drive, done, budget, what, seen = () => {}) {
  * the first primary cell of tomb (0, 0)'s exit board, with `n` tombs below its
  * row already solved, and walks the exit to the downstream entry's flame until
  * the tomb count reaches n + 1. Throws `touch ...` when the walk takes a coin or
- * runs out of ticks. It is the only coin code that names a run's `solved` and
- * `start`.
+ * runs out of ticks. It returns the ticks run. With `doomAt` > 0, the torch is an
+ * ember that goes out on that tick. It is the only coin code that names a run's
+ * `solved` and `start`.
  */
-function oneTombOn(g, n) {
+function oneTombOn(g, n, doomAt = 0) {
   const { world } = g;
   const t = world.tomb(0, 0);
   const at = boardCoords(0, 0, t.X, world.size);
@@ -5564,10 +5565,23 @@ function oneTombOn(g, n) {
   const chain = world.tombFlames(0, 0).chains[0];
   const solved = new Set(Array.from({ length: n }, (_, i) => `0,${-1 - i}`));
   begin(g, X.p, { time: 0, solved, lastEntry: X.p, trail: createTrail(), start: { u: 0, v: 0 } });
-  let taken = 0;
-  runTicks(g, createAutopilot(world, [chain[chain.length - 1]]), () => tombCount(g.sim) >= n + 1, 4000,
+  const auto = createAutopilot(world, [chain[chain.length - 1]]);
+  let taken = 0, ticks = 0;
+  const drive = (s) => {
+    if (++ticks === doomAt) { s.burn = 0; s.ember = TICK / 2; }
+    return auto(s);
+  };
+  runTicks(g, drive, () => tombCount(g.sim) >= n + 1, 4000,
     `the walk out of tomb (0, 0) reaches tomb count ${n + 1}`, () => { if (g.sim.events.includes('coin')) taken++; });
   if (taken) throw new Error('touch the walk out of tomb (0, 0) takes no coin');
+  return ticks;
+}
+
+/** Stores the wallet, the collected set and the payout record, as the game does on each change. */
+function keepCoins(g) {
+  store(KEY_WALLET, String(g.wallet));
+  store(KEY_COINS, serializeCollected(g.coins));
+  store(KEY_PAID, serializePaid(g.paid));
 }
 
 /** The first coin of tomb (0, 0), board by board in index order, as { bd, cell }, or null. */
@@ -5598,11 +5612,6 @@ function walkToCoin(g, { bd, cell }) {
 /** The coin steps of the touch leg, from the title with no run open. */
 function coinLeg(g, { need, click }) {
   const rates = { easy: 1, medium: 2, hard: 5 };
-  const keep = () => {
-    store(KEY_WALLET, String(g.wallet));
-    store(KEY_COINS, serializeCollected(g.coins));
-    store(KEY_PAID, serializePaid(g.paid));
-  };
   const onLevel = (d) => {
     setDifficulty(g, d);
     useCode(g, SELFTEST_CODE);
@@ -5611,7 +5620,7 @@ function coinLeg(g, { need, click }) {
     g.wallet = 0;
     g.coins = new Map();
     g.paid = new Map();
-    keep();
+    keepCoins(g);
   };
 
   // Step 1: the first coin of tomb (0, 0) at MEDIUM.
@@ -5642,7 +5651,7 @@ function coinLeg(g, { need, click }) {
   for (const d of ['easy', 'medium', 'hard']) {
     onLevel(d);
     g.paid.delete(coinKey(SELFTEST_CODE, d));
-    keep();
+    keepCoins(g);
     const was = g.wallet;
     oneTombOn(g, 0);
     need(g.wallet - was === rates[d], `a new best tomb pays ${rates[d]} at ${difficultyLabel(d)}`);
@@ -5654,7 +5663,7 @@ function coinLeg(g, { need, click }) {
   for (const d of ['easy', 'medium', 'hard']) {
     onLevel(d);
     g.paid.set(coinKey(SELFTEST_CODE, d), 1);
-    keep();
+    keepCoins(g);
     const was = g.wallet;
     oneTombOn(g, 0);
     need(g.wallet === was, `a replay at the record pays nothing at ${difficultyLabel(d)}`);
@@ -5689,11 +5698,6 @@ function coinLeg(g, { need, click }) {
  * through the shipped tick, so each step reads the screen the game chose.
  */
 function splashLeg(g, { need, click, press }) {
-  const keep = () => {
-    store(KEY_WALLET, String(g.wallet));
-    store(KEY_COINS, serializeCollected(g.coins));
-    store(KEY_PAID, serializePaid(g.paid));
-  };
 
   // Step 1: the first crossing of tomb 100 shows TORCHBEARER and pays the rate plus 100, at every level.
   g.wallet = 0;
@@ -5704,7 +5708,7 @@ function splashLeg(g, { need, click, press }) {
     useCode(g, SELFTEST_CODE);
     const key = coinKey(SELFTEST_CODE, d), label = difficultyLabel(d);
     g.paid.set(key, 99);
-    keep();
+    keepCoins(g);
     const was = g.wallet, earned = g.earned;
     oneTombOn(g, 99);
     need(g.screen === 'splash' && g.splash.k === 1 && rankName(g.splash.k) === 'TORCHBEARER' && g.splash.paid,
@@ -5713,6 +5717,9 @@ function splashLeg(g, { need, click, press }) {
     need(g.earned - earned === g.wallet - was, `the milestone payout counts in the coins earned at ${label}`);
     need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[key] === 100,
       `the ${label} milestone payout stores the wallet and the record`);
+    // The tick's entry event stores a save too, so the splash's own write shows only over a stale one.
+    store(KEY_SAVE, 'stale');
+    showSplash(g, g.splash.k, g.splash.paid);
     need(load(KEY_SAVE) === hereCode(g), `the ${label} splash stores the save`);
   }
   draw(g, 0);
@@ -5763,6 +5770,15 @@ function splashLeg(g, { need, click, press }) {
   need(g.screen === 'title' && g.open !== null && g.open.sim === fourth, 'the splash HOME reaches the title with the run open');
   press('KeyP', 'p');
   need(g.screen === 'play' && g.sim === fourth, 'P after the splash HOME returns to the run');
+
+  // Step 7: a run that ends on the tick that crosses tomb 100 shows the end screen, and the payout stands.
+  const ticks = oneTombOn(g, 99);
+  const level = g.world.difficulty;
+  g.paid.set(coinKey(SELFTEST_CODE, level), 99);
+  const before = g.wallet;
+  oneTombOn(g, 99, ticks);
+  need(g.screen === 'over' && tombCount(g.sim) === 100, 'a run that ends on the crossing of tomb 100 shows the end screen');
+  need(g.wallet - before === COIN_RATE[level] + 100, 'the payout stands when the run ends on the crossing of tomb 100');
   draw(g, 0);
 }
 
@@ -5989,14 +6005,19 @@ function playKey(g, e) {
   if (JUMP_KEYS.includes(e.code) && !e.repeat) g.jump = true;
 }
 
+/** Goes to the title with the run open: RESUME there returns to it unchanged. */
+function leaveOpen(g) {
+  g.open = { code: g.code, world: g.world, renderer: g.renderer, preview: g.preview, sim: g.sim };
+  g.screen = 'title';
+  titleCam(g);
+}
+
 // g.copied: the copy status the pause or end screen shows, cleared on leaving it.
 function pauseKey(g, e) {
   if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }
   else if (e.code === 'KeyQ') {
-    g.open = { code: g.code, world: g.world, renderer: g.renderer, preview: g.preview, sim: g.sim };
-    g.screen = 'title';
+    leaveOpen(g);
     g.copied = '';
-    titleCam(g);
   } else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => {
       if (g.screen === 'pause') g.copied = status;
@@ -6025,11 +6046,8 @@ function splashKey(g, e) {
     g.splash = null;
     play(g);
   } else if (e.code === 'KeyQ') {
-    const { code, world, renderer, preview, sim } = g;
-    g.open = { code, world, renderer, preview, sim };
     g.splash = null;
-    g.screen = 'title';
-    titleCam(g);
+    leaveOpen(g);
   }
 }
 
@@ -6090,19 +6108,28 @@ function showSplash(g, k, paid) {
   writeSave(g, hereCode(g));
 }
 
+/**
+ * The milestone a tick reached, as { k, paid }, or null; `was` is the tomb count
+ * before the tick. Reads the payout record, so it runs before payTombs raises it.
+ */
+function milestoneHit(g, was) {
+  const k = Math.floor(tombCount(g.sim) / MILESTONE);
+  if (k <= Math.floor(was / MILESTONE)) return null;
+  return { k, paid: (g.paid.get(coinKey(g.code, g.world.difficulty)) || 0) < k * MILESTONE };
+}
+
 function tick(g) {
   if (g.screen !== 'play') return;
   const was = tombCount(g.sim);
   stepSim(g);
   handleEvents(g);
-  const record = g.paid.get(coinKey(g.code, g.world.difficulty)) || 0;
+  const hit = milestoneHit(g, was);
   payTombs(g);
   soundCues(g);
   followCam(g.cam, g.sim);
-  const k = Math.floor(tombCount(g.sim) / MILESTONE);
   // A run that ends on the milestone's tick shows the end screen; the payout stands.
   if (g.sim.state === 'over') endRun(g);
-  else if (k > Math.floor(was / MILESTONE)) showSplash(g, k, record < k * MILESTONE);
+  else if (hit) showSplash(g, hit.k, hit.paid);
 }
 
 /** The best tomb the title shows: the shown seed's, at the setting. */
