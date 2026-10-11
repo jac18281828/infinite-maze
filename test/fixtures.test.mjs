@@ -63,6 +63,10 @@ test('every stair column is contiguous from its tread down to the row above its 
       for (let y = sup + 1; y <= top; y++) want.push(y);
       const got = [];
       for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(x, y)]) got.push(y);
+      // Each pixel's ROLE label: a tread on top, a riser face in a step's first column, else body.
+      for (const y of want) {
+        assert.equal(fx.stairs[px(x, y)], y === top ? ROLE.tread : t % 4 === 0 ? ROLE.riser : ROLE.body, `label at column ${t} row ${y - Y}`);
+      }
       assert.deepEqual(got, want, `column ${t} of the flight at (${X}, ${Y}) dir ${dir}`);
     }
   }

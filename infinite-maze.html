@@ -2785,7 +2785,7 @@ const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONC
 const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m6;
 const { BW, BH, DX, DY } = __m2;
 const { boardOfPos } = __m4;
-const { boardMask } = __m8;
+const { boardMask, MASK_W } = __m8;
 const { fixtureSets, dustMotes, maskRow, ROLE } = __m9;
 const { mapCells } = __m10;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
@@ -2960,9 +2960,9 @@ function createRenderer(canvas, world) {
     for (const { runs } of fx.flights) {
       for (const { x, top, bot } of runs) {
         for (let y = top; y >= bot;) {
-          const role = fx.stairs[maskRow(y) * BOARD_W + x];
+          const role = fx.stairs[maskRow(y) * MASK_W + x];
           let low = y;
-          while (low > bot && fx.stairs[maskRow(low - 1) * BOARD_W + x] === role) low--;
+          while (low > bot && fx.stairs[maskRow(low - 1) * MASK_W + x] === role) low--;
           g.fillStyle = pal(STAIR_COLOUR[role]);
           g.fillRect(x, toY(y + 1), 1, y - low + 1);
           y = low - 1;

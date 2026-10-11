@@ -7,7 +7,7 @@ import {
 import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
 import { BW, BH, DX, DY } from '../world/board.mjs';
 import { boardOfPos } from '../world/world.mjs';
-import { boardMask } from './mask.mjs';
+import { boardMask, MASK_W } from './mask.mjs';
 import { fixtureSets, dustMotes, maskRow, ROLE } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
 
@@ -173,9 +173,9 @@ export function createRenderer(canvas, world) {
     for (const { runs } of fx.flights) {
       for (const { x, top, bot } of runs) {
         for (let y = top; y >= bot;) {
-          const role = fx.stairs[maskRow(y) * BOARD_W + x];
+          const role = fx.stairs[maskRow(y) * MASK_W + x];
           let low = y;
-          while (low > bot && fx.stairs[maskRow(low - 1) * BOARD_W + x] === role) low--;
+          while (low > bot && fx.stairs[maskRow(low - 1) * MASK_W + x] === role) low--;
           g.fillStyle = pal(STAIR_COLOUR[role]);
           g.fillRect(x, toY(y + 1), 1, y - low + 1);
           y = low - 1;
