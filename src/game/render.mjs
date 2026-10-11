@@ -9,6 +9,7 @@ import { BW, BH, DX, DY } from '../world/board.mjs';
 import { signs, signSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { floorItems, itemSpot } from '../world/floor.mjs';
+import { windDir } from '../world/wind.mjs';
 import { coinId } from './wallet.mjs';
 import { boardMask, MASK_W } from './mask.mjs';
 import { fixtureSets, dustMotes, maskRow, signSpot, ROLE } from './fixtures.mjs';
@@ -23,6 +24,10 @@ const AMBIENT = [12, 9, 22];
 // Palette character of each stair role.
 const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 export const MAP_SCALE = 3;
+// Dust drift in a windy branch (spec section 8): world px/s, reached and
+// shed within a second, and the longest frame step the game loop allows.
+export const WIND_SPEED = 12;
+const MAX_FRAME_S = 0.25;
 
 /** CSS colour of palette character `ch`. */
 function pal(ch) {
@@ -92,6 +97,8 @@ export function createRenderer(canvas, world) {
   const lightImg = lightCtx.createImageData(LIGHT_W, LIGHT_H);
   const acc = new Float32Array(LIGHT_W * LIGHT_H * 3);
   const glyphCache = new Map();
+  // The dust lattice's offset and velocity in world px, and the last frame time.
+  const drift = { ox: 0, oy: 0, vx: 0, vy: 0, last: null };
 
   function buildBackground() {
     const size = 128;
@@ -394,11 +401,31 @@ export function createRenderer(canvas, world) {
     return tip;
   }
 
-  // Motes hang in the world and show only inside the torch radius.
+  /**
+   * Moves the dust offset by the wall time since the last frame, never
+   * backward and at most one game-loop frame. The velocity turns toward the
+   * wind of direction `d` (-1 for none) by at most WIND_SPEED per second.
+   */
+  function stepDrift(d, t) {
+    const dt = drift.last === null ? 0 : Math.min(MAX_FRAME_S, Math.max(0, t - drift.last));
+    drift.last = drift.last === null ? t : Math.max(drift.last, t);
+    const k = d < 0 ? 0 : WIND_SPEED / Math.hypot(DX[d], DY[d]);
+    let ex = (d < 0 ? 0 : DX[d] * k) - drift.vx, ey = (d < 0 ? 0 : DY[d] * k) - drift.vy;
+    const m = Math.hypot(ex, ey), cap = WIND_SPEED * dt;
+    if (m > cap) { ex *= cap / m; ey *= cap / m; }
+    drift.vx += ex;
+    drift.vy += ey;
+    drift.ox += drift.vx * dt;
+    drift.oy += drift.vy * dt;
+  }
+
+  // Motes hang in the world and show only inside the torch radius. One drift
+  // carries them all, set by the explorer's cell.
   function drawDust(sim, tip, t, sx, sy, unsx, unsy) {
+    stepDrift(windDir(world, sim.bd, sim.cell), t);
     const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
     const x0 = unsx(tip[0]), y0 = unsy(tip[1]);
-    for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, 0, 0)) {
+    for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, drift.ox, drift.oy)) {
       const x = sx(m.x), y = sy(m.y);
       const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
       if (a <= 0) continue;

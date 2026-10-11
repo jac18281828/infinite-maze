@@ -57,6 +57,9 @@ and no assets.
   screen shows the coins earned this run. The game keeps the wallet, one per
   device, and the coins taken and payout record, per seed and level, in
   `localStorage`. Nothing buys with coins yet.
+- In some dead ends, more often the longer ones, the dust drifts back toward the
+  way in while the explorer stands inside, a hint that the branch leads
+  nowhere.
 - Every 100 tombs a splash names an adventure rank and pays 100 × k coins once
   per seed and level; **Enter** or CONTINUE plays on, and **Q** or HOME goes to
   the title with the run open.

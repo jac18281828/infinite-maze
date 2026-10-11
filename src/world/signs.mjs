@@ -17,16 +17,16 @@ const ways = (m) => {
 };
 
 /**
- * The sign junctions of route board `bd` as { cell, dir }, ascending by
- * cell. A sign junction lies on the tree path from an in-cell to the
- * out-door's cell `o`, `o` excepted, with three or more ways out counting
- * links and doors. `dir` is the link from the cell toward `o`. A board that
- * is not a route board has none.
+ * The way on of route board `bd`: `o`, the out-door's cell; `toward[c]`, the
+ * link direction from cell c to the next cell of its path to `o`, -1 where
+ * none; and `on`, every cell on the tree path from an in-cell to `o`, `o`
+ * included. The in-cells are where routes enter: the cell of each door whose
+ * far board is a route board leading back through it, and the flame cell of a
+ * source board. A board that is not a route board has none.
  */
-export function junctions(world, bd) {
-  if (bd.kind !== 'route') return [];
+export function wayOn(world, bd) {
+  if (bd.kind !== 'route') return null;
   const o = bd.doors.find((d) => d.dir === bd.bDir).cell;
-  // toward[c]: link direction from c to the next cell on its path to o.
   const toward = new Int8Array(NCELL).fill(-1);
   const seen = new Uint8Array(NCELL);
   const queue = [o];
@@ -42,8 +42,6 @@ export function junctions(world, bd) {
       queue.push(n);
     }
   }
-  // In-cells: where routes enter, through a door whose far board leads back
-  // here or at the flame cell of a source board.
   const ins = [];
   if (bd.aDir < 0) ins.push(bd.a);
   for (const door of bd.doors) {
@@ -57,8 +55,22 @@ export function junctions(world, bd) {
       c = cellNeighbor(c, toward[c]);
     }
   }
+  on.add(o);
+  return { o, toward, on };
+}
+
+/**
+ * The sign junctions of route board `bd` as { cell, dir }, ascending by
+ * cell. A sign junction lies on the way on, `o` excepted, with three or more
+ * ways out counting links and doors. `dir` is the link from the cell toward
+ * `o`. A board that is not a route board has none.
+ */
+export function junctions(world, bd) {
+  const way = wayOn(world, bd);
+  if (!way) return [];
+  const { o, toward, on } = way;
   return [...on]
-    .filter((c) => ways(bd.links[c]) + ways(bd.doorMask[c]) >= 3)
+    .filter((c) => c !== o && ways(bd.links[c]) + ways(bd.doorMask[c]) >= 3)
     .sort((p, q) => p - q)
     .map((cell) => ({ cell, dir: toward[cell] }));
 }

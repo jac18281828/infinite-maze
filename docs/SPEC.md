@@ -109,6 +109,7 @@ the same world on every engine.
 | Corner of a sign | `H("sign", x, y, cell)` u32 bit 31 | left, right |
 | Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
 | Oil jar | `H("oil", x, y, cell)` u32 mod 100 < 10, 7, 5 or 4 | on a dead-end cell (§4) with no coin; 10 at EASY, 7 at MEDIUM, 5 at HARD, 4 at ULTIMATE |
+| Wind | `H("wind", x, y, cell)` u32 mod 64 at a branch's first cell | windy when under `min(n, 18)` for a branch of `n` cells (§4) |
 
 Both boards on a shared wall read the same door key, and both tombs on a
 shared tomb wall read the same crossing key, so door positions match across
@@ -301,6 +302,42 @@ percentage and no tag, and no pinned digest depends on either. On seed
 | MEDIUM | 6.35 | 5.0% | 6.9% |
 | HARD | 6.56 | 4.9% | 4.6% |
 | ULTIMATE | 6.59 | 4.8% | 3.9% |
+
+**Wind.** A route board's **way on** is every cell on the tree path from one of
+its in-cells to the out-door's cell `o`, `o` included, with the in-cells and
+`o` of the sign junctions above. A **dead-end branch** is what hangs off the
+way on through one link or door: the cell beyond that link or door, its
+**first cell**, and every carved cell reachable from it without entering the
+way on. The way-on cell it hangs from is its **junction**, the entrance. A
+branch includes every dead-end board behind a door in it, so a side passage and
+the dead-end rooms behind it are one branch. Every carved cell of a tree board
+lies on the way on or in exactly one branch. A branch's length `n` counts its
+carved cells, those holding a link or a door, across every board it spans.
+
+A branch is windy when `u32(H("wind", x, y, cell)) mod 64` is under
+`min(n, 18)`, where `(x, y, cell)` is its first cell, and no cell of it on its
+route board holds a flame of that board's flame set. The chance `n/64` reaches
+its cap of 18/64, 28%, at 18 cells. The flame rule keeps the 150 s gap rule
+whole: a chain flame can stand in a side passage, and a wrong way there could
+cost the torch. A dead-end board's own flame lies off every chain and exempts
+nothing, nor do coins or oil jars. The level enters neither the tag nor the
+threshold. Wind reads built boards and enters no board, band, digest or level.
+Half to two thirds of all branches are stubs of the level's branch target, 2
+cells at EASY and MEDIUM and 3 at HARD and ULTIMATE; the cap keeps most
+dead-end rooms still. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
+`v ∈ [0, 19]`:
+
+| Level | Branches | Windy | Branch cells | Windy cells | Reach a dead-end board | Other, 8+ cells | Under 8 cells |
+|---|---|---|---|---|---|---|---|
+| EASY | 1258 | 85 (6.8%) | 9385 | 1755 (18.7%) | 26/90 | 26/177 | 33/991 |
+| MEDIUM | 3757 | 227 (6.0%) | 25115 | 4880 (19.4%) | 63/206 | 36/306 | 128/3245 |
+| HARD | 6304 | 396 (6.3%) | 52901 | 7576 (14.3%) | 80/348 | 66/562 | 250/5394 |
+| ULTIMATE | 10250 | 717 (7.0%) | 78718 | 13417 (17.0%) | 131/497 | 132/936 | 454/8817 |
+
+The last three columns give windy branches over all branches of each class.
+A tomb holds 0.85, 2.27, 3.96 and 7.17 windy branches by level. Over
+`u ∈ [−5, 5]` by `v ∈ [0, 39]`, 5.7% to 7.2% of branches and 16.4% to 17.8% of
+branch cells are windy.
 
 ## 5. Save code
 
@@ -512,7 +549,13 @@ entry reached, and Continue resumes there with a full torch.
 sconces and the flames, composited multiplicatively over the scene. Hieroglyph walls scroll
 behind at 0.5× for depth. Dust motes hang in the world, never with the explorer
 or the camera, and show in torchlight: drawn inside the torch radius and
-fading toward its edge.
+fading toward its edge. While the explorer's cell lies in a windy branch (§4),
+all motes drift together at 12 px/s along the first link or door of the walk
+from that cell to the branch's junction. The drift velocity turns toward its target by at most 12 px/s
+each second, so the motes reach full speed or rest within a second, and a turn
+bends. It advances by the wall time between frames, at most 0.25 s a frame and
+never backward. The torch flame stays upright, and the dust hangs still on the
+way on and in a windless branch.
 
 **Stairs.** A stair draws as one solid flight in stone, flush with the lower
 floor and the upper floor. Over the cut air it fills each column from its

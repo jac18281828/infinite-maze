@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
-import { createSim, nodeXY } from '../src/game/sim.mjs';
+import { createSim, nodeXY, torchRadius } from '../src/game/sim.mjs';
 import { RGB, idx, SIGNS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
 import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import {
@@ -579,6 +579,131 @@ test('the renderer draws the motes of its world position, whatever the explorer 
       assert.ok(all.some((m) => Math.abs(m.x - wx) <= 0.51 && Math.abs(m.y - wy) <= 0.51), `mote at ${wx}, ${wy} is not in the world`);
     }
   }
+});
+
+// Wind: the dust drifts toward the entrance of a windy dead-end branch.
+// Board (1, 2)'s cell 33 is on the way on; the branch off it into cell 34 is
+// windy and spans two dead-end boards.
+const isMote = (f) => f[4].startsWith('rgba(255,226,170') && f[2] === 1 && f[3] === 1;
+
+function driftRenderer() {
+  const v = document.createElement('canvas');
+  v.width = 320;
+  v.height = 180;
+  return { v, r: createRenderer(v, world) };
+}
+
+/** Draws one frame; returns the torch tip and the mote pixels. */
+function frame({ v, r }, bd, cell, t) {
+  const sim = createSim(world, { board: bd, cell });
+  const [nx, ny] = nodeXY(bd, cell);
+  v.draws.length = 0;
+  v.fills.length = 0;
+  const tip = r.scene(sim, { x: nx, y: ny + 20 }, t);
+  return { tip, r: torchRadius(sim.burn), dots: v.fills.filter(isMote).map(([x, y]) => [x, y]) };
+}
+
+/**
+ * The shift that carries the motes of `still` onto those of `moved`, drawn at
+ * one time. It scans lengths along screen direction `dir`, keeps the one that
+ * matches the most motes lit well inside both torch discs, and averages the
+ * matched pairs' displacements. Returns the shift, the matched pairs and
+ * the motes inside both discs that match none.
+ */
+function shiftOf(still, moved, dir, maxLen) {
+  const inside = (p, f) => Math.hypot(p[0] - f.tip[0], p[1] - f.tip[1]) < 0.9 * f.r - 2;
+  const nearest = (dots, x, y) => dots.reduce((b, q) => (Math.hypot(q[0] - x, q[1] - y) < Math.hypot(b[0] - x, b[1] - y) ? q : b), [1e9, 1e9]);
+  const pairsAt = (len) => {
+    const sx = dir[0] * len, sy = dir[1] * len, out = [];
+    let lost = 0;
+    for (const p of still.dots) {
+      if (!inside(p, still) || !inside([p[0] + sx, p[1] + sy], moved)) continue;
+      const q = nearest(moved.dots, p[0] + sx, p[1] + sy);
+      if (Math.hypot(q[0] - p[0] - sx, q[1] - p[1] - sy) <= 1.5) out.push([p, q]); else lost++;
+    }
+    return { out, lost };
+  };
+  let best = -1, lens = [];
+  for (let len = 0; len <= maxLen; len += 0.25) {
+    const n = pairsAt(len).out.length;
+    if (n > best) { best = n; lens = []; }
+    if (n === best) lens.push(len);
+  }
+  const { out, lost } = pairsAt(lens.reduce((a, b) => a + b) / lens.length);
+  const dx = out.reduce((a, [p, q]) => a + q[0] - p[0], 0) / out.length;
+  const dy = out.reduce((a, [p, q]) => a + q[1] - p[1], 0) / out.length;
+  return { dx, dy, len: Math.hypot(dx, dy), pairs: out.length, lost, out };
+}
+
+const s2 = Math.SQRT1_2;
+const windBoard = world.board(1, 2);
+const WIND_CASES = [
+  // [board, cell, screen direction (y down) of the wind, label]
+  [windBoard, 34, [-1, 0], 'cell 34, west'],
+  [windBoard, 47, [0, 1], 'cell 47, down'],
+  [world.board(2, 2), 0, [0, -1], 'a dead-end board, up'],
+  [windBoard, 81, [s2, s2], 'a gallery cell, south-east'],
+];
+
+test('the dust drifts toward the branch entrance by 30 to 48 px after 4 s in a windy branch', (t) => {
+  for (const [bd, cell, dir, label] of WIND_CASES) {
+    const moving = driftRenderer(), fresh = driftRenderer();
+    let last;
+    for (let k = 0; k <= 16; k++) last = frame(moving, bd, cell, k * 0.25);
+    const still = frame(fresh, bd, cell, 4);
+    const m = shiftOf(still, last, dir, 80);
+    t.diagnostic(`${label}: shift ${m.dx.toFixed(2)}, ${m.dy.toFixed(2)} = ${m.len.toFixed(2)} px over ${m.pairs} motes`);
+    assert.ok(m.pairs >= 8 && m.lost === 0, `${label}: ${m.pairs} motes match, ${m.lost} do not`);
+    assert.ok(m.len >= 30 && m.len <= 48, `${label}: shift ${m.len}`);
+    assert.ok(Math.abs(m.dx * dir[1] - m.dy * dir[0]) < 0.5 && m.dx * dir[0] + m.dy * dir[1] > 0, `${label}: direction ${m.dx}, ${m.dy}`);
+    for (const [p, q] of m.out) assert.ok(Math.abs(q[0] - p[0] - m.dx) <= 1 && Math.abs(q[1] - p[1] - m.dy) <= 1, `${label}: a mote strays`);
+  }
+});
+
+test('the dust hangs still on the way on and in a windless branch', () => {
+  for (const [bd, cell] of [[windBoard, 33], [world.board(0, 0), 0]]) {
+    const moving = driftRenderer(), fresh = driftRenderer();
+    let last;
+    for (let k = 0; k <= 16; k++) last = frame(moving, bd, cell, k * 0.25);
+    const still = frame(fresh, bd, cell, 4);
+    assert.ok(still.dots.length > 10);
+    assert.deepEqual(last.dots, still.dots);
+  }
+});
+
+test('the drift eases in, rests within a second of leaving the branch, and takes one frame at most 0.25 s', (t) => {
+  const west = [-1, 0];
+  // The shift of renderer `R` against a new renderer drawing one frame, which has not drifted.
+  const shiftAt = (R, cell, t, maxLen) => shiftOf(frame(driftRenderer(), windBoard, cell, t), frame(R, windBoard, cell, t), west, maxLen);
+
+  const R = driftRenderer();
+  frame(R, windBoard, 34, 0);
+  frame(R, windBoard, 34, 0.25);
+  const eased = shiftAt(R, 34, 0.5, 12);
+  t.diagnostic(`shift after two 0.25 s frames: ${eased.len.toFixed(2)} px`);
+  assert.ok(eased.len > 0.5 && eased.len <= 2.5, `two frames shift ${eased.len}`);
+
+  for (let k = 3; k <= 16; k++) frame(R, windBoard, 34, k * 0.25);
+  // The explorer leaves the branch at 4 s; the drift rests within a second.
+  for (let k = 17; k < 21; k++) frame(R, windBoard, 33, k * 0.25);
+  const rest = [];
+  for (let k = 21; k <= 32; k++) rest.push(shiftAt(R, 33, k * 0.25, 80));
+  t.diagnostic(`rest shift ${rest[0].len.toFixed(2)} px, spread ${Math.max(...rest.map((m) => Math.hypot(m.dx - rest[0].dx, m.dy - rest[0].dy))).toFixed(2)} px`);
+  assert.ok(rest[0].len > 30, 'the motes keep the place they drifted to');
+  for (const m of rest) assert.ok(Math.abs(m.dx - rest[0].dx) <= 1 && Math.abs(m.dy - rest[0].dy) <= 1, 'the shift holds still');
+
+  const late = driftRenderer();
+  frame(late, windBoard, 34, 0);
+  const jump = shiftAt(late, 34, 60, 12);
+  t.diagnostic(`shift of a frame after 60 s: ${jump.len.toFixed(2)} px`);
+  assert.ok(jump.len > 0.2 && jump.len <= 3, `a frame after 60 s shifts ${jump.len}`);
+
+  // A frame dated earlier than the last moves nothing.
+  const back = driftRenderer();
+  for (let k = 0; k <= 12; k++) frame(back, windBoard, 34, k * 0.25);
+  const at3 = shiftAt(back, 34, 3, 80);
+  const before = shiftAt(back, 34, 2.5, 80);
+  assert.ok(Math.abs(at3.dx - before.dx) < 0.35 && Math.abs(at3.dy - before.dy) < 0.35, `${at3.dx} then ${before.dx}`);
 });
 
 // Floor coins and the wallet.

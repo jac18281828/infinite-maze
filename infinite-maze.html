@@ -3166,16 +3166,16 @@ const ways = (m) => {
 };
 
 /**
- * The sign junctions of route board `bd` as { cell, dir }, ascending by
- * cell. A sign junction lies on the tree path from an in-cell to the
- * out-door's cell `o`, `o` excepted, with three or more ways out counting
- * links and doors. `dir` is the link from the cell toward `o`. A board that
- * is not a route board has none.
+ * The way on of route board `bd`: `o`, the out-door's cell; `toward[c]`, the
+ * link direction from cell c to the next cell of its path to `o`, -1 where
+ * none; and `on`, every cell on the tree path from an in-cell to `o`, `o`
+ * included. The in-cells are where routes enter: the cell of each door whose
+ * far board is a route board leading back through it, and the flame cell of a
+ * source board. A board that is not a route board has none.
  */
-function junctions(world, bd) {
-  if (bd.kind !== 'route') return [];
+function wayOn(world, bd) {
+  if (bd.kind !== 'route') return null;
   const o = bd.doors.find((d) => d.dir === bd.bDir).cell;
-  // toward[c]: link direction from c to the next cell on its path to o.
   const toward = new Int8Array(NCELL).fill(-1);
   const seen = new Uint8Array(NCELL);
   const queue = [o];
@@ -3191,8 +3191,6 @@ function junctions(world, bd) {
       queue.push(n);
     }
   }
-  // In-cells: where routes enter, through a door whose far board leads back
-  // here or at the flame cell of a source board.
   const ins = [];
   if (bd.aDir < 0) ins.push(bd.a);
   for (const door of bd.doors) {
@@ -3206,8 +3204,22 @@ function junctions(world, bd) {
       c = cellNeighbor(c, toward[c]);
     }
   }
+  on.add(o);
+  return { o, toward, on };
+}
+
+/**
+ * The sign junctions of route board `bd` as { cell, dir }, ascending by
+ * cell. A sign junction lies on the way on, `o` excepted, with three or more
+ * ways out counting links and doors. `dir` is the link from the cell toward
+ * `o`. A board that is not a route board has none.
+ */
+function junctions(world, bd) {
+  const way = wayOn(world, bd);
+  if (!way) return [];
+  const { o, toward, on } = way;
   return [...on]
-    .filter((c) => ways(bd.links[c]) + ways(bd.doorMask[c]) >= 3)
+    .filter((c) => c !== o && ways(bd.links[c]) + ways(bd.doorMask[c]) >= 3)
     .sort((p, q) => p - q)
     .map((cell) => ({ cell, dir: toward[cell] }));
 }
@@ -3224,11 +3236,125 @@ function signs(world, bd) {
 function signSide(world, bd, cell) {
   return signHash(world, bd, cell) >>> 31;
 }
-return { SIGN_MOD, SIGN_THRESHOLD, junctions, signs, signSide };
+return { SIGN_MOD, SIGN_THRESHOLD, wayOn, junctions, signs, signSide };
+})();
+
+// src/world/wind.mjs
+const __m13 = (() => {
+const { NCELL } = __m2;
+const { BDX, BDY } = __m3;
+const { u32 } = __m1;
+const { wayOn } = __m12;
+// Wind (spec section 4): some dead-end branches of a route board are windy,
+// and the dust drifts toward such a branch's entrance. Wind derives from built
+// boards and the hash alone; it enters no board, band or digest.
+
+
+
+
+
+const WIND_MOD = 64;
+// A branch of n carved cells is windy when its hash mod WIND_MOD is under
+// min(n, WIND_CAP): the chance grows with length to 18/64 at 18 cells.
+const WIND_CAP = 18;
+
+const cache = new WeakMap();
+
+/** The route board whose way on `bd`'s branch hangs from, or null for a rock board. */
+function routeOf(world, bd) {
+  let b = bd;
+  while (b.kind === 'dead') b = world.board(b.x + BDX[b.aDir], b.y + BDY[b.aDir]);
+  return b.kind === 'route' ? b : null;
+}
+
+/**
+ * Branches of route board `bd` and, per board p, the direction toward the
+ * junction at each cell of its windy branches, -1 elsewhere. A branch is
+ * what hangs off the way on through one link or door: the cell beyond it and
+ * every carved cell reachable from there without entering the way on.
+ */
+function build(world, bd) {
+  const { on } = wayOn(world, bd);
+  const flames = new Set(world.flamesAt(bd.x, bd.y));
+  const isWay = (b, c) => (b === bd ? on.has(c) : b.kind === 'route' && wayOn(world, b).on.has(c));
+  const seen = new Map();
+  const wind = new Map();
+  const mark = (b) => {
+    let s = seen.get(b.p);
+    if (!s) { s = new Uint8Array(NCELL); seen.set(b.p, s); }
+    return s;
+  };
+  const branches = [];
+  for (const junction of [...on].sort((p, q) => p - q)) {
+    for (let dir = 0; dir < 8; dir++) {
+      const first = world.step(bd, junction, dir);
+      if (!first || isWay(first.board, first.cell)) continue;
+      // Each queued cell holds the direction back toward the junction.
+      const queue = [{ board: first.board, cell: first.cell, back: dir ^ 2 }];
+      mark(first.board)[first.cell] = 1;
+      let flame = false;
+      for (let h = 0; h < queue.length; h++) {
+        const q = queue[h];
+        if (q.board === bd && flames.has(q.cell)) flame = true;
+        for (let e = 0; e < 8; e++) {
+          const s = world.step(q.board, q.cell, e);
+          if (!s || isWay(s.board, s.cell)) continue;
+          const m = mark(s.board);
+          if (m[s.cell]) continue;
+          m[s.cell] = 1;
+          queue.push({ board: s.board, cell: s.cell, back: e ^ 2 });
+        }
+      }
+      const { x, y } = first.board;
+      const n = queue.length;
+      const windy = !flame && u32(world.H('wind', x, y, first.cell)) % WIND_MOD < Math.min(n, WIND_CAP);
+      if (windy) {
+        for (const q of queue) {
+          let w = wind.get(q.board.p);
+          if (!w) { w = new Int8Array(NCELL).fill(-1); wind.set(q.board.p, w); }
+          w[q.cell] = q.back;
+        }
+      }
+      branches.push({ junction, dir, x, y, cell: first.cell, n, windy });
+    }
+  }
+  return { branches, wind };
+}
+
+function info(world, bd) {
+  let r = cache.get(bd);
+  if (!r) { r = build(world, bd); cache.set(bd, r); }
+  return r;
+}
+
+/**
+ * The dead-end branches of route board `bd` as { junction, dir, x, y, cell,
+ * n, windy }, ascending by junction, then dir: `junction` is the way-on cell,
+ * `dir` the link or door from it into the branch, (x, y, cell) the branch's
+ * first cell, `n` its carved cells across every board it spans and `windy`
+ * the rule's verdict. A dead-end or rock board has none.
+ */
+function windBranches(world, bd) {
+  return bd.kind === 'route' ? info(world, bd).branches : [];
+}
+
+/**
+ * The link or door, 0..7, that leads from `cell` of board `bd` toward the
+ * junction of its windy branch, else -1: on the way on, in a windless branch
+ * and on a rock board. A dead-end board belongs to the branch its route
+ * board lists.
+ */
+function windDir(world, bd, cell) {
+  const route = routeOf(world, bd);
+  if (!route) return -1;
+  const w = info(world, route).wind.get(bd.p);
+  return w ? w[cell] : -1;
+}
+return { WIND_MOD, WIND_CAP, windBranches, windDir };
 })();
 
 // src/game/mask.mjs
-const __m13 = (() => {
+const __m14 = (() => {
 const { BW, NCELL } = __m2;
 // Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
 // opening joins exactly the cells of one tree link or door:
@@ -3293,9 +3419,9 @@ return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 })();
 
 // src/game/fixtures.mjs
-const __m14 = (() => {
+const __m15 = (() => {
 const { BW, NCELL } = __m2;
-const { boardMask, MASK_W, MASK_H, CELL_PX } = __m13;
+const { boardMask, MASK_W, MASK_H, CELL_PX } = __m14;
 const { LADDER, SCONCE, SIGNS, idx } = __m11;
 // Pixel geometry of a board's drawn fixtures and of the dust, DOM-free. Board
 // pixels, y up: X = col * 48, Y = row * 48. A north-east flight from cell c
@@ -3500,7 +3626,7 @@ return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, signSpot, sig
 })();
 
 // src/game/map.mjs
-const __m15 = (() => {
+const __m16 = (() => {
 const { BW, BH, NCELL } = __m2;
 const { tombOf } = __m5;
 // The pause-screen map: what the explorer's trail shows of one tomb. DOM-free.
@@ -3574,19 +3700,21 @@ return { mapCells, frameOf, panFrame, sameFrame, mapModel };
 })();
 
 // src/game/render.mjs
-const __m16 = (() => {
+const __m17 = (() => {
 const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS } = __m11;
 const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m10;
 const { BW, BH, DX, DY } = __m2;
 const { signs, signSide } = __m12;
 const { boardOfPos } = __m5;
 const { floorItems, itemSpot } = __m7;
+const { windDir } = __m13;
 const { coinId } = __m9;
-const { boardMask, MASK_W } = __m13;
-const { fixtureSets, dustMotes, maskRow, signSpot, ROLE } = __m14;
-const { mapCells } = __m15;
+const { boardMask, MASK_W } = __m14;
+const { fixtureSets, dustMotes, maskRow, signSpot, ROLE } = __m15;
+const { mapCells } = __m16;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
+
 
 
 
@@ -3607,6 +3735,10 @@ const AMBIENT = [12, 9, 22];
 // Palette character of each stair role.
 const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 const MAP_SCALE = 3;
+// Dust drift in a windy branch (spec section 8): world px/s, reached and
+// shed within a second, and the longest frame step the game loop allows.
+const WIND_SPEED = 12;
+const MAX_FRAME_S = 0.25;
 
 /** CSS colour of palette character `ch`. */
 function pal(ch) {
@@ -3676,6 +3808,8 @@ function createRenderer(canvas, world) {
   const lightImg = lightCtx.createImageData(LIGHT_W, LIGHT_H);
   const acc = new Float32Array(LIGHT_W * LIGHT_H * 3);
   const glyphCache = new Map();
+  // The dust lattice's offset and velocity in world px, and the last frame time.
+  const drift = { ox: 0, oy: 0, vx: 0, vy: 0, last: null };
 
   function buildBackground() {
     const size = 128;
@@ -3978,11 +4112,31 @@ function createRenderer(canvas, world) {
     return tip;
   }
 
-  // Motes hang in the world and show only inside the torch radius.
+  /**
+   * Moves the dust offset by the wall time since the last frame, never
+   * backward and at most one game-loop frame. The velocity turns toward the
+   * wind of direction `d` (-1 for none) by at most WIND_SPEED per second.
+   */
+  function stepDrift(d, t) {
+    const dt = drift.last === null ? 0 : Math.min(MAX_FRAME_S, Math.max(0, t - drift.last));
+    drift.last = drift.last === null ? t : Math.max(drift.last, t);
+    const k = d < 0 ? 0 : WIND_SPEED / Math.hypot(DX[d], DY[d]);
+    let ex = (d < 0 ? 0 : DX[d] * k) - drift.vx, ey = (d < 0 ? 0 : DY[d] * k) - drift.vy;
+    const m = Math.hypot(ex, ey), cap = WIND_SPEED * dt;
+    if (m > cap) { ex *= cap / m; ey *= cap / m; }
+    drift.vx += ex;
+    drift.vy += ey;
+    drift.ox += drift.vx * dt;
+    drift.oy += drift.vy * dt;
+  }
+
+  // Motes hang in the world and show only inside the torch radius. One drift
+  // carries them all, set by the explorer's cell.
   function drawDust(sim, tip, t, sx, sy, unsx, unsy) {
+    stepDrift(windDir(world, sim.bd, sim.cell), t);
     const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
     const x0 = unsx(tip[0]), y0 = unsy(tip[1]);
-    for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, 0, 0)) {
+    for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, drift.ox, drift.oy)) {
       const x = sx(m.x), y = sy(m.y);
       const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
       if (a <= 0) continue;
@@ -4068,11 +4222,11 @@ function createRenderer(canvas, world) {
 
   return { ctx, scene, hud, text, panel, prepare, drawMap };
 }
-return { VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas, createRenderer };
+return { VIEW_W, VIEW_H, MAP_SCALE, WIND_SPEED, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs
-const __m17 = (() => {
+const __m18 = (() => {
 
 // WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
@@ -4386,7 +4540,7 @@ return { createAudio };
 })();
 
 // src/game/autopilot.mjs
-const __m18 = (() => {
+const __m19 = (() => {
 const { DX, DY } = __m2;
 const { createSim, step, inputEdges } = __m10;
 // Scripted input for the self-test: walks the explorer along tomb (0, 0)'s
@@ -4493,9 +4647,9 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/touch.mjs
-const __m19 = (() => {
+const __m20 = (() => {
 const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m11;
-const { VIEW_W, VIEW_H } = __m16;
+const { VIEW_W, VIEW_H } = __m17;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
 // keydown and keyup KeyboardEvents on window, so the key handlers, the held
 // Up, the jump edge and the tap buffer serve touch unchanged.
@@ -5021,7 +5175,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, layout, nextTouchMode, touchAtBoot, padZone,
 })();
 
 // src/game/clipboard.mjs
-const __m20 = (() => {
+const __m21 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -5049,21 +5203,21 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m21 = (() => {
+const __m22 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m6;
 const { floorItems, itemSpot } = __m7;
 const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
-const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m16;
-const { createAudio } = __m17;
-const { runScript, createAutopilot, SELFTEST_CODE } = __m18;
+const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m17;
+const { createAudio } = __m18;
+const { runScript, createAutopilot, SELFTEST_CODE } = __m19;
 const { COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid } = __m9;
-const { createTouch, layout, viewport, difficultyLabel, PANEL_X, textWidth } = __m19;
+const { createTouch, layout, viewport, difficultyLabel, PANEL_X, textWidth } = __m20;
 const { MILESTONE, rankName } = __m8;
-const { copyWithStatus, saveLabel } = __m20;
-const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m15;
+const { copyWithStatus, saveLabel } = __m21;
+const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m16;
 const { RGB, idx } = __m11;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
 // milestone splash screens. `#selftest` in the URL runs the self-test instead.
