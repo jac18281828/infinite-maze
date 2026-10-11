@@ -8,6 +8,8 @@ import { DIFFICULTY, BDX, BDY, buildTombTree } from './band.mjs';
 import { createFlow, TDX, TDY } from './flow.mjs';
 
 export const GAP_LIMIT_MS = 150000;
+// A route or dead-end flame stands more than this walk from every kept flame.
+export const SPACING_MS = 20000;
 // Room parameters per level (spec sections 3 and 4): the carve count, the
 // path, junction and side-branch targets, and the dead-end depth in boards.
 export const ROOMS = {
@@ -301,12 +303,37 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
   }
 
   /**
-   * Flames tomb (u, v) places and one chain per entry. Entries and every
-   * third board along each route burn at their flame cells; half the dead
-   * ends burn at their deepest cells. Each entry's chain runs from its flame
-   * along its way on to the downstream entry's flame, taking the flames on
-   * its boards that the routes and earlier chains placed, and gains a
-   * midpoint flame in every gap over the limit.
+   * True when a cell within SPACING_MS of walking from (bd, cell) holds a
+   * flame in `kept` (keys `x,y,cell`) or is the flame cell of an entry board
+   * of any tomb. The cell graph is a tree, so a walk that never turns back
+   * to the cell it came from measures every distance exactly.
+   */
+  function flameNear(bd, cell, kept) {
+    const stack = [{ bd, cell, from: null, ms: 0 }];
+    while (stack.length) {
+      const { bd: b, cell: c, from, ms } = stack.pop();
+      if (kept.has(`${b.x},${b.y},${c}`)) return true;
+      if (b.entry && c === flameCell(H, b.x, b.y)) return true;
+      for (let d = 0; d < 8; d++) {
+        const n = step(b, c, d);
+        if (!n || (from && n.board === from.bd && n.cell === from.cell)) continue;
+        const t = ms + COST[d];
+        if (t <= SPACING_MS) stack.push({ bd: n.board, cell: n.cell, from: { bd: b, cell: c }, ms: t });
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Flames tomb (u, v) places and one chain per entry. Entries always burn at
+   * their flame cells. A route candidate (every third board along each route,
+   * by route then index) and then a dead-end candidate (half the dead ends,
+   * at their deepest cells, by board) burns unless it stands within
+   * SPACING_MS of walking from a flame the tomb keeps or from an entry
+   * board's flame cell. Each entry's chain runs from its flame along its way
+   * on to the downstream entry's flame, taking the flames on its boards that
+   * the routes and earlier chains placed, and gains a midpoint flame in
+   * every gap over the limit.
    */
   function tombFlames(u, v) {
     const k = tkey(u, v);
@@ -314,17 +341,31 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
     if (fs) return fs;
     const t = tomb(u, v);
     const placed = [];
+    const kept = new Set();
+    const keep = (bd, cell, kind) => {
+      placed.push({ x: bd.x, y: bd.y, cell, kind });
+      kept.add(`${bd.x},${bd.y},${cell}`);
+    };
     for (let i = 0; i < t.depth.length; i++) {
-      if (t.depth[i] < 0) continue;
-      const bd = boardAt(t, i);
-      if (t.routeIndex[i] >= 0) {
-        const entry = t.entries.includes(i);
-        if (entry || t.routeIndex[i] % 3 === 0) {
-          placed.push({ x: bd.x, y: bd.y, cell: flameCell(H, bd.x, bd.y), kind: entry ? 'entry' : 'route' });
-        }
-      } else if (H('flame', bd.x, bd.y)[0] < 128) {
-        placed.push({ x: bd.x, y: bd.y, cell: bd.b, kind: 'dead' });
+      if (t.entries.includes(i)) {
+        const bd = boardAt(t, i);
+        keep(bd, flameCell(H, bd.x, bd.y), 'entry');
       }
+    }
+    const candidates = [];
+    for (const route of t.routes) {
+      route.forEach((i, j) => {
+        if (j % 3 === 0 && !t.entries.includes(i)) candidates.push({ bd: boardAt(t, i), kind: 'route' });
+      });
+    }
+    for (let i = 0; i < t.depth.length; i++) {
+      if (t.depth[i] <= 0) continue;
+      const bd = boardAt(t, i);
+      if (H('flame', bd.x, bd.y)[0] < 128) candidates.push({ bd, kind: 'dead' });
+    }
+    for (const { bd, kind } of candidates) {
+      const cell = kind === 'route' ? flameCell(H, bd.x, bd.y) : bd.b;
+      if (!flameNear(bd, cell, kept)) keep(bd, cell, kind);
     }
     const chains = [], gaps = [], added = [];
     t.entries.forEach((_, j) => {

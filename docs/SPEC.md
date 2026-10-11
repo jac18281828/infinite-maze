@@ -103,7 +103,7 @@ the same world on every engine.
 | Side door between `(x,y)` and `(x+1,y)` | `H("hdoor", x, y)` u32 mod 5 + 1 | cell row `[1, 5]` |
 | Floor door between `(x,y)` and `(x,y+1)` | `H("vdoor", x, y)` u32 mod 10 + 1 | cell column `[1, 10]` |
 | Board cell maze | sfc32 of `H("board", x, y, k)`, k = reroll | — |
-| Flame in a dead-end board | `H("flame", x, y)` byte 0 < 128 | 50% |
+| Dead-end flame candidate | `H("flame", x, y)` byte 0 < 128 makes a dead-end board a candidate, which §3 may drop | 50% |
 | Flame cell | `H("flame", x, y)` u32 at bytes 4–7 mod 84 | any of the 84 cells |
 | Pointer at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 1024 | tier-1 skeleton when under `t`, tier-2 skeleton when in `[t, 2t)`, arrow when in `[2t, 2t + a)`, with `t` 94 (EASY), 30 (MEDIUM), 17 (HARD) or 11 (ULTIMATE) and `a` 85, 64, 43 or 32; a candidate within one cell of a pointer already standing gives way, tier 1 first, then arrows, then tier 2, each by cell |
 | Corner of an arrow | `H("sign", x, y, cell)` u32 bit 31 | upper left, upper right |
@@ -152,10 +152,19 @@ holds the exit door.
 6. **Flames.** Every `E_j` and `S` holds a flame at its flame cell, an `E_j`
    already on the trunk included. Number each route's boards from 0 at its
    entry: the trunk from `E_1` or `S`, a tributary from its `E_j`. Every
-   route board whose index is a multiple of 3 holds a flame at its flame
-   cell. Half the dead-end boards get a flame at their deepest cell. Then,
-   for each entry in order, the generator walks that entry's chain: from its
-   flame along the cell path through its route, the trunk from the
+   route board that is not an entry and whose index is a multiple of 3 is a
+   route candidate at its flame cell; half the dead-end boards are
+   dead-end candidates at their deepest cell. Entries always burn. Then the
+   generator keeps the route candidates, by route in tomb order and by
+   ascending index within it, and then the dead-end candidates by board
+   index, each unless it stands within 20 s of walking, at the §6 speeds,
+   of a flame already kept or of the flame cell of any entry board of any
+   tomb: the walk follows the cell tree through doors and across board
+   seams and tomb walls. A route or dead-end flame therefore stands more
+   than 20 s' walk from every entry flame and from every other flame its
+   tomb keeps; a dropped candidate burns nowhere, and gap flames are exempt.
+   Then, for each entry in order, the generator walks that entry's chain:
+   from its flame along the cell path through its route, the trunk from the
    confluence, and across the exit wall to the downstream tomb's entry board
    there, whose flame always burns. The chain holds the flames on those
    boards that the routes and earlier chains placed, in the order the walk
@@ -343,9 +352,9 @@ percentage and no tag, and no pinned digest depends on either. On seed
 
 | Level | Dead-end cells per tree board | Coin | Jar |
 |---|---|---|---|
-| EASY | 4.55 | 6.0% | 9.2% |
-| MEDIUM | 6.35 | 5.0% | 6.9% |
-| HARD | 6.56 | 4.9% | 4.6% |
+| EASY | 4.58 | 6.0% | 9.2% |
+| MEDIUM | 6.36 | 5.0% | 6.9% |
+| HARD | 6.57 | 4.9% | 4.6% |
 | ULTIMATE | 6.59 | 4.8% | 3.9% |
 
 **Wind.** A route board's **way on** is every cell on the tree path from one of
@@ -374,14 +383,14 @@ dead-end rooms still. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
 
 | Level | Branches | Windy | Branch cells | Windy cells | Reach a dead-end board | Other, 8+ cells | Under 8 cells |
 |---|---|---|---|---|---|---|---|
-| EASY | 1258 | 85 (6.8%) | 9385 | 1755 (18.7%) | 26/90 | 26/177 | 33/991 |
-| MEDIUM | 3757 | 227 (6.0%) | 25115 | 4880 (19.4%) | 63/206 | 36/306 | 128/3245 |
-| HARD | 6304 | 396 (6.3%) | 52901 | 7576 (14.3%) | 80/348 | 66/562 | 250/5394 |
+| EASY | 1258 | 87 (6.9%) | 9385 | 1784 (19.0%) | 26/90 | 28/177 | 33/991 |
+| MEDIUM | 3757 | 228 (6.1%) | 25115 | 4993 (19.9%) | 64/206 | 36/306 | 128/3245 |
+| HARD | 6304 | 399 (6.3%) | 52901 | 7594 (14.4%) | 80/348 | 66/562 | 253/5394 |
 | ULTIMATE | 10250 | 717 (7.0%) | 78718 | 13417 (17.0%) | 131/497 | 132/936 | 454/8817 |
 
 The last three columns give windy branches over all branches of each class.
-A tomb holds 0.85, 2.27, 3.96 and 7.17 windy branches by level. Over
-`u ∈ [−5, 5]` by `v ∈ [0, 39]`, 5.7% to 7.2% of branches and 16.4% to 17.8% of
+A tomb holds 0.87, 2.28, 3.99 and 7.17 windy branches by level. Over
+`u ∈ [−5, 5]` by `v ∈ [0, 39]`, 5.7% to 7.3% of branches and 16.4% to 17.9% of
 branch cells are windy.
 
 ## 5. Save code

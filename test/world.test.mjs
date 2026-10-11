@@ -15,10 +15,10 @@ import {
 
 // Pinned digests of tombs u in [-2, 2], v in [0, 19] for seed code 0000-0000.
 const DIGESTS = {
-  easy: 'c9538458fc19a80ae5916226bd318745ca219316cba5fa6e57a7507e0eb0ffe5',
-  medium: '82fc773e6be71470860f801aac466600b553ebbe0cc3f4c76fd8aa239ea875ab',
-  hard: 'd1ccd45db1a2f026aceea254241a64cd36b41420e76f73411d9f3606a1024cbd',
-  ultimate: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
+  easy: 'f513618db7cc689234a6c1e9443debcf1b8bd9225b6d16cb9d4b240303001381',
+  medium: '287bb293641a9a36280a8afe05918a0f1f53de67bc511ba0ad2569d9d9830049',
+  hard: '53b8582e503a203b7d9de0eb28198ba192e75de773357b3c5d00b4f40331fc93',
+  ultimate: '91801ad980eddd92b08379f4e895fba9abc1d0c89f8f39b8fb89d31f77d83b5d',
 };
 // Each level's dead-end depth and path target, restated apart from the generator.
 const DEPTH = { easy: 1, medium: 2, hard: 2, ultimate: 2 };

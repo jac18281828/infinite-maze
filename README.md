@@ -60,7 +60,9 @@ and no assets.
   150 s and 140 s; a flame or a jar that lifts the torch to half or above hides
   it. A junction holds at most one pointer, and all are always on.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
-  150 s between flames.
+  150 s between flames. A route or dead-end flame stands more than 20 s' walk
+  from every entry flame and from every other flame its tomb keeps; gap
+  flames are exempt.
 - Coins lie on the floors of dead ends, about one dead end in twenty. Touch one
   to take it. Each tomb pays once on this device, the first time a run solves
   it: 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE. A replay pays
