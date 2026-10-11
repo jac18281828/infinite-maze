@@ -801,6 +801,42 @@ scrolls, zooms or selects.
   prompt takes a pasted save code.
 - **Audio.** Any `pointerup` starts audio.
 
+**Controller.** A gamepad whose `mapping` is `'standard'` plays through the
+keyboard's own events, as touch does; the game ignores every other gamepad.
+Once per animation frame, before the ticks, the game reads
+`navigator.getGamepads()` and dispatches the keys due as `keydown` and `keyup`
+events on `window`, with `repeat` false:
+
+| Source | Key |
+|---|---|
+| d-pad (buttons 12 to 15) | ArrowUp, ArrowDown, ArrowLeft, ArrowRight |
+| left stick, axis 0 at -0.5 or less, 0.5 or more | ArrowLeft, ArrowRight |
+| left stick, axis 1 at -0.5 or less, 0.5 or more (down positive) | ArrowUp, ArrowDown |
+| A or cross (button 0) | Space |
+| B or circle (button 1) | Enter |
+| Select or Back (button 8) | Q |
+| Start (button 9) | P |
+
+A key sends one `keydown` when its first source presses and one `keyup` when
+its last lets go, and never a repeat. A stick axis holds its arrow from 0.5
+until it is back inside 0.4, so a stick at the threshold does not chatter, and
+a diagonal push holds two arrows. Sources merge: a key stays down while any
+d-pad button, stick or other gamepad holds it, and a gamepad that leaves the
+list releases what it held. A gamepad is its index in the list, so a browser
+that returns fresh snapshots on every call reads as one steady gamepad. The
+right stick, the triggers, the other buttons, rumble and remapping are absent.
+
+Touch mode stays as it is: the events are untrusted, so a controller neither
+turns touch mode off nor hides a touch control. Start acts as P does: it
+pauses in play, resumes from pause and resumes the open run or save on the
+title; the end screen and the splash ignore it. Select acts as Q does: it goes
+to the title from pause and from the splash with the run left open, and from
+the end screen; play and the title ignore it. A on the splash does nothing, as
+Space does nothing there, so B, which sends Enter and never jumps, is a
+controller's way on. During code entry Start and Select type P and Q and B
+submits. Gamepad input grants a browser no user activation, so audio may stay
+silent until the first key, click or touch.
+
 ## 10. Acceptance
 
 A headless test harness, run with `node`, checks the generator against the

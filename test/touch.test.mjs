@@ -439,7 +439,7 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty, pause-key, coin, splash, oil, pad-side and fire rule broken.
+// zoom guard dropped and each difficulty, pause-key, coin, splash, oil, pad-side, fire and gamepad rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -456,7 +456,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, splash, oil, pad-side or fire rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, splash, oil, pad-side, fire or gamepad rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -469,7 +469,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     const zoomable = html.replace('stopDoubleTapZoom();', '');
     assert.equal(html.split('stopDoubleTapZoom();').length, 2);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
-    // Each difficulty, pause-key, coin, splash, oil, pad-side and fire rule broken in turn: [from, to, the leg's first miss].
+    // Each difficulty, pause-key, coin, splash, oil, pad-side, fire and gamepad rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
@@ -507,6 +507,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['store(KEY_PAD, g.side);', 'void g;', /^fail: touch PAD stores the side and mirrors the layout/],
       ['tap(SPACE.code, SPACE.key);', "tap('KeyX', 'x');", /^fail: touch FIRE jumps/],
       ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch the title ignores an auto-repeated H/],
+      ['for (const o of gamepad.poll()) {', 'for (const o of []) {', /^fail: touch gamepad d-pad left holds Left/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

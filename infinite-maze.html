@@ -4769,8 +4769,101 @@ function runScript(world, ticks = SELFTEST_TICKS, options = {}) {
 return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
-// src/game/touch.mjs
+// src/game/gamepad.mjs
 const __m22 = (() => {
+
+// Controller layer. A standard-mapped gamepad's buttons and left stick become
+// the keyboard's own key events, so the key handlers serve a controller
+// unchanged. Pure: it reads a gamepad list and returns events, and imports
+// without a DOM.
+
+/** The left stick holds an arrow once past STICK_ON and keeps it until back inside STICK_OFF. */
+const STICK_ON = 0.5;
+const STICK_OFF = 0.4;
+
+// The keys a controller sends, in the order a poll reports them.
+const KEYS = [
+  { code: 'ArrowLeft', key: 'ArrowLeft' }, { code: 'ArrowRight', key: 'ArrowRight' },
+  { code: 'ArrowUp', key: 'ArrowUp' }, { code: 'ArrowDown', key: 'ArrowDown' },
+  { code: 'Space', key: ' ' }, { code: 'Enter', key: 'Enter' },
+  { code: 'KeyP', key: 'p' }, { code: 'KeyQ', key: 'q' },
+];
+
+// Standard-mapping button index to key code.
+const BUTTONS = {
+  0: 'Space', 1: 'Enter', 8: 'KeyQ', 9: 'KeyP',
+  12: 'ArrowUp', 13: 'ArrowDown', 14: 'ArrowLeft', 15: 'ArrowRight',
+};
+
+// The stick axes: [axis, key for the negative side, key for the positive side].
+// Axis 1 is positive down.
+const AXES = [[0, 'ArrowLeft', 'ArrowRight'], [1, 'ArrowUp', 'ArrowDown']];
+
+/** The side (-1, 0 or 1) an axis value holds, given the side it held before. */
+function stickSide(value, was) {
+  if (value <= -STICK_ON) return -1;
+  if (value >= STICK_ON) return 1;
+  if (was === -1 && value <= -STICK_OFF) return -1;
+  if (was === 1 && value >= STICK_OFF) return 1;
+  return 0;
+}
+
+/**
+ * Tracks the gamepads `getGamepads()` lists. Each `poll()` returns the key
+ * events due, as { type: 'keydown' | 'keyup', code, key }. A key goes down when
+ * its first source presses and up when its last lets go, and never repeats.
+ * Only standard-mapped gamepads count, each by its index in the list.
+ */
+function createGamepad(getGamepads) {
+  // Index in the list to { codes: the key codes it holds, sides: its stick's sides }.
+  let pads = new Map();
+
+  function read() {
+    try {
+      return Array.from(getGamepads() || []);
+    } catch {
+      return [];
+    }
+  }
+
+  function look(pad, was) {
+    const codes = new Set();
+    const buttons = pad.buttons || [];
+    for (const [i, code] of Object.entries(BUTTONS)) {
+      if (buttons[i] && buttons[i].pressed) codes.add(code);
+    }
+    const sides = [0, 0];
+    const axes = pad.axes || [];
+    AXES.forEach(([axis, neg, pos], n) => {
+      sides[n] = stickSide(axes[axis], was ? was.sides[n] : 0);
+      if (sides[n] < 0) codes.add(neg);
+      if (sides[n] > 0) codes.add(pos);
+    });
+    return { codes, sides };
+  }
+
+  const union = (map) => new Set([...map.values()].flatMap((p) => [...p.codes]));
+
+  return {
+    poll() {
+      const next = new Map();
+      read().forEach((pad, index) => {
+        if (pad && pad.mapping === 'standard') next.set(index, look(pad, pads.get(index)));
+      });
+      const before = union(pads), after = union(next);
+      pads = next;
+      return [
+        ...KEYS.filter((k) => before.has(k.code) && !after.has(k.code)).map((k) => ({ type: 'keyup', ...k })),
+        ...KEYS.filter((k) => after.has(k.code) && !before.has(k.code)).map((k) => ({ type: 'keydown', ...k })),
+      ];
+    },
+  };
+}
+return { STICK_ON, STICK_OFF, createGamepad };
+})();
+
+// src/game/touch.mjs
+const __m23 = (() => {
 const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m11;
 const { VIEW_W, VIEW_H } = __m17;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
@@ -5431,7 +5524,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, layout, padSide, titleF
 })();
 
 // src/game/clipboard.mjs
-const __m23 = (() => {
+const __m24 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -5459,7 +5552,7 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m24 = (() => {
+const __m25 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
@@ -5472,13 +5565,15 @@ const { createProbe } = __m19;
 const { advance, snapshot, blend } = __m20;
 const { runScript, createAutopilot, SELFTEST_CODE } = __m21;
 const { COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid } = __m9;
-const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m22;
+const { createGamepad } = __m22;
+const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m23;
 const { MILESTONE, rankName } = __m8;
-const { copyWithStatus, saveLabel } = __m23;
+const { copyWithStatus, saveLabel } = __m24;
 const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m16;
 const { RGB, PALETTE, idx } = __m11;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
 // milestone splash screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -5680,20 +5775,32 @@ function touchLeg() {
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
+  // A standard gamepad whose pressed buttons the leg sets. Each call returns fresh
+  // objects and throws unless called as a method of navigator, as a browser's does.
+  const fake = { held: new Set() };
+  Object.defineProperty(navigator, 'getGamepads', {
+    value() {
+      if (this !== navigator) throw new TypeError('Illegal invocation');
+      return [{ mapping: 'standard', buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: fake.held.has(i) })), axes: [0, 0, 0, 0] }];
+    },
+    configurable: true,
+  });
   try {
-    driveTouch(copied);
+    driveTouch(copied, fake);
   } finally {
     delete navigator.clipboard;
+    delete navigator.getGamepads;
     for (const [k, v] of kept) {
       if (v === null) unstore(k); else store(k, v);
     }
   }
   if (kept.some(([k, v]) => load(k) !== v)) throw new Error('touch storage restored');
   if (Object.getOwnPropertyDescriptor(navigator, 'clipboard')) throw new Error('touch clipboard restored');
+  if (Object.getOwnPropertyDescriptor(navigator, 'getGamepads')) throw new Error('touch getGamepads restored');
 }
 
-/** `copied` records each clipboard write; writeText runs within the click. */
-function driveTouch(copied) {
+/** `copied` records each clipboard write; writeText runs within the click. `fake.held` holds the fake gamepad's pressed buttons. */
+function driveTouch(copied, fake) {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
   // Boot reads the player's setting; with none stored, a new player starts at MEDIUM.
   unstore(KEY_DIFFICULTY);
@@ -5948,6 +6055,7 @@ function driveTouch(copied) {
   coinLeg(g, { need, click });
   splashLeg(g, { need, click, press });
   oilLeg(g, { need, click });
+  gamepadLeg(g, { need, click, fake });
 
   // Leave the self-test script's run paused on screen for the screenshot,
   // in the 6x4 world the script was written for.
@@ -6195,6 +6303,64 @@ function oilLeg(g, { need, click }) {
   const two = take(jars[1], 280);
   need(two.delta !== null && near(two.after, BURN_S - TICK), 'touching the second oil jar at 280 s caps the burn at full');
   draw(g, 0);
+}
+
+/**
+ * The gamepad steps of the touch leg, from the title with no run open. Each
+ * button change polls the fake gamepad, as the frame loop does.
+ */
+function gamepadLeg(g, { need, click, fake }) {
+  const hold = (...buttons) => {
+    fake.held = new Set(buttons);
+    pollGamepads();
+  };
+  const A = 0, B = 1, SELECT = 8, START = 9, LEFT = 14;
+  setDifficulty(g, 'medium');
+  useCode(g, SELFTEST_CODE);
+  g.screen = 'title';
+  draw(g, 0);
+  click('title', 'begin');
+  const run = g.sim;
+
+  g.press = 0;
+  hold(LEFT);
+  need(g.keys.has('l') && (g.press & KEY.L) !== 0, 'gamepad d-pad left holds Left');
+  hold();
+  need(!g.keys.has('l'), 'gamepad d-pad left holds Left');
+  g.press = 0;
+  g.release = 0;
+
+  g.jump = false;
+  hold(A);
+  need(g.jump, 'gamepad A jumps');
+  hold();
+  g.jump = false;
+
+  hold(START);
+  const paused = g.screen === 'pause';
+  hold();
+  hold(START);
+  need(paused && g.screen === 'play' && g.sim === run, 'gamepad Start pauses and resumes');
+  hold();
+
+  hold(START);
+  hold();
+  hold(SELECT);
+  need(g.screen === 'title' && g.open !== null && g.open.sim === run, 'gamepad Select reaches the title from pause');
+  hold();
+
+  draw(g, 0);
+  click('title', 'resume');
+  showSplash(g, 1, false);
+  hold(A);
+  const kept = g.screen === 'splash';
+  hold();
+  hold(B);
+  need(kept && g.screen === 'play', 'gamepad A leaves the splash showing and B continues');
+  hold();
+  g.press = 0;
+  g.release = 0;
+  g.jump = false;
 }
 
 /** The coin steps of the touch leg, from the title with no run open. */
@@ -6924,6 +7090,16 @@ function draw(g, t, alpha = 1) {
   return drawn;
 }
 
+// The standard-mapped gamepads, read through navigator at poll time.
+const gamepad = createGamepad(() => navigator.getGamepads());
+
+/** Sends the key events the gamepads have due, as the keyboard would. */
+function pollGamepads() {
+  for (const o of gamepad.poll()) {
+    window.dispatchEvent(new KeyboardEvent(o.type, { code: o.code, key: o.key, repeat: false, bubbles: true, cancelable: true }));
+  }
+}
+
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
   if (location.hash === '#perf') probe = createProbe();
@@ -6931,6 +7107,7 @@ function runLoop(g) {
   function frame(now) {
     const interval = now - last;
     last = now;
+    pollGamepads();
     const spent = advance(acc, interval / 1000);
     acc = spent.acc;
     for (let i = 0; i < spent.ticks; i++) tick(g);

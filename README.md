@@ -35,7 +35,13 @@ and no assets.
   pasted save code), the difficulty, COPY, SOUND, PAD (swaps the d-pad and
   the fire button), PAUSE, CONTINUE, HOME and TITLE. Pressing a key
   switches back to the keyboard layout; `#touch` on the URL forces touch on a
-  desktop. The pause map shows the explorer's tomb; panning needs a keyboard.
+  desktop. The pause map shows the explorer's tomb; panning needs a keyboard
+  or controller.
+- **Controller.** A standard-mapped gamepad plays with no setup: press a
+  button so the browser sees it. The d-pad or left stick moves and pans the
+  pause map; **A** jumps and begins; **B** confirms and continues past the
+  milestone splash; **Start** pauses and resumes; **Select** goes to the
+  title.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends. Oil jars lie on dead ends,

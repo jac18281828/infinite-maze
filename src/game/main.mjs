@@ -16,6 +16,7 @@ import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
   COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
 } from './wallet.mjs';
+import { createGamepad } from './gamepad.mjs';
 import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
@@ -205,20 +206,32 @@ function touchLeg() {
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
+  // A standard gamepad whose pressed buttons the leg sets. Each call returns fresh
+  // objects and throws unless called as a method of navigator, as a browser's does.
+  const fake = { held: new Set() };
+  Object.defineProperty(navigator, 'getGamepads', {
+    value() {
+      if (this !== navigator) throw new TypeError('Illegal invocation');
+      return [{ mapping: 'standard', buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: fake.held.has(i) })), axes: [0, 0, 0, 0] }];
+    },
+    configurable: true,
+  });
   try {
-    driveTouch(copied);
+    driveTouch(copied, fake);
   } finally {
     delete navigator.clipboard;
+    delete navigator.getGamepads;
     for (const [k, v] of kept) {
       if (v === null) unstore(k); else store(k, v);
     }
   }
   if (kept.some(([k, v]) => load(k) !== v)) throw new Error('touch storage restored');
   if (Object.getOwnPropertyDescriptor(navigator, 'clipboard')) throw new Error('touch clipboard restored');
+  if (Object.getOwnPropertyDescriptor(navigator, 'getGamepads')) throw new Error('touch getGamepads restored');
 }
 
-/** `copied` records each clipboard write; writeText runs within the click. */
-function driveTouch(copied) {
+/** `copied` records each clipboard write; writeText runs within the click. `fake.held` holds the fake gamepad's pressed buttons. */
+function driveTouch(copied, fake) {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
   // Boot reads the player's setting; with none stored, a new player starts at MEDIUM.
   unstore(KEY_DIFFICULTY);
@@ -473,6 +486,7 @@ function driveTouch(copied) {
   coinLeg(g, { need, click });
   splashLeg(g, { need, click, press });
   oilLeg(g, { need, click });
+  gamepadLeg(g, { need, click, fake });
 
   // Leave the self-test script's run paused on screen for the screenshot,
   // in the 6x4 world the script was written for.
@@ -720,6 +734,64 @@ function oilLeg(g, { need, click }) {
   const two = take(jars[1], 280);
   need(two.delta !== null && near(two.after, BURN_S - TICK), 'touching the second oil jar at 280 s caps the burn at full');
   draw(g, 0);
+}
+
+/**
+ * The gamepad steps of the touch leg, from the title with no run open. Each
+ * button change polls the fake gamepad, as the frame loop does.
+ */
+function gamepadLeg(g, { need, click, fake }) {
+  const hold = (...buttons) => {
+    fake.held = new Set(buttons);
+    pollGamepads();
+  };
+  const A = 0, B = 1, SELECT = 8, START = 9, LEFT = 14;
+  setDifficulty(g, 'medium');
+  useCode(g, SELFTEST_CODE);
+  g.screen = 'title';
+  draw(g, 0);
+  click('title', 'begin');
+  const run = g.sim;
+
+  g.press = 0;
+  hold(LEFT);
+  need(g.keys.has('l') && (g.press & KEY.L) !== 0, 'gamepad d-pad left holds Left');
+  hold();
+  need(!g.keys.has('l'), 'gamepad d-pad left holds Left');
+  g.press = 0;
+  g.release = 0;
+
+  g.jump = false;
+  hold(A);
+  need(g.jump, 'gamepad A jumps');
+  hold();
+  g.jump = false;
+
+  hold(START);
+  const paused = g.screen === 'pause';
+  hold();
+  hold(START);
+  need(paused && g.screen === 'play' && g.sim === run, 'gamepad Start pauses and resumes');
+  hold();
+
+  hold(START);
+  hold();
+  hold(SELECT);
+  need(g.screen === 'title' && g.open !== null && g.open.sim === run, 'gamepad Select reaches the title from pause');
+  hold();
+
+  draw(g, 0);
+  click('title', 'resume');
+  showSplash(g, 1, false);
+  hold(A);
+  const kept = g.screen === 'splash';
+  hold();
+  hold(B);
+  need(kept && g.screen === 'play', 'gamepad A leaves the splash showing and B continues');
+  hold();
+  g.press = 0;
+  g.release = 0;
+  g.jump = false;
 }
 
 /** The coin steps of the touch leg, from the title with no run open. */
@@ -1449,6 +1521,16 @@ function draw(g, t, alpha = 1) {
   return drawn;
 }
 
+// The standard-mapped gamepads, read through navigator at poll time.
+const gamepad = createGamepad(() => navigator.getGamepads());
+
+/** Sends the key events the gamepads have due, as the keyboard would. */
+function pollGamepads() {
+  for (const o of gamepad.poll()) {
+    window.dispatchEvent(new KeyboardEvent(o.type, { code: o.code, key: o.key, repeat: false, bubbles: true, cancelable: true }));
+  }
+}
+
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
   if (location.hash === '#perf') probe = createProbe();
@@ -1456,6 +1538,7 @@ function runLoop(g) {
   function frame(now) {
     const interval = now - last;
     last = now;
+    pollGamepads();
     const spent = advance(acc, interval / 1000);
     acc = spent.acc;
     for (let i = 0; i < spent.ticks; i++) tick(g);
