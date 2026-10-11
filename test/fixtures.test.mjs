@@ -426,6 +426,19 @@ test('the fixture ledge shades rows 196 to 199 of columns 456 to 463 as rock, an
     }
   }
   assert.ok(over > 0 && bare > 0, `${over} ladder pixels over the ledge, ${bare} bare`);
+  // Shading counts the ledge as filled: no 6 or 7 edge on a bare pixel with ledge below it
+  // (rows 198, 199), and no side edge 8 on the rock at x 464 beside the ledge's right column.
+  for (let x = 456; x < 464; x++) {
+    for (const y of [198, 199]) {
+      const k = px(x, y);
+      if (ladder.has(k)) continue;
+      assert.ok(!isColour(art.shaded, k * 4, '6') && !isColour(art.shaded, k * 4, '7'), `(${x}, ${y}) has no under-edge`);
+    }
+  }
+  for (let y = 196; y < 200; y++) {
+    assert.equal(mask[px(464, y)], 1);
+    assert.ok(!isColour(art.shaded, px(464, y) * 4, '8'), `(464, ${y}) has no side edge`);
+  }
 });
 
 /** Opaque pixels of the top 12 rows of the gallery frames, with feet at (fx, fy) and the sprite facing `dir`, on mask rock. */
@@ -450,7 +463,12 @@ test('along the fixture flight the explorer\'s upper half meets no mask rock', (
 test('along every flight in the sample, either direction, the explorer\'s upper half meets no mask rock', () => {
   let ne = 0, nw = 0;
   for (const { mask, X, Y, dir } of flights) {
-    for (let k = 0; k <= 48; k++) assert.equal(hatRock(mask, colX(X, k, dir), Y + 8 + k, dir), 0, `flight at (${X}, ${Y}) dir ${dir}, k = ${k}`);
+    // Feet on the walk line (X + 24 + dir * k, Y + 8 + k), as feet() puts them, facing up the flight and down it.
+    for (let k = 0; k <= 48; k++) {
+      for (const facing of [dir, -dir]) {
+        assert.equal(hatRock(mask, X + 24 + dir * k, Y + 8 + k, facing), 0, `flight at (${X}, ${Y}) dir ${dir}, facing ${facing}, k = ${k}`);
+      }
+    }
     if (dir > 0) ne++; else nw++;
   }
   assert.ok(ne > 100 && nw > 100, `${ne} north-east and ${nw} north-west flights`);
