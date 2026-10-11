@@ -2539,8 +2539,164 @@ function rockAt(mask, x, y) {
 return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 })();
 
-// src/game/map.mjs
+// src/game/fixtures.mjs
 const __m9 = (() => {
+const { BW, NCELL } = __m2;
+const { boardMask, MASK_W, MASK_H, CELL_PX } = __m8;
+const { LADDER, SCONCE, idx } = __m7;
+// Pixel geometry of a board's drawn fixtures and of the dust, DOM-free. Board
+// pixels, y up: X = col * 48, Y = row * 48. A north-east flight from cell c
+// has t = x - (X + 24) over [X + 24, X + 72); a north-west flight mirrors
+// every x to 2X + 47 - x. Mask rows count down from the top, as in mask.mjs.
+
+
+
+
+const STEPS = 12;
+const STEP_W = 4;
+// Stair pixel roles: a column's top pixel, a step's left face, the rest.
+const ROLE = { tread: 1, riser: 2, body: 3 };
+
+/** First row of step k's tread: 4 px over the lower floor, flush at the top. */
+function treadRow(Y, k) {
+  return Y + 11 + STEP_W * k;
+}
+
+/** Top row of the rock under column t of a flight: the room floor, then the gallery's edge. */
+function supportRow(Y, t) {
+  return t < 16 ? Y + 7 : Y + 8 + t;
+}
+
+/** Board x of column t of a flight from cell origin X, rising toward `dir`. */
+function stairX(X, t, dir) {
+  return dir > 0 ? X + 24 + t : X + 23 - t;
+}
+
+/** Board row (y up) to mask row. */
+function maskRow(y) {
+  return MASK_H - 1 - y;
+}
+
+/** Runs of one flight: each column's mask air from its tread down to the row above its support. */
+function flightRuns(X, Y, dir, mask) {
+  const runs = [];
+  for (let t = 0; t < STEPS * STEP_W; t++) {
+    const x = stairX(X, t, dir);
+    const treadTop = treadRow(Y, (t / STEP_W) | 0), lo = Math.max(supportRow(Y, t) + 1, Y + 8);
+    const air = (y) => x >= 0 && x < MASK_W && y >= 0 && y < MASK_H && !mask[maskRow(y) * MASK_W + x];
+    for (let y = treadTop; y >= lo; y--) {
+      if (!air(y)) continue;
+      let bot = y;
+      while (bot > lo && air(bot - 1)) bot--;
+      runs.push({ t, x, top: y, bot, tread: y === treadTop });
+      y = bot;
+    }
+  }
+  return runs;
+}
+
+/** Opaque pixels of a sprite drawn with its top left at board (x, yTop), yTop the top row. */
+function spritePixels(rows, x, yTop) {
+  const out = [];
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < rows[r].length; c++) if (idx(rows[r][c]) >= 0) out.push([x + c, yTop - r]);
+  }
+  return out;
+}
+
+/**
+ * Opaque pixels of a ladder box [x, x + 16) x [y0, y1): the sprite repeats in
+ * 8-row chunks from y0, the last chunk keeping the sprite's top rows.
+ */
+function ladderPixels([x, y0, y1]) {
+  const out = [];
+  for (let y = y0; y < y1; y += 8) {
+    const h = Math.min(8, y1 - y);
+    for (const [px, py] of spritePixels(LADDER.slice(0, h), x, y + h - 1)) out.push([px, py]);
+  }
+  return out;
+}
+
+/** Opaque pixels of the sconce centred on cx whose row `y` is the sprite's top edge. */
+function sconcePixels([cx, y]) {
+  return spritePixels(SCONCE, cx - 4, y - 1);
+}
+
+/**
+ * Stairs, ladders and sconces of board `bd`:
+ * - flights: each stair's cell, origin and direction, with its pixel runs: a
+ *   column t at board x holds rows bot..top, `tread` when top is the tread;
+ * - stairs: role per mask pixel (ROLE), 0 elsewhere;
+ * - ladders: [x, y0, y1) boxes. Where a gallery starts in the cell, the
+ *   ladder ends at the floor, so the stair keeps the shaft open beneath it;
+ * - sconces: [centre x, y]. A bottom door's moves clear of a north-east stair.
+ */
+function fixtureSets(bd, mask = boardMask(bd)) {
+  const flights = [], ladders = [], sconces = [];
+  const stairs = new Uint8Array(MASK_W * MASK_H);
+  for (let c = 0; c < NCELL; c++) {
+    const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
+    const m = bd.links[c], doors = bd.doorMask[c];
+    const gallery = (cell) => cell < NCELL && (bd.links[cell] & 48) !== 0;
+    if (m & 2) ladders.push([X + 16, Y + 8, gallery(c + BW) ? Y + 56 : Y + 64]);
+    if (doors & 2) ladders.push([X + 16, Y + 8, Y + 48]);
+    if (doors & 8) ladders.push([X + 16, Y, gallery(c) ? Y + 8 : Y + 14]);
+    for (const dir of [1, -1]) {
+      if (!(m & (dir > 0 ? 16 : 32))) continue;
+      const cols = flightRuns(X, Y, dir, mask);
+      flights.push({ c, X, Y, dir, cols });
+      for (const { t, x, top, bot, tread } of cols) {
+        for (let y = bot; y <= top; y++) {
+          stairs[maskRow(y) * MASK_W + x] = tread && y === top ? ROLE.tread : t % STEP_W === 0 ? ROLE.riser : ROLE.body;
+        }
+      }
+    }
+    if (doors) {
+      let x = doors & 4 ? X + 13 : doors & 1 ? X + 35 : X + 36;
+      if (x === X + 36 && doors & 8 && m & 16) x = X + 12;
+      sconces.push([x, Y + 26]);
+    }
+  }
+  return { flights, stairs, ladders, sconces };
+}
+
+// One mote per 25 x 20 px lattice cell: 48 per 200 x 120 px, and a window
+// that size holds 40 to 56. A mote sways inside a patch around its home.
+const MOTE_W = 25;
+const MOTE_H = 20;
+const SWAY_X = 6;
+const SWAY_Y = 8;
+
+function mix(a, b, c) {
+  let h = (Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul(c, 1013904223)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/**
+ * Motes inside world rectangle [x0, x1) x [y0, y1) at time `t`. A mote is
+ * { x, y, hx, hy }: its place and its home, which moves only with the offset
+ * (ox, oy). Place depends on nothing else, so any two rectangles agree.
+ */
+function dustMotes(x0, y0, x1, y1, t, ox = 0, oy = 0) {
+  const out = [];
+  const i0 = Math.floor((x0 - ox - SWAY_X) / MOTE_W), i1 = Math.floor((x1 - ox + SWAY_X) / MOTE_W);
+  const j0 = Math.floor((y0 - oy - SWAY_Y) / MOTE_H), j1 = Math.floor((y1 - oy + SWAY_Y) / MOTE_H);
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const hx = i * MOTE_W + (mix(i, j, 1) % MOTE_W) + ox, hy = j * MOTE_H + (mix(i, j, 2) % MOTE_H) + oy;
+      const ph = (mix(i, j, 3) % 628) / 100, v = 2 + (mix(i, j, 4) % 7);
+      const x = hx + Math.sin(t * 0.7 + ph) * SWAY_X, y = hy + Math.sin(t * v * 0.15 + ph * 1.7) * SWAY_Y;
+      if (x >= x0 && x < x1 && y >= y0 && y < y1) out.push({ x, y, hx, hy });
+    }
+  }
+  return out;
+}
+return { STEPS, STEP_W, ROLE, treadRow, supportRow, stairX, maskRow, ladderPixels, sconcePixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
+})();
+
+// src/game/map.mjs
+const __m10 = (() => {
 const { BW, BH, NCELL } = __m2;
 const { DIFFICULTY } = __m3;
 const { bandOf } = __m4;
@@ -2610,15 +2766,17 @@ return { mapCells, frameOf, panFrame, mapModel };
 })();
 
 // src/game/render.mjs
-const __m10 = (() => {
+const __m11 = (() => {
 const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H } = __m7;
-const { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m6;
-const { BW, BH, NCELL, DX, DY } = __m2;
+const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m6;
+const { BW, BH, DX, DY } = __m2;
 const { boardOfPos } = __m4;
 const { boardMask } = __m8;
-const { mapCells } = __m9;
+const { fixtureSets, dustMotes, STEP_W } = __m9;
+const { mapCells } = __m10;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
+
 
 
 
@@ -2699,7 +2857,6 @@ function createRenderer(canvas, world) {
   const lightImg = lightCtx.createImageData(LIGHT_W, LIGHT_H);
   const acc = new Float32Array(LIGHT_W * LIGHT_H * 3);
   const glyphCache = new Map();
-  const dust = [];
 
   function buildBackground() {
     const size = 128;
@@ -2729,32 +2886,26 @@ function createRenderer(canvas, world) {
   }
 
   /** Ladders, stairs, sconces and braziers of board `bd`, in board pixels. */
-  function boardFixtures(bd) {
-    const stairs = [], ladders = [], sconces = [], braziers = [];
-    if (!bd) return { stairs, ladders, sconces, braziers };
-    for (let c = 0; c < NCELL; c++) {
-      const X = (c % BW) * CELL, Y = ((c / BW) | 0) * CELL;
-      const m = bd.links[c], doors = bd.doorMask[c];
-      if (m & 2) ladders.push([X + 16, Y + 8, Y + 64]);
-      if (doors & 2) ladders.push([X + 16, Y + 8, Y + 48]);
-      if (doors & 8) ladders.push([X + 16, Y, Y + 14]);
-      if (m & 16) stairs.push([X + 24, Y + 8, 1]);
-      if (m & 32) stairs.push([X + 24, Y + 8, -1]);
-      if (doors) sconces.push([doors & 4 ? X + 13 : doors & 1 ? X + 35 : X + 36, Y + 26]);
-    }
-    for (const cell of world.flamesAt(bd.x, bd.y)) braziers.push(nodeXY({ x: 0, y: 0 }, cell));
-    return { stairs, ladders, sconces, braziers };
+  function boardFixtures(bd, mask) {
+    if (!bd) return { flights: [], stairs: null, ladders: [], sconces: [], braziers: [] };
+    const fx = fixtureSets(bd, mask);
+    fx.braziers = world.flamesAt(bd.x, bd.y).map((cell) => nodeXY({ x: 0, y: 0 }, cell));
+    return fx;
   }
 
   /**
    * Rock and shadow pixels from the mask alone, so every opening drawn is a
-   * tree link or a door. `p` picks the rock tile variants.
+   * tree link or a door. `p` picks the rock tile variants. Rock shading also
+   * counts the `stairs` pixels as solid, which leaves no highlight under a
+   * flight; air shadows read the mask alone.
    */
-  function shadeMask(g, mask, p) {
+  function shadeMask(g, mask, p, stairs) {
     const W = BOARD_W, H = BOARD_H;
     const img = g.createImageData(W, H);
     const d = img.data;
-    const solid = (x, y) => mask[Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))];
+    const at = (x, y) => Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x));
+    const solid = (x, y) => mask[at(x, y)];
+    const filled = stairs ? (x, y) => mask[at(x, y)] || stairs[at(x, y)] : solid;
     const [ar, ag, ab] = RGB[0];
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
@@ -2762,11 +2913,11 @@ function createRenderer(canvas, world) {
         if (mask[y * W + x]) {
           const tile = ROCK[hash3(x >> 4, y >> 4, p) % ROCK.length];
           let ch = tile[y & 15][x & 15];
-          if (!solid(x, y - 1)) ch = 'b';
-          else if (!solid(x, y - 2)) ch = 'a';
-          else if (!solid(x, y + 1)) ch = '6';
-          else if (!solid(x, y + 2)) ch = '7';
-          else if (!solid(x - 1, y) || !solid(x + 1, y)) ch = '8';
+          if (!filled(x, y - 1)) ch = 'b';
+          else if (!filled(x, y - 2)) ch = 'a';
+          else if (!filled(x, y + 1)) ch = '6';
+          else if (!filled(x, y + 2)) ch = '7';
+          else if (!filled(x - 1, y) || !filled(x + 1, y)) ch = '8';
           const k = idx(ch);
           d[o] = RGB[k][0]; d[o + 1] = RGB[k][1]; d[o + 2] = RGB[k][2]; d[o + 3] = 255;
         } else {
@@ -2789,14 +2940,16 @@ function createRenderer(canvas, world) {
         g.drawImage(ladder, 0, 0, 16, h, x, toY(y + h), 16, h);
       }
     }
-    for (const [x0, y0, dir] of fx.stairs) {
-      for (let i = 0; i < 48; i += 4) {
-        const x = dir > 0 ? x0 + i : x0 - i - 4;
-        const top = toY(y0 + i + 2);
-        g.fillStyle = pal('b'); g.fillRect(x, top, 4, 1);
-        g.fillStyle = pal('a'); g.fillRect(x, top + 1, 4, 2);
-        g.fillStyle = pal('8'); g.fillRect(x, top + 3, 4, 2);
-        g.fillStyle = pal('6'); g.fillRect(x, top + 5, 4, 1);
+    // Each column is one solid run: a bright tread, then the step's face or body.
+    for (const { cols } of fx.flights) {
+      for (const { t, x, top, bot, tread } of cols) {
+        const body = tread ? top - 1 : top;
+        g.fillStyle = pal(t % STEP_W === 0 ? 'a' : '8');
+        g.fillRect(x, toY(body + 1), 1, body - bot + 1);
+        if (tread) {
+          g.fillStyle = pal('b');
+          g.fillRect(x, toY(top + 1), 1, 1);
+        }
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
@@ -2805,8 +2958,9 @@ function createRenderer(canvas, world) {
   function buildBoardCanvas(bd) {
     const c = makeCanvas(BOARD_W, BOARD_H);
     const g = c.getContext('2d');
-    const fx = boardFixtures(bd);
-    shadeMask(g, boardMask(bd), bd ? bd.p : 0);
+    const mask = boardMask(bd);
+    const fx = boardFixtures(bd, mask);
+    shadeMask(g, mask, bd ? bd.p : 0, fx.stairs);
     drawFixtures(g, fx);
     return { canvas: c, sconces: fx.sconces, braziers: fx.braziers };
   }
@@ -2977,21 +3131,18 @@ function createRenderer(canvas, world) {
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
-    if (tip) drawDust(sim, tip, t);
+    if (tip) drawDust(sim, tip, t, cx, cy);
     return tip;
   }
 
-  // Motes show only inside the torch radius.
-  function drawDust(sim, tip, t) {
-    if (dust.length === 0) {
-      for (let i = 0; i < 48; i++) dust.push({ x: (hash3(i, 1, 2) % 200) - 100, y: (hash3(i, 3, 4) % 120) - 60, v: 2 + (hash3(i, 5, 6) % 7), ph: hash3(i, 7, 8) % 628 });
-    }
+  // Motes hang in the world and show only inside the torch radius.
+  function drawDust(sim, tip, t, cx, cy) {
     const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
-    for (const m of dust) {
-      const x = tip[0] + ((m.x + Math.sin(t * 0.7 + m.ph / 100) * 6 + 200) % 200) - 100;
-      const y = tip[1] + ((m.y + t * m.v + 120) % 120) - 60;
-      const dist = Math.hypot(x - tip[0], y - tip[1]);
-      const a = 1 - dist / (r * 0.9);
+    // World position of the torch tip: the inverse of scene's sx and sy.
+    const wx = tip[0] + cx - VIEW_W / 2, wy = cy - tip[1] + VIEW_H / 2;
+    for (const m of dustMotes(wx - r, wy - r, wx + r, wy + r, t, 0, 0)) {
+      const x = m.x - cx + VIEW_W / 2, y = cy - m.y + VIEW_H / 2;
+      const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
       if (a <= 0) continue;
       ctx.fillStyle = `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
       ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
@@ -3075,7 +3226,7 @@ return { VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs
-const __m11 = (() => {
+const __m12 = (() => {
 
 // WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
@@ -3389,7 +3540,7 @@ return { createAudio };
 })();
 
 // src/game/autopilot.mjs
-const __m12 = (() => {
+const __m13 = (() => {
 const { DX, DY } = __m2;
 const { createSim, step, inputEdges } = __m6;
 // Scripted input for the self-test: walks the explorer up band 0's chain of
@@ -3490,9 +3641,9 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/touch.mjs
-const __m13 = (() => {
+const __m14 = (() => {
 const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m7;
-const { VIEW_W, VIEW_H } = __m10;
+const { VIEW_W, VIEW_H } = __m11;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
 // keydown and keyup KeyboardEvents on window, so the key handlers, the held
 // Up, the jump edge and the tap buffer serve touch unchanged.
@@ -4012,7 +4163,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, layout, nextTouchMode, touchAtBoot, padZone,
 })();
 
 // src/game/clipboard.mjs
-const __m14 = (() => {
+const __m15 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -4040,18 +4191,18 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m15 = (() => {
+const __m16 = (() => {
 const { createWorld, boardOfPos } = __m4;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m5;
 const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose } = __m6;
-const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m10;
-const { createAudio } = __m11;
-const { runScript, SELFTEST_CODE } = __m12;
-const { createTouch, layout, viewport, difficultyLabel, PANEL_X } = __m13;
-const { copyWithStatus, saveLabel } = __m14;
-const { frameOf, panFrame, mapModel, mapCells } = __m9;
+const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m11;
+const { createAudio } = __m12;
+const { runScript, SELFTEST_CODE } = __m13;
+const { createTouch, layout, viewport, difficultyLabel, PANEL_X } = __m14;
+const { copyWithStatus, saveLabel } = __m15;
+const { frameOf, panFrame, mapModel, mapCells } = __m10;
 const { RGB, idx } = __m7;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.

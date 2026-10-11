@@ -325,7 +325,14 @@ entry reached, and Continue resumes there with a full torch.
 
 **Lighting.** A light map at quarter resolution, lit by the torch, the
 sconces and the flames, composited multiplicatively over the scene. Hieroglyph walls scroll
-behind at 0.5× for depth, and dust motes drift in the torch beam.
+behind at 0.5× for depth. Dust motes hang in the world, never with the explorer
+or the camera, and show in torchlight: drawn inside the torch radius and
+fading toward its edge.
+
+**Stairs.** A stair draws as one solid flight, flush with the lower floor and
+the upper floor, in air the mask already cuts. Where a gallery starts in a
+cell, a ladder in that cell ends at the floor, and a bottom door's sconce
+stands clear of the flight.
 
 **Labels.** On screen a band is a tomb: the HUD reads `TOMB n`, the title
 `BEST TOMB`, and the end screen `TOMBS CLIMBED`. The title's panel holds a

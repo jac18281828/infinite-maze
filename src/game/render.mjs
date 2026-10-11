@@ -4,10 +4,11 @@ import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
   BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H,
 } from './art.mjs';
-import { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
-import { BW, BH, NCELL, DX, DY } from '../world/board.mjs';
+import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
+import { BW, BH, DX, DY } from '../world/board.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { boardMask } from './mask.mjs';
+import { fixtureSets, dustMotes, STEP_W } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
 
 export const VIEW_W = 320;
@@ -83,7 +84,6 @@ export function createRenderer(canvas, world) {
   const lightImg = lightCtx.createImageData(LIGHT_W, LIGHT_H);
   const acc = new Float32Array(LIGHT_W * LIGHT_H * 3);
   const glyphCache = new Map();
-  const dust = [];
 
   function buildBackground() {
     const size = 128;
@@ -113,32 +113,26 @@ export function createRenderer(canvas, world) {
   }
 
   /** Ladders, stairs, sconces and braziers of board `bd`, in board pixels. */
-  function boardFixtures(bd) {
-    const stairs = [], ladders = [], sconces = [], braziers = [];
-    if (!bd) return { stairs, ladders, sconces, braziers };
-    for (let c = 0; c < NCELL; c++) {
-      const X = (c % BW) * CELL, Y = ((c / BW) | 0) * CELL;
-      const m = bd.links[c], doors = bd.doorMask[c];
-      if (m & 2) ladders.push([X + 16, Y + 8, Y + 64]);
-      if (doors & 2) ladders.push([X + 16, Y + 8, Y + 48]);
-      if (doors & 8) ladders.push([X + 16, Y, Y + 14]);
-      if (m & 16) stairs.push([X + 24, Y + 8, 1]);
-      if (m & 32) stairs.push([X + 24, Y + 8, -1]);
-      if (doors) sconces.push([doors & 4 ? X + 13 : doors & 1 ? X + 35 : X + 36, Y + 26]);
-    }
-    for (const cell of world.flamesAt(bd.x, bd.y)) braziers.push(nodeXY({ x: 0, y: 0 }, cell));
-    return { stairs, ladders, sconces, braziers };
+  function boardFixtures(bd, mask) {
+    if (!bd) return { flights: [], stairs: null, ladders: [], sconces: [], braziers: [] };
+    const fx = fixtureSets(bd, mask);
+    fx.braziers = world.flamesAt(bd.x, bd.y).map((cell) => nodeXY({ x: 0, y: 0 }, cell));
+    return fx;
   }
 
   /**
    * Rock and shadow pixels from the mask alone, so every opening drawn is a
-   * tree link or a door. `p` picks the rock tile variants.
+   * tree link or a door. `p` picks the rock tile variants. Rock shading also
+   * counts the `stairs` pixels as solid, which leaves no highlight under a
+   * flight; air shadows read the mask alone.
    */
-  function shadeMask(g, mask, p) {
+  function shadeMask(g, mask, p, stairs) {
     const W = BOARD_W, H = BOARD_H;
     const img = g.createImageData(W, H);
     const d = img.data;
-    const solid = (x, y) => mask[Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))];
+    const at = (x, y) => Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x));
+    const solid = (x, y) => mask[at(x, y)];
+    const filled = stairs ? (x, y) => mask[at(x, y)] || stairs[at(x, y)] : solid;
     const [ar, ag, ab] = RGB[0];
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
@@ -146,11 +140,11 @@ export function createRenderer(canvas, world) {
         if (mask[y * W + x]) {
           const tile = ROCK[hash3(x >> 4, y >> 4, p) % ROCK.length];
           let ch = tile[y & 15][x & 15];
-          if (!solid(x, y - 1)) ch = 'b';
-          else if (!solid(x, y - 2)) ch = 'a';
-          else if (!solid(x, y + 1)) ch = '6';
-          else if (!solid(x, y + 2)) ch = '7';
-          else if (!solid(x - 1, y) || !solid(x + 1, y)) ch = '8';
+          if (!filled(x, y - 1)) ch = 'b';
+          else if (!filled(x, y - 2)) ch = 'a';
+          else if (!filled(x, y + 1)) ch = '6';
+          else if (!filled(x, y + 2)) ch = '7';
+          else if (!filled(x - 1, y) || !filled(x + 1, y)) ch = '8';
           const k = idx(ch);
           d[o] = RGB[k][0]; d[o + 1] = RGB[k][1]; d[o + 2] = RGB[k][2]; d[o + 3] = 255;
         } else {
@@ -173,14 +167,16 @@ export function createRenderer(canvas, world) {
         g.drawImage(ladder, 0, 0, 16, h, x, toY(y + h), 16, h);
       }
     }
-    for (const [x0, y0, dir] of fx.stairs) {
-      for (let i = 0; i < 48; i += 4) {
-        const x = dir > 0 ? x0 + i : x0 - i - 4;
-        const top = toY(y0 + i + 2);
-        g.fillStyle = pal('b'); g.fillRect(x, top, 4, 1);
-        g.fillStyle = pal('a'); g.fillRect(x, top + 1, 4, 2);
-        g.fillStyle = pal('8'); g.fillRect(x, top + 3, 4, 2);
-        g.fillStyle = pal('6'); g.fillRect(x, top + 5, 4, 1);
+    // Each column is one solid run: a bright tread, then the step's face or body.
+    for (const { cols } of fx.flights) {
+      for (const { t, x, top, bot, tread } of cols) {
+        const body = tread ? top - 1 : top;
+        g.fillStyle = pal(t % STEP_W === 0 ? 'a' : '8');
+        g.fillRect(x, toY(body + 1), 1, body - bot + 1);
+        if (tread) {
+          g.fillStyle = pal('b');
+          g.fillRect(x, toY(top + 1), 1, 1);
+        }
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
@@ -189,8 +185,9 @@ export function createRenderer(canvas, world) {
   function buildBoardCanvas(bd) {
     const c = makeCanvas(BOARD_W, BOARD_H);
     const g = c.getContext('2d');
-    const fx = boardFixtures(bd);
-    shadeMask(g, boardMask(bd), bd ? bd.p : 0);
+    const mask = boardMask(bd);
+    const fx = boardFixtures(bd, mask);
+    shadeMask(g, mask, bd ? bd.p : 0, fx.stairs);
     drawFixtures(g, fx);
     return { canvas: c, sconces: fx.sconces, braziers: fx.braziers };
   }
@@ -361,21 +358,18 @@ export function createRenderer(canvas, world) {
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
-    if (tip) drawDust(sim, tip, t);
+    if (tip) drawDust(sim, tip, t, cx, cy);
     return tip;
   }
 
-  // Motes show only inside the torch radius.
-  function drawDust(sim, tip, t) {
-    if (dust.length === 0) {
-      for (let i = 0; i < 48; i++) dust.push({ x: (hash3(i, 1, 2) % 200) - 100, y: (hash3(i, 3, 4) % 120) - 60, v: 2 + (hash3(i, 5, 6) % 7), ph: hash3(i, 7, 8) % 628 });
-    }
+  // Motes hang in the world and show only inside the torch radius.
+  function drawDust(sim, tip, t, cx, cy) {
     const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
-    for (const m of dust) {
-      const x = tip[0] + ((m.x + Math.sin(t * 0.7 + m.ph / 100) * 6 + 200) % 200) - 100;
-      const y = tip[1] + ((m.y + t * m.v + 120) % 120) - 60;
-      const dist = Math.hypot(x - tip[0], y - tip[1]);
-      const a = 1 - dist / (r * 0.9);
+    // World position of the torch tip: the inverse of scene's sx and sy.
+    const wx = tip[0] + cx - VIEW_W / 2, wy = cy - tip[1] + VIEW_H / 2;
+    for (const m of dustMotes(wx - r, wy - r, wx + r, wy + r, t, 0, 0)) {
+      const x = m.x - cx + VIEW_W / 2, y = cy - m.y + VIEW_H / 2;
+      const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
       if (a <= 0) continue;
       ctx.fillStyle = `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
       ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
