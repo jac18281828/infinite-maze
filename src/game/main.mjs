@@ -6,7 +6,7 @@ import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
 import { floorItems, itemSpot } from '../world/floor.mjs';
 import {
-  createSim, step, runCarry, TICK, BURN_S, JAR_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
+  createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
 } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
@@ -632,7 +632,7 @@ function firstCoin(world) {
  * feet come within 12 px of it, as the sim tests contact. `seen` runs after
  * each tick. Throws `touch ...` when the walk runs out of ticks.
  */
-function walkToCoin(g, { bd, cell }, seen = () => {}, what = 'coin') {
+function walkToItem(g, { bd, cell }, seen = () => {}, what = 'coin') {
   const [sx, sy] = itemSpot(bd, cell);
   const side = Math.sign(sx - nodeXY(bd, cell)[0]);
   const auto = createAutopilot(g.world, [{ x: bd.x, y: bd.y, cell }]);
@@ -658,20 +658,19 @@ function oilLeg(g, { need, click }) {
   useCode(g, SELFTEST_CODE);
   const jars = tombJars(g.world);
   need(jars.length >= 2, 'tomb (0, 0) holds two oil jars at MEDIUM');
-  // Each step walks a new run to one jar and sets the burn on the first tick
-  // the explorer stands on the jar's cell. The contact tick then burns one TICK
+  // Each step walks a new run to one jar with the burn pinned to `burn` before
+  // every tick until the jar is taken. The contact tick then burns one TICK
   // and adds the jar.
   const take = (jar, burn) => {
     g.screen = 'title';
     draw(g, 0);
     click('title', 'begin');
     const id = coinId(jar.bd, jar.cell);
-    let before = null, set = false, delta = null;
-    walkToCoin(g, jar, () => {
+    let delta = null;
+    g.sim.burn = burn;
+    walkToItem(g, jar, () => {
       const s = g.sim;
-      if (before !== null && delta === null && s.jars.has(id)) delta = s.burn - before;
-      if (!set && s.bd === jar.bd && s.cell === jar.cell) { s.burn = burn; set = true; }
-      before = s.burn;
+      if (s.jars.has(id)) { if (delta === null) delta = s.burn - burn; } else s.burn = burn;
     }, 'oil jar');
     return { delta, after: g.sim.burn };
   };
@@ -679,7 +678,7 @@ function oilLeg(g, { need, click }) {
 
   // Step 1: burn 100 s takes the jar's 60 s.
   const one = take(jars[0], 100);
-  need(one.delta !== null && near(one.delta, JAR_S - TICK), 'touching the first oil jar at 100 s adds 60 s');
+  need(one.delta !== null && near(one.delta, 60 - TICK), 'touching the first oil jar at 100 s adds 60 s');
 
   // Step 2: burn 280 s caps at full.
   const two = take(jars[1], 280);
@@ -711,7 +710,7 @@ function coinLeg(g, { need, click }) {
   const coin = firstCoin(g.world);
   need(coin !== null, 'tomb (0, 0) holds a coin at MEDIUM');
   const key = coinKey(SELFTEST_CODE, 'medium'), id = coinId(coin.bd, coin.cell);
-  walkToCoin(g, coin);
+  walkToItem(g, coin);
   need(g.sim.events.includes('coin') && g.wallet === 1, 'touching the first coin adds one to the wallet');
   need(g.earned === 1, 'a coin counts as one earned this run');
   need(load(KEY_WALLET) === '1', 'a touched coin stores the wallet');
@@ -719,7 +718,7 @@ function coinLeg(g, { need, click }) {
 
   // Step 2: a new run on the same seed and level.
   begin(g);
-  walkToCoin(g, coin);
+  walkToItem(g, coin);
   let held = 0;
   runTicks(g, () => [0, 0, false], () => held >= 30, 100, 'the explorer stands on the coin', () => { held++; });
   need(g.wallet === 1 && g.earned === 0, 'a collected coin credits nothing on a new run');
@@ -758,7 +757,7 @@ function coinLeg(g, { need, click }) {
   draw(g, 0);
   click('title', 'begin');
   const start = g.wallet;
-  walkToCoin(g, firstCoin(g.world));
+  walkToItem(g, firstCoin(g.world));
   oneTombOn(g, 0);
   need(g.earned > 0 && g.earned === g.wallet - start, 'the coins earned this run equal the wallet\'s gain');
   endRun(g);

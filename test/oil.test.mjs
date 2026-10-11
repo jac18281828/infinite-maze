@@ -55,7 +55,7 @@ function walk(world, { bd, cell, link }, { burn = BURN_S, ember = 0, carry = nul
 function jarsByLink(d, per) {
   const world = worlds[d];
   const count = new Map(), out = [];
-  for (const bd of sample(d, 3)) {
+  for (const bd of sample(d, 19)) {
     for (const { cell, kind } of floorItems(world, bd)) {
       if (kind !== 'oil') continue;
       const link = Math.log2(bd.links[cell]);
@@ -71,6 +71,10 @@ function jarsByLink(d, per) {
 }
 
 const jars = jarsByLink('medium', 1);
+
+test('a jar adds 60 s, the owner\'s figure', () => {
+  assert.equal(JAR_S, 60);
+});
 
 test('the sample holds a jar at the end of each of the eight link directions', () => {
   assert.equal(jars.length, 8);

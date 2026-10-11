@@ -7,6 +7,7 @@ import {
   createSim, step, feet, torchRadius, nodeXY, inputEdges, BURN_S, EMBER_S, TICK, KEY, ROOM_CLEAR, SHAFT_REACH,
   STAIR_REACH, RUN_SPEED, GALLERY_SPEED, GRAVITY, BOARD_W, BOARD_H, pose, runCarry, trailAt,
 } from '../src/game/sim.mjs';
+import { floorItems } from '../src/world/floor.mjs';
 import { mapModel } from '../src/game/map.mjs';
 import { runScript, createAutopilot, SELFTEST_TICKS } from '../src/game/autopilot.mjs';
 import { artSets, EXPLORER, torchTip } from '../src/game/art.mjs';
@@ -848,8 +849,10 @@ test('torch radius falls from 96 px to 24 px at 10% burn, then an 8 px ember', (
 });
 
 test('a torch burns 300 s, gutters to a 10 s ember, then ends the run', () => {
+  // A cell with no floor item, so no jar refills the torch.
   const bd = sampleBoards().find((b) => world.flamesAt(b.x, b.y).length === 0);
-  const s = createSim(world, { board: bd, cell: 0 });
+  const items = new Set(floorItems(world, bd).map((it) => it.cell));
+  const s = createSim(world, { board: bd, cell: [...Array(NCELL).keys()].find((c) => !items.has(c)) });
   run(s, Math.round(BURN_S / TICK) - 1, 0, 0);
   assert.ok(s.burn > 0 && s.state === 'play');
   step(s, 0, 0);
