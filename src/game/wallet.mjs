@@ -15,15 +15,14 @@ export const COIN_KEYS = {
 export const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
 
 /**
- * Coins due when a run's tomb count rises from `record`, the highest count paid, to `count`:
- * the level rate per tomb, plus 100 x k for each milestone k with record < 100k <= count.
+ * The milestone coins due when a run's tomb count reaches `count` and the
+ * highest count paid on the seed and level is `record`: 100 x k for each
+ * milestone k with record < 100k <= count.
  */
-export function tombPayout(difficulty, record, count) {
-  const tombs = count > record ? COIN_RATE[difficulty] * (count - record) : 0;
+export function milestonePayout(record, count) {
   const last = Math.floor(count / MILESTONE);
   const first = Math.floor(record / MILESTONE) + 1;
-  const milestones = last >= first ? (MILESTONE * (first + last) * (last - first + 1)) / 2 : 0;
-  return tombs + milestones;
+  return last >= first ? (MILESTONE * (first + last) * (last - first + 1)) / 2 : 0;
 }
 
 /** The key of a seed and level in the collected set and the record: `K7Q2M9XA:MEDIUM`. */
@@ -106,6 +105,33 @@ export function coinPay(key, ids) {
     const had = stored.coins.get(key);
     return ids.filter((id) => !(had && had.has(id))).length;
   };
+}
+
+/**
+ * The pay rule for a tick that raised the run count to `count`: the level's
+ * rate for each tomb of `solvedNow` the device has not paid, then the
+ * milestones past the record. A tomb joins the device's set once paid, and the
+ * record becomes the larger of itself and `count`. `pay.seen` is the merged
+ * record it found, which decides the splash's paid flag.
+ */
+export function tombPay(key, level, solvedNow, count) {
+  const pay = (state) => {
+    let paid = state.tombs.get(key);
+    if (!paid) state.tombs.set(key, (paid = new Set()));
+    const record = state.paid.get(key) || 0;
+    let due = 0;
+    for (const id of solvedNow) {
+      if (!paid.has(id)) {
+        paid.add(id);
+        due += COIN_RATE[level];
+      }
+    }
+    pay.seen = record;
+    state.paid.set(key, Math.max(record, count));
+    return due + milestonePayout(record, count);
+  };
+  pay.seen = 0;
+  return pay;
 }
 
 /** Adds each id of `from`, Map(key -> Set), into the Sets of `into`, in place. */

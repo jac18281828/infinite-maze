@@ -8,22 +8,12 @@ import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
-  COIN_KEYS, COIN_RATE, tombPayout, coinKey, coinId, coinPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
+  COIN_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
   serializeCollected, serializePaid, serializeTombs,
 } from '../src/game/wallet.mjs';
 
-test('the payout is the level rate times the tombs past the record, and 0 at or under it', () => {
+test('the level rates are 1, 2, 5 and 10', () => {
   assert.deepEqual(COIN_RATE, { easy: 1, medium: 2, hard: 5, ultimate: 10 });
-  for (const d of DIFFICULTIES) {
-    for (const [record, count] of [[0, 1], [0, 3], [1, 2], [4, 9], [7, 7], [7, 3], [0, 0]]) {
-      assert.equal(tombPayout(d, record, count), count > record ? COIN_RATE[d] * (count - record) : 0, `${d} ${record} ${count}`);
-    }
-  }
-  assert.equal(tombPayout('easy', 0, 1), 1);
-  assert.equal(tombPayout('medium', 0, 1), 2);
-  assert.equal(tombPayout('hard', 0, 1), 5);
-  assert.equal(tombPayout('hard', 2, 2), 0);
-  assert.equal(tombPayout('ultimate', 0, 1), 10);
 });
 
 test('the wallet, the collected set and the payout record read absent or malformed storage as empty', () => {
@@ -84,6 +74,61 @@ test('two games that take the same coin are paid once', () => {
   assert.equal(io.m.get(COIN_KEYS.coins), '{"K7Q2M9XA:MEDIUM":["0,0,21"]}');
 });
 
+/** A game solving tombs `ids` at `level`, reaching run count `count`; returns the pay rule it committed. */
+function solveTombs(io, state, key, level, ids, count) {
+  const pay = tombPay(key, level, ids, count);
+  return { earned: commitCoins(io, state, pay), pay };
+}
+
+test('two games that interleave coins, tombs and records lose none and pay each once', () => {
+  const io = memoryIo(), key = 'K7Q2M9XA:MEDIUM';
+  io.m.set(COIN_KEYS.wallet, '30');
+  const a = readState(io), b = readState(io);
+  const setA = (a.coins.set(key, new Set()), a.coins.get(key));
+  assert.equal(takeCoin(io, a, key, '0,0,1'), 1);
+  assert.equal(takeCoin(io, b, key, '0,0,2'), 1);
+  assert.equal(solveTombs(io, a, key, 'medium', ['0,1'], 1).earned, 2);
+  assert.equal(solveTombs(io, b, key, 'medium', ['0,2'], 1).earned, 2);
+  assert.equal(solveTombs(io, a, key, 'medium', [], 7).earned, 0);
+  assert.equal(solveTombs(io, b, key, 'medium', [], 5).earned, 0);
+  assert.equal(io.m.get(COIN_KEYS.wallet), String(30 + 1 + 1 + 2 + 2));
+  assert.deepEqual(JSON.parse(io.m.get(COIN_KEYS.coins))[key].sort(), ['0,0,1', '0,0,2']);
+  assert.deepEqual(JSON.parse(io.m.get(COIN_KEYS.tombs))[key].sort(), ['0,1', '0,2']);
+  assert.deepEqual(JSON.parse(io.m.get(COIN_KEYS.paid)), { [key]: 7 });
+  assert.equal(a.coins.get(key), setA, 'A keeps its Set object');
+  assert.ok(setA.has('0,0,2'), 'A holds B\'s coin after its next write');
+});
+
+test('two games that solve the same tomb are paid its rate once', () => {
+  const io = memoryIo(), key = 'K7Q2M9XA:MEDIUM';
+  const a = readState(io), b = readState(io);
+  assert.equal(solveTombs(io, a, key, 'medium', ['0,1'], 1).earned, 2);
+  assert.equal(solveTombs(io, b, key, 'medium', ['0,1'], 1).earned, 0);
+  assert.equal(io.m.get(COIN_KEYS.wallet), '2');
+});
+
+test('a tomb pays its rate the first time at any run count, and a replay pays nothing', () => {
+  for (const [level, rate] of [['easy', 1], ['medium', 2], ['hard', 5], ['ultimate', 10]]) {
+    const io = memoryIo(), key = `K7Q2M9XA:${level.toUpperCase()}`;
+    const g = readState(io);
+    g.paid.set(key, 50);
+    assert.equal(solveTombs(io, g, key, level, ['3,4'], 3).earned, rate, `${level} under the record`);
+    assert.equal(solveTombs(io, g, key, level, ['3,4'], 60).earned, 0, `${level} replayed`);
+    assert.equal(solveTombs(io, g, key, level, ['3,5'], 61).earned, rate, `${level} new past the record`);
+  }
+});
+
+test('two games that cross the same milestone are paid once, and the later one sees the merged record', () => {
+  const io = memoryIo(), key = 'K7Q2M9XA:EASY';
+  io.m.set(COIN_KEYS.paid, JSON.stringify({ [key]: 99 }));
+  const a = readState(io), b = readState(io);
+  assert.equal(solveTombs(io, a, key, 'easy', [], 100).earned, 100);
+  const later = solveTombs(io, b, key, 'easy', [], 100);
+  assert.equal(later.earned, 0);
+  assert.equal(later.pay.seen, 100);
+  assert.equal(io.m.get(COIN_KEYS.wallet), '100');
+});
+
 test('storage that holds nothing and takes nothing credits each coin once and never lowers the wallet', () => {
   const io = { load: () => null, store: () => {} }, key = 'K7Q2M9XA:MEDIUM';
   const state = { wallet: 24, coins: new Map(), tombs: new Map(), paid: new Map() };
@@ -106,6 +151,14 @@ test('the merge keeps the coins another game took and the Set a running sim hold
   assert.deepEqual([...setA].sort(), ['0,0,1', '0,0,2', '0,0,3']);
   assert.equal(io.m.get(COIN_KEYS.wallet), '3');
   assert.equal(a.wallet, 3);
+});
+
+test('10,000 solved tombs under one key serialize to at most 130,100 characters', () => {
+  const ids = new Set();
+  for (let i = 0; ids.size < 10000; i++) ids.add(`${(i % 1999) - 999},${99999 - Math.floor(i / 1999)}`);
+  assert.equal(ids.size, 10000);
+  const text = serializeTombs(new Map([['K7Q2M9XA:MEDIUM', ids]]));
+  assert.ok(text.length <= 130100, `${text.length} characters`);
 });
 
 test('a sim climbing two tombs along the way on counts 2, and a sim built from its carry counts 2', () => {

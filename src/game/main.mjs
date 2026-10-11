@@ -12,7 +12,7 @@ import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
-  COIN_KEYS, COIN_RATE, tombPayout, coinKey, coinId, coinPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
+  COIN_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
   serializeCollected, serializePaid, serializeTombs,
 } from './wallet.mjs';
 import { createGamepad } from './gamepad.mjs';
@@ -677,6 +677,18 @@ function keepCoins(g) {
   store(KEY_PAID, serializePaid(g.paid));
 }
 
+/**
+ * Forgets tomb (0, 0) of the self-test seed at level `d`, and sets its record to
+ * `record` (none when 0), in memory and in storage: the merge restores both from
+ * storage, so the next solve of (0, 0) pays as a first.
+ */
+function forgetTomb(g, d, record = 0) {
+  const key = coinKey(SELFTEST_CODE, d), solved = g.tombs.get(key);
+  if (solved) solved.delete('0,0');
+  if (record) g.paid.set(key, record); else g.paid.delete(key);
+  keepCoins(g);
+}
+
 /** The first coin of tomb (0, 0), board by board in index order, as { bd, cell }, or null. */
 function firstCoin(world) {
   for (let i = 0; i < world.size.w * world.size.h; i++) {
@@ -845,30 +857,32 @@ function coinLeg(g, { need, click }) {
   need(g.wallet === 1 && g.earned === 0, 'a collected coin credits nothing on a new run');
   need(g.coins.get(key).has(id), 'the collected set keeps the coin');
 
-  // Step 3: a new best tomb pays its rate.
+  // Step 3: a tomb solved first on this device pays its rate, at any run count.
   for (const d of DIFFICULTIES) {
     onLevel(d);
-    g.paid.delete(coinKey(SELFTEST_CODE, d));
-    keepCoins(g);
-    const was = g.wallet;
+    forgetTomb(g, d);
+    const was = g.wallet, tombKey = coinKey(SELFTEST_CODE, d);
     oneTombOn(g, 0);
-    need(g.wallet - was === rates[d], `a new best tomb pays ${rates[d]} at ${difficultyLabel(d)}`);
-    need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[coinKey(SELFTEST_CODE, d)] === 1,
-      `the ${difficultyLabel(d)} payout stores the wallet and the record`);
+    need(g.wallet - was === rates[d], `a tomb solved first on this device pays ${rates[d]} at ${difficultyLabel(d)}`);
+    need(load(KEY_WALLET) === String(g.wallet) && (JSON.parse(load(KEY_TOMBS))[tombKey] || []).includes('0,0')
+      && JSON.parse(load(KEY_PAID))[tombKey] === 1,
+      `the payout stores the wallet, the solved tomb and the record at ${difficultyLabel(d)}`);
   }
 
-  // Step 4: a replay pays only past the record.
+  // Step 4: a replay of a solved tomb pays nothing; a new tomb pays under the record.
   for (const d of DIFFICULTIES) {
     onLevel(d);
-    g.paid.set(coinKey(SELFTEST_CODE, d), 1);
-    keepCoins(g);
     const was = g.wallet;
     oneTombOn(g, 0);
-    need(g.wallet === was, `a replay at the record pays nothing at ${difficultyLabel(d)}`);
-    oneTombOn(g, 1);
-    need(g.wallet - was === rates[d], `a tomb past the record pays ${rates[d]} once at ${difficultyLabel(d)}`);
-    need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[coinKey(SELFTEST_CODE, d)] === 2,
-      `the ${difficultyLabel(d)} replay stores the wallet and the record`);
+    need(g.wallet === was, `a replay of a solved tomb pays nothing at ${difficultyLabel(d)}`);
+  }
+  for (const d of DIFFICULTIES) {
+    onLevel(d);
+    forgetTomb(g, d, 50);
+    const was = g.wallet;
+    oneTombOn(g, 0);
+    need(g.wallet - was === rates[d] && JSON.parse(load(KEY_PAID))[coinKey(SELFTEST_CODE, d)] === 50,
+      `a new tomb pays under the record at ${difficultyLabel(d)}`);
   }
 
   // Step 5: the coins earned this run equal the wallet's gain since BEGIN.
@@ -886,6 +900,7 @@ function coinLeg(g, { need, click }) {
   need(g.earned === g.wallet - start, 'the end screen keeps the coins earned');
   click('over', 'continue');
   need(g.screen === 'play' && g.earned === g.wallet - start, 'CONTINUE keeps the coins earned this run');
+  forgetTomb(g, 'medium');
   oneTombOn(g, 1);
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
   draw(g, 0);
@@ -916,6 +931,7 @@ function splashLeg(g, { need, click, press }) {
   // Step 1: the first crossing of tomb 100 shows TORCHBEARER and pays the rate plus 100, at every level.
   g.wallet = 0;
   g.coins = new Map();
+  g.tombs = new Map();
   g.paid = new Map();
   for (const d of DIFFICULTIES) {
     setDifficulty(g, d);
@@ -988,8 +1004,7 @@ function splashLeg(g, { need, click, press }) {
   // Step 7: a run that ends on the tick that crosses tomb 100 shows the end screen, and the payout stands.
   const ticks = oneTombOn(g, 99);
   const level = g.world.difficulty;
-  g.paid.set(coinKey(SELFTEST_CODE, level), 99);
-  keepCoins(g);
+  forgetTomb(g, level, 99);
   const before = g.wallet;
   oneTombOn(g, 99, ticks);
   need(g.screen === 'over' && tombCount(g.sim) === 100, 'a run that ends on the crossing of tomb 100 shows the end screen');
@@ -1056,19 +1071,14 @@ function collectCoin(g, ids) {
 }
 
 /**
- * Pays the tick's rise in the tomb count; returns the pay rule, whose `seen` is
- * the record the merge found, or null when the count did not rise.
+ * Pays the tombs the tick solved and the milestone it crossed; returns the pay
+ * rule, whose `seen` is the record the merge found, or null when no tomb was
+ * solved.
  */
 function payTombs(g, solvedNow) {
   if (solvedNow.length === 0) return null;
-  const key = coinKey(g.code, g.world.difficulty), level = g.world.difficulty, count = tombCount(g.sim);
-  const pay = (state) => {
-    const record = state.paid.get(key) || 0;
-    pay.seen = record;
-    const due = tombPayout(level, record, count);
-    if (due) state.paid.set(key, count);
-    return due;
-  };
+  const level = g.world.difficulty;
+  const pay = tombPay(coinKey(g.code, level), level, solvedNow, tombCount(g.sim));
   g.earned += commitCoins(coinIo, g, pay);
   return pay;
 }
