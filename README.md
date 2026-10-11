@@ -112,8 +112,8 @@ draws as maze rather than rock. The self-test then sets `data-selftest` on
 
 Every push to main deploys. `.github/workflows/ci-cd.yml` runs the gates,
 then, for `main` only, deploys `StackMaze2adCom`, uploads `infinite-maze.html`
-as `index.html`, removes every play-test build under `beta/` and invalidates
-CloudFront. Pull requests run the gates alone,
+as `index.html` with `aws s3 sync --delete`, so the bucket holds the release
+alone, and invalidates CloudFront. Pull requests run the gates alone,
 with no AWS credentials. The game is served at https://maze.2ad.com from a
 private S3 bucket behind CloudFront. `cdk/` defines the bucket, certificate,
 distribution and DNS records in the shared `2ad.com` zone, which the stack
@@ -143,10 +143,10 @@ export AWS_PROFILE=awsapproach
 bun install --frozen-lockfile
 bun run test
 bun run cdk:deploy -- StackMaze2adCom --require-approval never
-aws s3 cp infinite-maze.html s3://maze-us-east-1-504242000181/index.html \
+site="$(mktemp -d)" && cp infinite-maze.html "$site/index.html"
+aws s3 sync "$site/" s3://maze-us-east-1-504242000181/ --delete \
   --cache-control "no-cache, no-store, must-revalidate" \
   --content-type "text/html; charset=utf-8"
-aws s3 rm s3://maze-us-east-1-504242000181/beta/ --recursive
 aws cloudfront create-invalidation --paths "/*" \
   --distribution-id "$(aws cloudformation describe-stacks --stack-name StackMaze2adCom \
     --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)"

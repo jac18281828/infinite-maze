@@ -88,17 +88,16 @@ jobs:
       - name: Deploy infrastructure
         run: |
           bunx cdk deploy StackMaze2adCom --require-approval never --no-telemetry --outputs-file cdk-outputs.json
-      - name: Upload the game
+      - name: Publish the game
+        # The bucket mirrors the release, index.html alone; --delete removes
+        # everything else, trial builds under beta/ included.
         run: |
-          aws s3 cp infinite-maze.html "s3://${S3_BUCKET_NAME}/index.html" \
+          site="$(mktemp -d)"
+          cp infinite-maze.html "$site/index.html"
+          aws s3 sync "$site/" "s3://${S3_BUCKET_NAME}/" --delete \
             --region "${AWS_REGION}" \
             --cache-control "no-cache, no-store, must-revalidate" \
             --content-type "text/html; charset=utf-8"
-      - name: Remove play-test builds
-        # beta/ holds trial builds copied by hand for phone play-tests; each
-        # release clears them.
-        run: |
-          aws s3 rm "s3://${S3_BUCKET_NAME}/beta/" --recursive --region "${AWS_REGION}"
       - name: Invalidate CloudFront cache
         run: |
           DISTRIBUTION_ID="$(jq -r '.StackMaze2adCom.DistributionId // empty' cdk-outputs.json)"
