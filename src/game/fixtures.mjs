@@ -4,7 +4,7 @@
 // every x to 2X + 47 - x. Mask rows count down from the top, as in mask.mjs.
 import { BW, NCELL } from '../world/board.mjs';
 import { boardMask, MASK_W, MASK_H, CELL_PX } from './mask.mjs';
-import { LADDER, SCONCE, idx } from './art.mjs';
+import { LADDER, SCONCE, SIGNS, idx } from './art.mjs';
 
 export const STEPS = 12;
 export const STEP_W = 4;
@@ -74,6 +74,21 @@ export function ladderPixels([x, y0, y1]) {
 /** Opaque pixels of the sconce centred on cx whose row `y` is the sprite's top edge. */
 export function sconcePixels([cx, y]) {
   return spritePixels(SCONCE, cx - 4, y - 1);
+}
+
+/**
+ * Sign [x, yTop, dir] of the sign junction `cell`: its glyph's top left in the
+ * room's upper left (side 0) or upper right (side 1) corner. Rows 31 to 37
+ * clear the sconce flame, which ends at row 29, and the ceiling at row 39;
+ * the columns keep a pixel from the room wall.
+ */
+export function signSpot(cell, side, dir) {
+  return [(cell % BW) * CELL_PX + (side ? 32 : 9), ((cell / BW) | 0) * CELL_PX + 37, dir];
+}
+
+/** Opaque pixels of a sign [x, yTop, dir]. */
+export function signPixels([x, yTop, dir]) {
+  return spritePixels(SIGNS[dir], x, yTop);
 }
 
 /** Ladder boxes [x, y0, y1) of cell c. Where a gallery starts in a cell, its ladder ends at the floor. */

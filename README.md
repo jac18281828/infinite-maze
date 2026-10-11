@@ -36,6 +36,9 @@ and no assets.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends.
+- Some junctions on a route carry a carved arrow in the upper corner of the
+  room, pointing along the link toward the way on; they are always on and
+  about 1 in 6 at EASY, 1 in 8 at MEDIUM and 1 in 12 at HARD.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
 - The score counts tombs solved: a tomb is solved when the explorer leaves it

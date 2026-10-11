@@ -4,10 +4,12 @@ import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import { createSim, nodeXY } from '../src/game/sim.mjs';
-import { RGB, idx } from '../src/game/art.mjs';
+import { RGB, idx, SIGNS, SCONCE_FLAME } from '../src/game/art.mjs';
 import {
-  fixtureSets, ladderPixels, sconcePixels, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
+  fixtureSets, ladderPixels, sconcePixels, signPixels, signSpot, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
 } from '../src/game/fixtures.mjs';
+import { junctions, signs, signSide } from '../src/world/signs.mjs';
+import { DIFFICULTIES } from '../src/world/band.mjs';
 import { createRenderer } from '../src/game/render.mjs';
 
 const world = createWorld('00000000');
@@ -239,11 +241,25 @@ const isColour = (d, i, ch) => {
   return d[i] === c[0] && d[i + 1] === c[1] && d[i + 2] === c[2];
 };
 
+/** Sign pixels of board `bd` as pixel index -> palette character, from the glyph rows. */
+function signGlyphs(bd) {
+  const out = new Map();
+  for (const { cell, dir } of signs(world, bd)) {
+    const [x, yTop] = signSpot(cell, signSide(world, bd, cell), dir);
+    SIGNS[dir].forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') out.set(px(x + c, yTop - r), ch); }));
+  }
+  return out;
+}
+
 test('the renderer paints each stair pixel its role colour (tread b, riser a, body 8) and every ladder and sconce pixel inside its box, nothing else', () => {
+  // "Nothing else" admits the sign pixels by name, each in its glyph's colour.
+  let signed = 0;
   for (const { bd, fx } of boards.filter((_, i) => i % 3 === 0)) {
     const { art } = renderBoard(bd);
     assert.ok(art, 'board art drawn');
     const { ladders, sconces } = spriteSets(fx);
+    const carved = signGlyphs(bd);
+    signed += carved.size > 0 ? 1 : 0;
     const bad = [];
     for (let k = 0; k < MASK_W * MASK_H && bad.length < 5; k++) {
       const drawn = art.touched[k] === 1;
@@ -251,11 +267,78 @@ test('the renderer paints each stair pixel its role colour (tread b, riser a, bo
       const ok = fx.stairs[k] ? drawn && isColour(art.data, k * 4, ROLE_COLOUR[fx.stairs[k]])
         : ladders.has(k) ? drawn
           : sconces.has(k) ? drawn && !isStairColour(art.data, k * 4)
-            : !drawn;
+            : carved.has(k) ? drawn && isColour(art.data, k * 4, carved.get(k))
+              : !drawn;
       if (!ok) bad.push(`(${k % MASK_W}, ${MASK_H - 1 - ((k / MASK_W) | 0)})`);
     }
     assert.deepEqual(bad, [], `board ${bd.p}`);
   }
+  assert.ok(signed >= 3, 'the sample holds boards with signs');
+});
+
+test('a sign junction shows its sign exactly when it carries one, in its direction and its corner of the room', () => {
+  let shown = 0, bare = 0;
+  for (const { bd } of boards) {
+    const js = junctions(world, bd);
+    if (!js.length) continue;
+    const { art } = renderBoard(bd);
+    const carry = new Map(signs(world, bd).map((sg) => [sg.cell, sg]));
+    for (const { cell, dir } of js) {
+      const [X, Y] = cellXY(cell);
+      for (const side of [0, 1]) {
+        const pixels = signPixels(signSpot(cell, side, dir));
+        const on = pixels.filter(([x, y]) => art.touched[px(x, y)] === 1).length;
+        if (!carry.has(cell)) { assert.equal(on, 0, `board ${bd.p} cell ${cell}: no sign`); continue; }
+        if (side !== signSide(world, bd, cell)) { assert.equal(on, 0, `board ${bd.p} cell ${cell}: the other corner`); continue; }
+        assert.equal(on, pixels.length, `board ${bd.p} cell ${cell}`);
+        // The glyph lies in a corner column range and in rows 30 to 39 of its cell.
+        for (const [x, y] of pixels) {
+          assert.ok((x - X >= 8 && x - X < 16) || (x - X >= 32 && x - X < 40), `column ${x - X}`);
+          assert.ok(y - Y >= 30 && y - Y < 40, `row ${y - Y}`);
+        }
+        shown++;
+      }
+      if (!carry.has(cell)) bare++;
+    }
+  }
+  assert.ok(shown >= 20 && bare >= 20, `${shown} signs shown, ${bare} bare junctions`);
+});
+
+test('both corners of every sign junction hold room air and no ladder, stair, sconce or sconce-flame pixel, at every level', () => {
+  let corners = 0;
+  for (const level of DIFFICULTIES) {
+    const w = createWorld('00000000', { difficulty: level });
+    for (let v = 0; v <= 5; v++) {
+      for (let u = -2; u <= 2; u++) {
+        for (let i = 0; i < w.size.w * w.size.h; i++) {
+          const { x, y } = boardCoords(u, v, i, w.size);
+          const bd = w.board(x, y);
+          const js = junctions(w, bd);
+          if (!js.length) continue;
+          const mask = boardMask(bd), fx = fixtureSets(bd, mask);
+          const { ladders, sconces } = spriteSets(fx);
+          const boxed = new Set(), flames = new Set();
+          for (const [lx, y0, y1] of fx.ladders) for (let yy = y0; yy < y1; yy++) for (let c = 0; c < 16; c++) boxed.add(px(lx + c, yy));
+          for (const [cx, sy] of fx.sconces) {
+            for (const frame of SCONCE_FLAME) {
+              frame.forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') flames.add(px(cx - 4 + c, sy + 3 - r)); }));
+            }
+          }
+          for (const { cell, dir } of js) {
+            for (const side of [0, 1]) {
+              for (const [sx, sy] of signPixels(signSpot(cell, side, dir))) {
+                const k = px(sx, sy);
+                assert.equal(mask[k], 0, `${level} board ${bd.p}: rock at (${sx}, ${sy})`);
+                assert.ok(!fx.stairs[k] && !ladders.has(k) && !boxed.has(k) && !sconces.has(k) && !flames.has(k), `${level} board ${bd.p}: fixture at (${sx}, ${sy})`);
+              }
+              corners++;
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.ok(corners > 5000, `${corners} corners`);
 });
 
 test('rock shading counts the stair as solid: no highlight under a flight, and a lone tread keeps its second row', () => {

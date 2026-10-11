@@ -104,6 +104,8 @@ the same world on every engine.
 | Board cell maze | sfc32 of `H("board", x, y, k)`, k = reroll | — |
 | Flame in a dead-end board | `H("flame", x, y)` byte 0 < 128 | 50% |
 | Flame cell | `H("flame", x, y)` u32 at bytes 4–7 mod 84 | any of the 84 cells |
+| Sign at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 48 | carved when under 8 (EASY), 6 (MEDIUM), 4 (HARD) or 3 (ULTIMATE) |
+| Corner of a sign | `H("sign", x, y, cell)` u32 bit 31 | left, right |
 
 Both boards on a shared wall read the same door key, and both tombs on a
 shared tomb wall read the same crossing key, so door positions match across
@@ -233,6 +235,29 @@ flame lies on a carved cell and walking times between flames are unchanged.
 The cells that remain form a tree, and the rest is rock: the game opens a
 room only for a cell that holds a link or a door. Boards average about 51
 carved cells and 5 galleries.
+
+**Signs.** A sign junction is a cell of a route board (§3) on the tree path
+from an in-cell to the out-door's cell `o`, `o` excepted, with three or more
+ways out. A way out is a tree link or a door. The out-door is the door in the
+board's route-exit direction, which leads toward the tomb's exit. The in-cells
+are where routes enter: the cell of each door whose far board is a route board
+leading back through it, which covers a route's predecessor, a tributary
+merging here and the upstream tomb's exit board beyond an in-door, and the
+flame cell of a source board `S`. These differ from the junctions above, which
+count cells on the primary path with a tree link off it, `b` included and doors
+not counted. Paths run from every in-cell, `o` has no sign because a sconce
+already marks its door, and doors count as ways out. A route board holds 5.6
+sign junctions on average at every level.
+
+A sign junction carries a sign when `u32(H("sign", x, y, cell)) mod 48` is
+under the level's threshold: 8 at EASY, 6 at MEDIUM, 4 at HARD and 3 at
+ULTIMATE, about 1 junction in 6, 8, 12 and 16. The level selects the threshold
+and enters no hash. A sign points along the tree link from its junction to the
+next cell of its path toward `o`: one of the eight link directions,
+galleries included. It names the link to take, not the distant door, and so
+points the way on. Dead-end boards carry no sign, because the route does not
+pass through them. Signs read the built board and enter no board, band or
+digest.
 
 Generation is lazy. The game holds the tombs within one of the explorer's in
 both axes, and builds a board when it first comes within one board of the
@@ -418,6 +443,17 @@ fading toward its edge.
 the upper floor, in air the mask already cuts. Where a gallery starts in a
 cell, a ladder in that cell ends at the floor, and a bottom door's sconce
 stands clear of the flight.
+
+**Signs.** A sign is a carved arrow, at most 7×7 px, in one of eight glyphs,
+one per link direction (E N W S NE NW SW SE). It sits in an upper corner of its
+junction's room, in cell-local columns 8 to 15 or 32 to 39 (the hash picks
+the corner) and rows 31 to 37, clear of the sconce flame, which ends at row 29.
+Both corners of every sign junction hold room air and no ladder, stair, sconce
+or flame pixel. The board art draws the sign after the mask's shading, so it
+sits on the board layer at full brightness in front of the half-bright wall,
+and the light map lights it as it lights the walls. Signs are a deliberate,
+always-on exception to the rule that aids record and never point: they ship
+with no setting.
 
 **Score.** A tomb is solved when the explorer leaves it through its exit
 door, and only if it lies on the run's way on: the run's start tomb, the tomb

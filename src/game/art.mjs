@@ -570,6 +570,83 @@ export const SCONCE_FLAME = [
   ['..q.....', '..qp....', '..pqp...', '..ono...'],
 ];
 
+// Signs carved at a junction, 7x7, one per direction in DX, DY order: E N W S
+// NE NW SW SE. Each arrow points along the link it names.
+export const SIGNS = [
+  [
+    '...9...',
+    '....9..',
+    '.....9.',
+    '9999999',
+    '.....9.',
+    '....9..',
+    '...9...',
+  ],
+  [
+    '...9...',
+    '..9.9..',
+    '.9.9.9.',
+    '...9...',
+    '...9...',
+    '...9...',
+    '...9...',
+  ],
+  [
+    '...9...',
+    '..9....',
+    '.9.....',
+    '9999999',
+    '.9.....',
+    '..9....',
+    '...9...',
+  ],
+  [
+    '...9...',
+    '...9...',
+    '...9...',
+    '...9...',
+    '.9.9.9.',
+    '..9.9..',
+    '...9...',
+  ],
+  [
+    '...9999',
+    '.....99',
+    '....9.9',
+    '...9..9',
+    '..9....',
+    '.9.....',
+    '9......',
+  ],
+  [
+    '9999...',
+    '99.....',
+    '9.9....',
+    '9..9...',
+    '....9..',
+    '.....9.',
+    '......9',
+  ],
+  [
+    '......9',
+    '.....9.',
+    '....9..',
+    '9..9...',
+    '9.9....',
+    '99.....',
+    '9999...',
+  ],
+  [
+    '9......',
+    '.9.....',
+    '..9....',
+    '...9..9',
+    '....9.9',
+    '.....99',
+    '...9999',
+  ],
+];
+
 // Brazier for a turquoise flame; 16x10 bowl on a gold stand.
 export const BRAZIER = [
   '.kllllllllllllk.',
@@ -707,7 +784,7 @@ export function artSets() {
   return {
     explorer: Object.values(EXPLORER).flat(),
     rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
-    sconceFlame: SCONCE_FLAME, brazier: [BRAZIER], flame: FLAME, torch: TORCH,
+    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], flame: FLAME, torch: TORCH,
     font: Object.values(FONT_ROWS),
   };
 }

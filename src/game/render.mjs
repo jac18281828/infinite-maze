@@ -2,13 +2,14 @@
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
-  BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H,
+  BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS,
 } from './art.mjs';
 import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
 import { BW, BH, DX, DY } from '../world/board.mjs';
+import { signs, signSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { boardMask, MASK_W } from './mask.mjs';
-import { fixtureSets, dustMotes, maskRow, ROLE } from './fixtures.mjs';
+import { fixtureSets, dustMotes, maskRow, signSpot, ROLE } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
 
 export const VIEW_W = 320;
@@ -73,6 +74,7 @@ export function createRenderer(canvas, world) {
   }
   const ladder = spriteCanvas(LADDER);
   const sconce = spriteCanvas(SCONCE);
+  const signGlyphs = SIGNS.map((rows) => spriteCanvas(rows));
   const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
   const brazier = spriteCanvas(BRAZIER);
   const flames = FLAME.map((f) => spriteCanvas(f));
@@ -114,10 +116,11 @@ export function createRenderer(canvas, world) {
     return c;
   }
 
-  /** Ladders, stairs, sconces and braziers of board `bd`, in board pixels. */
+  /** Ladders, stairs, sconces, signs and braziers of board `bd`, in board pixels. */
   function boardFixtures(bd, mask) {
-    if (!bd) return { flights: [], stairs: null, ladders: [], sconces: [], braziers: [] };
+    if (!bd) return { flights: [], stairs: null, ladders: [], sconces: [], signs: [], braziers: [] };
     const fx = fixtureSets(bd, mask);
+    fx.signs = signs(world, bd).map(({ cell, dir }) => signSpot(cell, signSide(world, bd, cell), dir));
     fx.braziers = world.flamesAt(bd.x, bd.y).map((cell) => nodeXY({ x: 0, y: 0 }, cell));
     return fx;
   }
@@ -183,6 +186,7 @@ export function createRenderer(canvas, world) {
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
+    for (const [x, yTop, dir] of fx.signs) g.drawImage(signGlyphs[dir], x, toY(yTop + 1));
   }
 
   function buildBoardCanvas(bd) {

@@ -2624,6 +2624,83 @@ const SCONCE_FLAME = [
   ['..q.....', '..qp....', '..pqp...', '..ono...'],
 ];
 
+// Signs carved at a junction, 7x7, one per direction in DX, DY order: E N W S
+// NE NW SW SE. Each arrow points along the link it names.
+const SIGNS = [
+  [
+    '...9...',
+    '....9..',
+    '.....9.',
+    '9999999',
+    '.....9.',
+    '....9..',
+    '...9...',
+  ],
+  [
+    '...9...',
+    '..9.9..',
+    '.9.9.9.',
+    '...9...',
+    '...9...',
+    '...9...',
+    '...9...',
+  ],
+  [
+    '...9...',
+    '..9....',
+    '.9.....',
+    '9999999',
+    '.9.....',
+    '..9....',
+    '...9...',
+  ],
+  [
+    '...9...',
+    '...9...',
+    '...9...',
+    '...9...',
+    '.9.9.9.',
+    '..9.9..',
+    '...9...',
+  ],
+  [
+    '...9999',
+    '.....99',
+    '....9.9',
+    '...9..9',
+    '..9....',
+    '.9.....',
+    '9......',
+  ],
+  [
+    '9999...',
+    '99.....',
+    '9.9....',
+    '9..9...',
+    '....9..',
+    '.....9.',
+    '......9',
+  ],
+  [
+    '......9',
+    '.....9.',
+    '....9..',
+    '9..9...',
+    '9.9....',
+    '99.....',
+    '9999...',
+  ],
+  [
+    '9......',
+    '.9.....',
+    '..9....',
+    '...9..9',
+    '....9.9',
+    '.....99',
+    '...9999',
+  ],
+];
+
 // Brazier for a turquoise flame; 16x10 bowl on a gold stand.
 const BRAZIER = [
   '.kllllllllllllk.',
@@ -2761,15 +2838,100 @@ function artSets() {
   return {
     explorer: Object.values(EXPLORER).flat(),
     rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
-    sconceFlame: SCONCE_FLAME, brazier: [BRAZIER], flame: FLAME, torch: TORCH,
+    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], flame: FLAME, torch: TORCH,
     font: Object.values(FONT_ROWS),
   };
 }
-return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H, artSets };
+return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, SIGNS, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H, artSets };
+})();
+
+// src/world/signs.mjs
+const __m9 = (() => {
+const { NCELL, cellNeighbor } = __m2;
+const { BDX, BDY } = __m3;
+const { u32 } = __m1;
+// Signs (spec section 4): a glyph carved at some junctions of a route board
+// that points along the link toward the way on. Signs derive from a built
+// board and the hash alone; they enter no board, band or digest.
+
+
+
+
+const SIGN_MOD = 48;
+// A sign junction carries a sign when its hash mod SIGN_MOD is under the
+// level's threshold: about 1 in 6, 8, 12 and 16.
+const SIGN_THRESHOLD = { easy: 8, medium: 6, hard: 4, ultimate: 3 };
+
+const ways = (m) => {
+  let n = 0;
+  for (; m; m &= m - 1) n++;
+  return n;
+};
+
+/**
+ * The sign junctions of route board `bd` as { cell, dir }, ascending by
+ * cell. A sign junction lies on the tree path from an in-cell to the
+ * out-door's cell `o`, `o` excepted, with three or more ways out counting
+ * links and doors. `dir` is the link from the cell toward `o`. A board that
+ * is not a route board has none.
+ */
+function junctions(world, bd) {
+  if (bd.kind !== 'route') return [];
+  const o = bd.doors.find((d) => d.dir === bd.bDir).cell;
+  // toward[c]: link direction from c to the next cell on its path to o.
+  const toward = new Int8Array(NCELL).fill(-1);
+  const seen = new Uint8Array(NCELL);
+  const queue = [o];
+  seen[o] = 1;
+  for (let h = 0; h < queue.length; h++) {
+    const c = queue[h];
+    for (let d = 0; d < 8; d++) {
+      if (!(bd.links[c] & (1 << d))) continue;
+      const n = cellNeighbor(c, d);
+      if (seen[n]) continue;
+      seen[n] = 1;
+      toward[n] = d ^ 2;
+      queue.push(n);
+    }
+  }
+  // In-cells: where routes enter, through a door whose far board leads back
+  // here or at the flame cell of a source board.
+  const ins = [];
+  if (bd.aDir < 0) ins.push(bd.a);
+  for (const door of bd.doors) {
+    const far = world.board(bd.x + BDX[door.dir], bd.y + BDY[door.dir]);
+    if (far.kind === 'route' && far.bDir === (door.dir ^ 2)) ins.push(door.cell);
+  }
+  const on = new Set();
+  for (let c of ins) {
+    while (c !== o && toward[c] >= 0 && !on.has(c)) {
+      on.add(c);
+      c = cellNeighbor(c, toward[c]);
+    }
+  }
+  return [...on]
+    .filter((c) => ways(bd.links[c]) + ways(bd.doorMask[c]) >= 3)
+    .sort((p, q) => p - q)
+    .map((cell) => ({ cell, dir: toward[cell] }));
+}
+
+const signHash = (world, bd, cell) => u32(world.H('sign', bd.x, bd.y, cell));
+
+/** The sign junctions of `bd` whose hash passes the level's threshold. */
+function signs(world, bd) {
+  const t = SIGN_THRESHOLD[world.difficulty];
+  return junctions(world, bd).filter(({ cell }) => signHash(world, bd, cell) % SIGN_MOD < t);
+}
+
+/** The upper corner of the cell's room that carries its sign: 0 left, 1 right. */
+function signSide(world, bd, cell) {
+  return signHash(world, bd, cell) >>> 31;
+}
+return { SIGN_MOD, SIGN_THRESHOLD, junctions, signs, signSide };
 })();
 
 // src/game/mask.mjs
-const __m9 = (() => {
+const __m10 = (() => {
 const { BW, NCELL } = __m2;
 // Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
 // opening joins exactly the cells of one tree link or door:
@@ -2834,10 +2996,10 @@ return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 })();
 
 // src/game/fixtures.mjs
-const __m10 = (() => {
+const __m11 = (() => {
 const { BW, NCELL } = __m2;
-const { boardMask, MASK_W, MASK_H, CELL_PX } = __m9;
-const { LADDER, SCONCE, idx } = __m8;
+const { boardMask, MASK_W, MASK_H, CELL_PX } = __m10;
+const { LADDER, SCONCE, SIGNS, idx } = __m8;
 // Pixel geometry of a board's drawn fixtures and of the dust, DOM-free. Board
 // pixels, y up: X = col * 48, Y = row * 48. A north-east flight from cell c
 // has t = x - (X + 24) over [X + 24, X + 72); a north-west flight mirrors
@@ -2914,6 +3076,21 @@ function ladderPixels([x, y0, y1]) {
 /** Opaque pixels of the sconce centred on cx whose row `y` is the sprite's top edge. */
 function sconcePixels([cx, y]) {
   return spritePixels(SCONCE, cx - 4, y - 1);
+}
+
+/**
+ * Sign [x, yTop, dir] of the sign junction `cell`: its glyph's top left in the
+ * room's upper left (side 0) or upper right (side 1) corner. Rows 31 to 37
+ * clear the sconce flame, which ends at row 29, and the ceiling at row 39;
+ * the columns keep a pixel from the room wall.
+ */
+function signSpot(cell, side, dir) {
+  return [(cell % BW) * CELL_PX + (side ? 32 : 9), ((cell / BW) | 0) * CELL_PX + 37, dir];
+}
+
+/** Opaque pixels of a sign [x, yTop, dir]. */
+function signPixels([x, yTop, dir]) {
+  return spritePixels(SIGNS[dir], x, yTop);
 }
 
 /** Ladder boxes [x, y0, y1) of cell c. Where a gallery starts in a cell, its ladder ends at the floor. */
@@ -3000,11 +3177,11 @@ function dustMotes(x0, y0, x1, y1, t, ox = 0, oy = 0) {
   }
   return out;
 }
-return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
+return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, signSpot, signPixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
 })();
 
 // src/game/map.mjs
-const __m11 = (() => {
+const __m12 = (() => {
 const { BW, BH, NCELL } = __m2;
 const { tombOf } = __m5;
 // The pause-screen map: what the explorer's trail shows of one tomb. DOM-free.
@@ -3078,16 +3255,18 @@ return { mapCells, frameOf, panFrame, sameFrame, mapModel };
 })();
 
 // src/game/render.mjs
-const __m12 = (() => {
-const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H } = __m8;
+const __m13 = (() => {
+const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS } = __m8;
 const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m7;
 const { BW, BH, DX, DY } = __m2;
+const { signs, signSide } = __m9;
 const { boardOfPos } = __m5;
-const { boardMask, MASK_W } = __m9;
-const { fixtureSets, dustMotes, maskRow, ROLE } = __m10;
-const { mapCells } = __m11;
+const { boardMask, MASK_W } = __m10;
+const { fixtureSets, dustMotes, maskRow, signSpot, ROLE } = __m11;
+const { mapCells } = __m12;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
+
 
 
 
@@ -3158,6 +3337,7 @@ function createRenderer(canvas, world) {
   }
   const ladder = spriteCanvas(LADDER);
   const sconce = spriteCanvas(SCONCE);
+  const signGlyphs = SIGNS.map((rows) => spriteCanvas(rows));
   const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
   const brazier = spriteCanvas(BRAZIER);
   const flames = FLAME.map((f) => spriteCanvas(f));
@@ -3199,10 +3379,11 @@ function createRenderer(canvas, world) {
     return c;
   }
 
-  /** Ladders, stairs, sconces and braziers of board `bd`, in board pixels. */
+  /** Ladders, stairs, sconces, signs and braziers of board `bd`, in board pixels. */
   function boardFixtures(bd, mask) {
-    if (!bd) return { flights: [], stairs: null, ladders: [], sconces: [], braziers: [] };
+    if (!bd) return { flights: [], stairs: null, ladders: [], sconces: [], signs: [], braziers: [] };
     const fx = fixtureSets(bd, mask);
+    fx.signs = signs(world, bd).map(({ cell, dir }) => signSpot(cell, signSide(world, bd, cell), dir));
     fx.braziers = world.flamesAt(bd.x, bd.y).map((cell) => nodeXY({ x: 0, y: 0 }, cell));
     return fx;
   }
@@ -3268,6 +3449,7 @@ function createRenderer(canvas, world) {
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
+    for (const [x, yTop, dir] of fx.signs) g.drawImage(signGlyphs[dir], x, toY(yTop + 1));
   }
 
   function buildBoardCanvas(bd) {
@@ -3541,7 +3723,7 @@ return { VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs
-const __m13 = (() => {
+const __m14 = (() => {
 
 // WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
@@ -3855,7 +4037,7 @@ return { createAudio };
 })();
 
 // src/game/autopilot.mjs
-const __m14 = (() => {
+const __m15 = (() => {
 const { DX, DY } = __m2;
 const { createSim, step, inputEdges } = __m7;
 // Scripted input for the self-test: walks the explorer along tomb (0, 0)'s
@@ -3962,9 +4144,9 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/touch.mjs
-const __m15 = (() => {
+const __m16 = (() => {
 const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m8;
-const { VIEW_W, VIEW_H } = __m12;
+const { VIEW_W, VIEW_H } = __m13;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
 // keydown and keyup KeyboardEvents on window, so the key handlers, the held
 // Up, the jump edge and the tap buffer serve touch unchanged.
@@ -4486,7 +4668,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, layout, nextTouchMode, touchAtBoot, padZone,
 })();
 
 // src/game/clipboard.mjs
-const __m16 = (() => {
+const __m17 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -4514,18 +4696,18 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m17 = (() => {
+const __m18 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m6;
 const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY } = __m7;
-const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m12;
-const { createAudio } = __m13;
-const { runScript, SELFTEST_CODE } = __m14;
-const { createTouch, layout, viewport, difficultyLabel, PANEL_X } = __m15;
-const { copyWithStatus, saveLabel } = __m16;
-const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m11;
+const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m13;
+const { createAudio } = __m14;
+const { runScript, SELFTEST_CODE } = __m15;
+const { createTouch, layout, viewport, difficultyLabel, PANEL_X } = __m16;
+const { copyWithStatus, saveLabel } = __m17;
+const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m12;
 const { RGB, idx } = __m8;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
