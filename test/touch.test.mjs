@@ -483,11 +483,10 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["if (e.code === 'KeyP' || e.key === 'Escape') {\n    g.screen = 'pause';", "if (e.key === 'Escape') {\n    g.screen = 'pause';", /^fail: touch PAUSE reaches pause and stores a save/],
       ["if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", "if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", /^fail: touch RESUME returns to play/],
       ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
-      ['function readCoinState() {\n', 'function readCoinState() {\n  return { wallet: 0, coins: new Map(), paid: new Map() };\n', /^fail: touch boot reads the wallet and the collected set/],
-      ["if (ev === 'coin') collectCoin(g);", "if (ev === 'coin') void g;", /^fail: touch touching the first coin adds one to the wallet/],
-      ['if (s.collected.has(id)) continue;', 'if (false) continue;', /^fail: touch a collected coin credits nothing on a new run/],
+      ['function readCoinState() {\n', 'function readCoinState() {\n  return { wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map() };\n', /^fail: touch boot reads the wallet and the collected set/],
+      ['if (taken.length) collectCoin(g, taken);', 'if (false) collectCoin(g, taken);', /^fail: touch touching the first coin adds one to the wallet/],
       ['const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1, ultimate: 10 };', /^fail: touch a new best tomb pays 5 at HARD/],
-      ['const record = g.paid.get(key) || 0;', 'const record = 0;', /^fail: touch a replay at the record pays nothing at EASY/],
+      ['const record = state.paid.get(key) || 0;', 'const record = 0;', /^fail: touch a replay at the record pays nothing at EASY/],
       ['const MAP_FRAME = Object.values(DIFFICULTY).map(mapCells)\n  .reduce((m, c) => ({ cols: Math.max(m.cols, c.cols), rows: Math.max(m.rows, c.rows) }));', 'const MAP_FRAME = mapCells(DIFFICULTY.hard);', /^fail: touch the pause map centres in ULTIMATE's 72x28-cell frame/],
       ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'else if (false) showSplash(g, hit.k, hit.paid);', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
@@ -505,6 +504,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['tap(SPACE.code, SPACE.key);', "tap('KeyX', 'x');", /^fail: touch FIRE jumps/],
       ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch the title ignores an auto-repeated H/],
       ['for (const o of gamepad.poll()) {', 'for (const o of []) {', /^fail: touch gamepad d-pad left holds Left/],
+      ['  state.wallet = Math.max(state.wallet, stored.wallet);\n  unionInto(state.coins, stored.coins);\n  unionInto(state.tombs, stored.tombs);\n  for (const [key, n] of stored.paid) state.paid.set(key, Math.max(state.paid.get(key) || 0, n));\n', '', /^fail: touch two games on one storage keep both coins/],
       ['const memory = SELFTEST ? new Map() : null;', 'const memory = null;', /^fail: touch the self-test leaves the real wallet untouched/],
     ]) {
       const broken = html.replace(from, to);

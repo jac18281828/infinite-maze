@@ -12,7 +12,8 @@ import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
-  COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
+  COIN_KEYS, COIN_RATE, tombPayout, coinKey, coinId, coinPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
+  serializeCollected, serializePaid, serializeTombs,
 } from './wallet.mjs';
 import { createGamepad } from './gamepad.mjs';
 import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
@@ -32,12 +33,8 @@ const KEY_DIFFICULTY = 'infinite-maze.difficulty';
 // The d-pad's side, 'left' or 'right'; anything else reads 'left'.
 const KEY_PAD = 'infinite-maze.pad';
 const KEY_BEST = 'infinite-maze.plane.best';
-// Coins. The wallet depends on no world layout, so it keeps a plain key; the
-// collected set and the payout record hold board positions, so they take the
-// plane's key style.
-const KEY_WALLET = 'infinite-maze.wallet';
-const KEY_COINS = 'infinite-maze.plane.coins';
-const KEY_PAID = 'infinite-maze.plane.coins.paid';
+// Coins: the wallet, the collected set, the payout record and the solved tombs.
+const { wallet: KEY_WALLET, coins: KEY_COINS, paid: KEY_PAID, tombs: KEY_TOMBS } = COIN_KEYS;
 // The stacked world's save difficulty, which a plane save never reads.
 const KEY_STACKED_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
 // A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
@@ -64,7 +61,7 @@ function unstore(key) {
 
 /** The real localStorage's coin and save keys, as stored, for the self-test's guard. */
 function realKeys() {
-  return [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_WALLET, KEY_COINS, KEY_PAID].map((k) => {
+  return [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_WALLET, KEY_COINS, KEY_PAID, KEY_TOMBS].map((k) => {
     try { return globalThis.localStorage.getItem(k); } catch { return null; }
   });
 }
@@ -672,10 +669,11 @@ function oneTombOn(g, n, doomAt = 0) {
   return ticks;
 }
 
-/** Stores the wallet, the collected set and the payout record, as the game does on each change. */
+/** Stores the wallet, the collected set, the solved tombs and the payout record, as the game does on each change. */
 function keepCoins(g) {
   store(KEY_WALLET, String(g.wallet));
   store(KEY_COINS, serializeCollected(g.coins));
+  store(KEY_TOMBS, serializeTombs(g.tombs));
   store(KEY_PAID, serializePaid(g.paid));
 }
 
@@ -817,6 +815,7 @@ function coinLeg(g, { need, click }) {
   const clearCoins = () => {
     g.wallet = 0;
     g.coins = new Map();
+    g.tombs = new Map();
     g.paid = new Map();
     keepCoins(g);
   };
@@ -890,6 +889,22 @@ function coinLeg(g, { need, click }) {
   oneTombOn(g, 1);
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
   draw(g, 0);
+
+  // Step 6: a second game, made before the first one's write, earns after it; the merge keeps both.
+  clearCoins();
+  onLevel('medium');
+  g.screen = 'title';
+  draw(g, 0);
+  click('title', 'begin');
+  const other = createGame();
+  walkToItem(g, firstCoin(g.world));
+  const second = '9,9,9';
+  useCode(other, SELFTEST_CODE);
+  collectedSet(other).add(second);
+  collectCoin(other, [second]);
+  const stored = JSON.parse(load(KEY_COINS))[key] || [];
+  need(load(KEY_WALLET) === '2' && other.wallet === 2 && other.earned === 1 && stored.includes(id) && stored.includes(second)
+    && other.coins.get(key).has(id), 'two games on one storage keep both coins');
 }
 
 /**
@@ -974,6 +989,7 @@ function splashLeg(g, { need, click, press }) {
   const ticks = oneTombOn(g, 99);
   const level = g.world.difficulty;
   g.paid.set(coinKey(SELFTEST_CODE, level), 99);
+  keepCoins(g);
   const before = g.wallet;
   oneTombOn(g, 99, ticks);
   need(g.screen === 'over' && tombCount(g.sim) === 100, 'a run that ends on the crossing of tomb 100 shows the end screen');
@@ -1007,9 +1023,12 @@ function writeBest(code, difficulty, solved) {
   if (all[key] === undefined || solved > all[key]) { all[key] = solved; store(KEY_BEST, JSON.stringify(all)); }
 }
 
-/** The wallet, the collected set and the payout record as stored; absent or malformed reads as empty. */
+/** The wallet, the collected set, the solved tombs and the payout record as stored; absent or malformed reads as empty. */
 function readCoinState() {
-  return { wallet: parseWallet(load(KEY_WALLET)), coins: parseCollected(load(KEY_COINS)), paid: parsePaid(load(KEY_PAID)) };
+  return {
+    wallet: parseWallet(load(KEY_WALLET)), coins: parseCollected(load(KEY_COINS)),
+    tombs: parseTombs(load(KEY_TOMBS)), paid: parsePaid(load(KEY_PAID)),
+  };
 }
 
 /** The collected set of the game's seed and level, which a run's sim fills as it takes coins. */
@@ -1023,29 +1042,35 @@ function collectedSet(g) {
   return set;
 }
 
-/** Adds n coins to the wallet and to the coins earned this run, and stores the wallet. */
-function earn(g, n) {
-  g.wallet += n;
-  g.earned += n;
-  store(KEY_WALLET, String(g.wallet));
+/** Every coin write goes through the merge, which adds only what storage lacks. */
+const coinIo = { load, store };
+
+/** The entries a set gained after it held `before`; a Set iterates in insertion order. */
+function appended(set, before) {
+  return set.size > before ? [...set].slice(before) : [];
 }
 
-/** A touched coin: the sim already holds its key in the collected set. */
-function collectCoin(g) {
-  earn(g, 1);
-  store(KEY_COINS, serializeCollected(g.coins));
+/** A tick took the coins `ids`: pays those storage did not list and counts them earned. */
+function collectCoin(g, ids) {
+  g.earned += commitCoins(coinIo, g, coinPay(coinKey(g.code, g.world.difficulty), ids));
 }
 
-/** Pays the tombs the run has climbed past the highest count already paid on this seed and level. */
-function payTombs(g) {
-  const key = coinKey(g.code, g.world.difficulty);
-  const record = g.paid.get(key) || 0;
-  const count = tombCount(g.sim);
-  const due = tombPayout(g.world.difficulty, record, count);
-  if (due === 0) return;
-  g.paid.set(key, count);
-  earn(g, due);
-  store(KEY_PAID, serializePaid(g.paid));
+/**
+ * Pays the tick's rise in the tomb count; returns the pay rule, whose `seen` is
+ * the record the merge found, or null when the count did not rise.
+ */
+function payTombs(g, solvedNow) {
+  if (solvedNow.length === 0) return null;
+  const key = coinKey(g.code, g.world.difficulty), level = g.world.difficulty, count = tombCount(g.sim);
+  const pay = (state) => {
+    const record = state.paid.get(key) || 0;
+    pay.seen = record;
+    const due = tombPayout(level, record, count);
+    if (due) state.paid.set(key, count);
+    return due;
+  };
+  g.earned += commitCoins(coinIo, g, pay);
+  return pay;
 }
 
 /** State shared by input, tick and draw. */
@@ -1286,7 +1311,6 @@ function handleEvents(g) {
     else if (ev === 'ember' || ev === 'over') g.audio.play(ev);
     if (ev === 'solved') { g.audio.play('band'); writeBest(g.code, g.world.difficulty, s.solved.size); }
     if (ev === 'entry') writeSave(g, entryCode(g));
-    if (ev === 'coin') collectCoin(g);
     if (ev === 'seam') g.world.retain(s.bd.u, s.bd.v);
   }
 }
@@ -1319,22 +1343,27 @@ function showSplash(g, k, paid) {
 }
 
 /**
- * The milestone a tick reached, as { k, paid }, or null; `was` is the tomb count
- * before the tick. Reads the payout record, so it runs before payTombs raises it.
+ * The milestone a tick reached, as { k, paid }, or null; `was` and `count` are
+ * the tomb count before and after the tick, and `seen` the payout record the
+ * merge found, so a crossing the record already passed shows the splash unpaid.
  */
-function milestoneHit(g, was) {
-  const k = Math.floor(tombCount(g.sim) / MILESTONE);
+function milestoneHit(was, count, seen) {
+  const k = Math.floor(count / MILESTONE);
   if (k <= Math.floor(was / MILESTONE)) return null;
-  return { k, paid: (g.paid.get(coinKey(g.code, g.world.difficulty)) || 0) < k * MILESTONE };
+  return { k, paid: seen < k * MILESTONE };
 }
 
 function tick(g) {
   if (g.screen !== 'play') return;
-  const was = tombCount(g.sim);
+  const s = g.sim;
+  const was = tombCount(s), took = s.collected.size;
   stepSim(g);
+  // Read before any commit, which merges stored ids into these sets.
+  const taken = appended(s.collected, took), solvedNow = appended(s.solved, was);
   handleEvents(g);
-  const hit = milestoneHit(g, was);
-  payTombs(g);
+  if (taken.length) collectCoin(g, taken);
+  const pay = payTombs(g, solvedNow);
+  const hit = pay && milestoneHit(was, tombCount(s), pay.seen);
   soundCues(g);
   followCam(g.cam, g.sim);
   // A run that ends on the milestone's tick shows the end screen; the payout stands.

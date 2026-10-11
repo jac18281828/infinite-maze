@@ -8,7 +8,8 @@ import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
-  COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
+  COIN_KEYS, COIN_RATE, tombPayout, coinKey, coinId, coinPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
+  serializeCollected, serializePaid, serializeTombs,
 } from '../src/game/wallet.mjs';
 
 test('the payout is the level rate times the tombs past the record, and 0 at or under it', () => {
@@ -38,6 +39,73 @@ test('the wallet, the collected set and the payout record read absent or malform
   assert.deepEqual(parseCollected(serializeCollected(set)).get('K7Q2M9XA:MEDIUM'), set.get('K7Q2M9XA:MEDIUM'));
   assert.deepEqual([...parsePaid(serializePaid(paid))], [...paid]);
   assert.equal(coinKey('K7Q2M9XA', 'medium'), 'K7Q2M9XA:MEDIUM');
+});
+
+test('the coin keys, and the solved tombs read absent or malformed storage as empty, drop bad ids and round-trip', () => {
+  assert.deepEqual(COIN_KEYS, {
+    wallet: 'infinite-maze.wallet',
+    coins: 'infinite-maze.plane.coins',
+    paid: 'infinite-maze.plane.coins.paid',
+    tombs: 'infinite-maze.plane.coins.tombs',
+  });
+  const tombs = parseTombs('{"K7Q2M9XA:MEDIUM":["0,0","-2,19","1,2,3","x","0,0,",7,"3,-4"],"A:EASY":"no"}');
+  assert.deepEqual([...tombs.get('K7Q2M9XA:MEDIUM')], ['0,0', '-2,19', '3,-4']);
+  assert.deepEqual([...tombs.get('A:EASY') ?? []], []);
+  for (const bad of [null, '', '{', '[]', '3', 'null']) assert.equal(parseTombs(bad).size, 0, String(bad));
+  assert.deepEqual(parseTombs(serializeTombs(tombs)).get('K7Q2M9XA:MEDIUM'), tombs.get('K7Q2M9XA:MEDIUM'));
+  assert.equal(serializeTombs(new Map([['K:EASY', new Set()], ['K:HARD', new Set(['1,1'])]])), '{"K:HARD":["1,1"]}');
+});
+
+/** A Map-backed storage, and the coin state a game would read from it. */
+const memoryIo = () => {
+  const m = new Map();
+  return { m, load: (k) => (m.has(k) ? m.get(k) : null), store: (k, v) => { m.set(k, v); } };
+};
+const readState = (io) => ({
+  wallet: parseWallet(io.load(COIN_KEYS.wallet)), coins: parseCollected(io.load(COIN_KEYS.coins)),
+  tombs: parseTombs(io.load(COIN_KEYS.tombs)), paid: parsePaid(io.load(COIN_KEYS.paid)),
+});
+/** The tick of a game taking coin `id`: the sim adds it to the run's Set, then the game commits. */
+function takeCoin(io, state, key, id) {
+  let set = state.coins.get(key);
+  if (!set) state.coins.set(key, (set = new Set()));
+  set.add(id);
+  return commitCoins(io, state, coinPay(key, [id]));
+}
+
+test('two games that take the same coin are paid once', () => {
+  const io = memoryIo();
+  io.m.set(COIN_KEYS.wallet, '10');
+  const a = readState(io), b = readState(io), key = 'K7Q2M9XA:MEDIUM';
+  assert.equal(takeCoin(io, a, key, '0,0,21'), 1);
+  assert.equal(takeCoin(io, b, key, '0,0,21'), 0);
+  assert.equal(io.m.get(COIN_KEYS.wallet), '11');
+  assert.equal(b.wallet, 11);
+  assert.equal(io.m.get(COIN_KEYS.coins), '{"K7Q2M9XA:MEDIUM":["0,0,21"]}');
+});
+
+test('storage that holds nothing and takes nothing credits each coin once and never lowers the wallet', () => {
+  const io = { load: () => null, store: () => {} }, key = 'K7Q2M9XA:MEDIUM';
+  const state = { wallet: 24, coins: new Map(), tombs: new Map(), paid: new Map() };
+  assert.equal(takeCoin(io, state, key, 'c1'), 1);
+  assert.equal(state.wallet, 25);
+  assert.equal(takeCoin(io, state, key, 'c2'), 1);
+  assert.equal(state.wallet, 26);
+  assert.deepEqual([...state.coins.get(key)], ['c1', 'c2']);
+});
+
+test('the merge keeps the coins another game took and the Set a running sim holds', () => {
+  const io = memoryIo(), key = 'K7Q2M9XA:EASY';
+  const a = readState(io), b = readState(io);
+  takeCoin(io, a, key, '0,0,1');
+  const setA = a.coins.get(key);
+  takeCoin(io, b, key, '0,0,2');
+  assert.equal(io.m.get(COIN_KEYS.wallet), '2');
+  takeCoin(io, a, key, '0,0,3');
+  assert.equal(a.coins.get(key), setA, 'the Set stays the same object');
+  assert.deepEqual([...setA].sort(), ['0,0,1', '0,0,2', '0,0,3']);
+  assert.equal(io.m.get(COIN_KEYS.wallet), '3');
+  assert.equal(a.wallet, 3);
 });
 
 test('a sim climbing two tombs along the way on counts 2, and a sim built from its carry counts 2', () => {
