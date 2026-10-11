@@ -43,16 +43,33 @@ const KEY_STACKED_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
 // A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
 const TYPED_MAX = 26;
 
+const SELFTEST = location.hash === '#selftest';
+// The self-test keeps its storage in memory for the page's lifetime, so it
+// never reads or writes the player's wallet, save or settings.
+const memory = SELFTEST ? new Map() : null;
+
 // Every storage access is guarded; the game runs without storage.
 function load(key) {
+  if (memory) return memory.has(key) ? memory.get(key) : null;
   try { return globalThis.localStorage.getItem(key); } catch { return null; }
 }
 function store(key, value) {
+  if (memory) { memory.set(key, String(value)); return; }
   try { globalThis.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
 }
 function unstore(key) {
+  if (memory) { memory.delete(key); return; }
   try { globalThis.localStorage.removeItem(key); } catch { /* storage unavailable */ }
 }
+
+/** The real localStorage's coin and save keys, as stored, for the self-test's guard. */
+function realKeys() {
+  return [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_WALLET, KEY_COINS, KEY_PAID].map((k) => {
+    try { return globalThis.localStorage.getItem(k); } catch { return null; }
+  });
+}
+const realAtStart = SELFTEST ? realKeys() : null;
+const realUntouched = () => realKeys().every((v, i) => v === realAtStart[i]);
 
 const display = document.getElementById('screen');
 const dctx = display.getContext('2d');
@@ -152,6 +169,7 @@ function selftest() {
     // The game's default level, MEDIUM, whose tomb (1, 0) starts at column 3.
     planeLeg(createWorld(SELFTEST_CODE, { difficulty: 'medium' }));
     touchLeg();
+    if (!realUntouched()) throw new Error('touch the self-test leaves the real wallet untouched');
     // The verdict waits one task, so queued error and rejection events count.
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
   } catch (e) {
@@ -210,13 +228,6 @@ function fakeGamepads(fake) {
  * `touch <what>` on the first miss.
  */
 function touchLeg() {
-  // The leg writes the save, its difficulty, the setting, the best score, the
-  // stacked world's save difficulty, the coin keys and the pad's side; it
-  // restores the player's own.
-  const kept = [
-    KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST, KEY_STACKED_SAVE_DIFFICULTY, KEY_WALLET, KEY_COINS, KEY_PAID,
-    KEY_PAD,
-  ].map((k) => [k, load(k)]);
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
@@ -227,11 +238,7 @@ function touchLeg() {
   } finally {
     delete navigator.clipboard;
     delete navigator.getGamepads;
-    for (const [k, v] of kept) {
-      if (v === null) unstore(k); else store(k, v);
-    }
   }
-  if (kept.some(([k, v]) => load(k) !== v)) throw new Error('touch storage restored');
   if (Object.getOwnPropertyDescriptor(navigator, 'clipboard')) throw new Error('touch clipboard restored');
   if (Object.getOwnPropertyDescriptor(navigator, 'getGamepads')) throw new Error('touch getGamepads restored');
 }
@@ -829,6 +836,7 @@ function coinLeg(g, { need, click }) {
   need(g.earned === 1, 'a coin counts as one earned this run');
   need(load(KEY_WALLET) === '1', 'a touched coin stores the wallet');
   need((JSON.parse(load(KEY_COINS))[key] || []).includes(id), 'a touched coin stores the collected set under the seed and level');
+  need(realUntouched(), 'the self-test leaves the real wallet untouched');
 
   // Step 2: a new run on the same seed and level.
   begin(g);
