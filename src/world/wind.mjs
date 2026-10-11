@@ -21,10 +21,36 @@ function routeOf(world, bd) {
 }
 
 /**
+ * The cells of the branch whose first cell is `first`, entered from its
+ * junction by direction `dir`, as { board, cell, back }: `back` is the link or
+ * door from the cell toward the junction. The flood never enters a way-on
+ * cell (`isWay`) and marks its cells in `seen`.
+ */
+function flood(world, isWay, seen, first, dir) {
+  const mark = (b) => {
+    let s = seen.get(b.p);
+    if (!s) { s = new Uint8Array(NCELL); seen.set(b.p, s); }
+    return s;
+  };
+  const queue = [{ board: first.board, cell: first.cell, back: dir ^ 2 }];
+  mark(first.board)[first.cell] = 1;
+  for (let h = 0; h < queue.length; h++) {
+    const q = queue[h];
+    for (let e = 0; e < 8; e++) {
+      const s = world.step(q.board, q.cell, e);
+      if (!s || isWay(s.board, s.cell)) continue;
+      const m = mark(s.board);
+      if (m[s.cell]) continue;
+      m[s.cell] = 1;
+      queue.push({ board: s.board, cell: s.cell, back: e ^ 2 });
+    }
+  }
+  return queue;
+}
+
+/**
  * Branches of route board `bd` and, per board p, the direction toward the
- * junction at each cell of its windy branches, -1 elsewhere. A branch is
- * what hangs off the way on through one link or door: the cell beyond it and
- * every carved cell reachable from there without entering the way on.
+ * junction at each cell of its windy branches, -1 elsewhere.
  */
 function build(world, bd) {
   const { on } = wayOn(world, bd);
@@ -32,37 +58,18 @@ function build(world, bd) {
   const isWay = (b, c) => (b === bd ? on.has(c) : b.kind === 'route' && wayOn(world, b).on.has(c));
   const seen = new Map();
   const wind = new Map();
-  const mark = (b) => {
-    let s = seen.get(b.p);
-    if (!s) { s = new Uint8Array(NCELL); seen.set(b.p, s); }
-    return s;
-  };
   const branches = [];
   for (const junction of [...on].sort((p, q) => p - q)) {
     for (let dir = 0; dir < 8; dir++) {
       const first = world.step(bd, junction, dir);
       if (!first || isWay(first.board, first.cell)) continue;
-      // Each queued cell holds the direction back toward the junction.
-      const queue = [{ board: first.board, cell: first.cell, back: dir ^ 2 }];
-      mark(first.board)[first.cell] = 1;
-      let flame = false;
-      for (let h = 0; h < queue.length; h++) {
-        const q = queue[h];
-        if (q.board === bd && flames.has(q.cell)) flame = true;
-        for (let e = 0; e < 8; e++) {
-          const s = world.step(q.board, q.cell, e);
-          if (!s || isWay(s.board, s.cell)) continue;
-          const m = mark(s.board);
-          if (m[s.cell]) continue;
-          m[s.cell] = 1;
-          queue.push({ board: s.board, cell: s.cell, back: e ^ 2 });
-        }
-      }
+      const cells = flood(world, isWay, seen, first, dir);
+      const flame = cells.some((q) => q.board === bd && flames.has(q.cell));
       const { x, y } = first.board;
-      const n = queue.length;
+      const n = cells.length;
       const windy = !flame && u32(world.H('wind', x, y, first.cell)) % WIND_MOD < Math.min(n, WIND_CAP);
       if (windy) {
-        for (const q of queue) {
+        for (const q of cells) {
           let w = wind.get(q.board.p);
           if (!w) { w = new Int8Array(NCELL).fill(-1); wind.set(q.board.p, w); }
           w[q.cell] = q.back;

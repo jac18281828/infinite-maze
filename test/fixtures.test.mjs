@@ -704,6 +704,10 @@ test('the drift eases in, rests within a second of leaving the branch, and takes
   const at3 = shiftAt(back, 34, 3, 80);
   const before = shiftAt(back, 34, 2.5, 80);
   assert.ok(Math.abs(at3.dx - before.dx) < 0.35 && Math.abs(at3.dy - before.dy) < 0.35, `${at3.dx} then ${before.dx}`);
+  // The next forward frame steps from the latest time seen, 3 s: 0.1 s at 12 px/s.
+  const ahead = shiftAt(back, 34, 3.1, 80);
+  t.diagnostic(`forward frame after the earlier one: ${(at3.dx - ahead.dx).toFixed(2)} px`);
+  assert.ok(Math.abs(at3.dx - ahead.dx - 1.2) < 0.35 && Math.abs(at3.dy - ahead.dy) < 0.35, `${at3.dx} then ${ahead.dx}`);
 });
 
 // Floor coins and the wallet.

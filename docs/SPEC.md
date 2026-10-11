@@ -551,10 +551,10 @@ behind at 0.5× for depth. Dust motes hang in the world, never with the explorer
 or the camera, and show in torchlight: drawn inside the torch radius and
 fading toward its edge. While the explorer's cell lies in a windy branch (§4),
 all motes drift together at 12 px/s along the first link or door of the walk
-from that cell to the branch's junction. The drift velocity turns toward its target by at most 12 px/s
-each second, so the motes reach full speed or rest within a second, and a turn
-bends. It advances by the wall time between frames, at most 0.25 s a frame and
-never backward. The torch flame stays upright, and the dust hangs still on the
+from that cell to the branch's junction. The drift velocity turns toward its
+target by at most 12 px/s each second, so the motes reach full speed or rest
+within a second, and a turn bends. It advances by the wall time between frames,
+at most 0.25 s a frame and never backward. The torch flame stays upright, and the dust hangs still on the
 way on and in a windless branch.
 
 **Stairs.** A stair draws as one solid flight in stone, flush with the lower
