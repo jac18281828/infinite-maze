@@ -15,7 +15,7 @@ import {
 
 // Pinned digests of tombs u in [-2, 2], v in [0, 19] for seed code 0000-0000.
 const DIGESTS = {
-  easy: 'ad571179430465c8da3908e5633bb04d5194b60c9f68a10eaa57dbd28f9b71ef',
+  easy: '0364383e0c18581310a2e58aa5bf69222f1611c060eaf5ab88ab6bae57c1a9a5',
   medium: 'b0ad6e959d6fbd84a481219019c141e8259edea1c28f1d01dde0d30d3ae4d320',
   hard: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
 };
@@ -360,6 +360,23 @@ test('a tomb whose first entry board is its exit board builds a one-board trunk 
   assert.deepEqual(t.routes[0], [t.X]);
   assert.ok(t.depth.some((d) => d > 0), 'dead ends hang off the trunk');
   soundTomb(t);
+});
+
+test('a board whose primary pair meets in one cell measures to its deepest cell', () => {
+  // S's flame cell is the door it leaves by: S is X in EASY tomb (-8, -47) and
+  // HARD tomb (3, 28), and leads on along the trunk in EASY tomb (1, 10).
+  for (const [d, u, v, sIsX] of [['easy', -8, -47, true], ['easy', 1, 10, false], ['hard', 3, 28, true]]) {
+    const w = worlds[d], t = w.tomb(u, v), at = `${d} tomb (${u},${v})`;
+    assert.ok(t.source, at);
+    assert.equal(t.entries[0] === t.X, sIsX, at);
+    const { x, y } = boardCoords(u, v, t.entries[0], w.size);
+    const bd = w.board(x, y);
+    assert.equal(bd.a, flameCell(w.H, x, y), at);
+    assert.equal(bd.a, bd.doors.find((dr) => dr.dir === bd.bDir).cell, `${at}: the pair meets in one cell`);
+    assert.notEqual(bd.b, bd.a, at);
+    assert.ok(!bd.fallback && bd.pathLen >= 22, `${at} meets the targets`);
+    assert.deepEqual(checkBounds(w, tombWindow(u, u, v, v)).errors, [], at);
+  }
 });
 
 test('gap splitting adds midpoint flames until every gap fits the limit', () => {

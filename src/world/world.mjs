@@ -223,9 +223,12 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
     const doors = dirs.map((d) => ({ dir: d, cell: doorCell(H, x, y, d) }));
     const doorMask = new Uint8Array(NCELL);
     for (const dr of doors) doorMask[dr.cell] |= 1 << dr.dir;
-    // A source board S starts its route at its flame cell.
+    // A source board S starts its route at its flame cell. When that cell is
+    // the door the route leaves by, the pair measures to the deepest cell
+    // instead, as a dead end's does.
     const a = aDir >= 0 ? doorCell(H, x, y, aDir) : flameCell(H, x, y);
-    const b = bDir >= 0 ? doorCell(H, x, y, bDir) : -1;
+    let b = bDir >= 0 ? doorCell(H, x, y, bDir) : -1;
+    if (b === a) b = -1;
     const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b, carveCells);
     return {
       ...base, kind: t.routeIndex[i] >= 0 ? 'route' : 'dead', doors, doorMask, aDir, bDir,

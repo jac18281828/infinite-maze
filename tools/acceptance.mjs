@@ -19,7 +19,7 @@ import { encodeSave, decodeSave } from '../src/world/save.mjs';
 export const SEED = '00000000';
 // Digests of tombs u in [-2, 2], v in [0, 19] for seed 0000-0000, per difficulty.
 export const DIGESTS = {
-  easy: 'ad571179430465c8da3908e5633bb04d5194b60c9f68a10eaa57dbd28f9b71ef',
+  easy: '0364383e0c18581310a2e58aa5bf69222f1611c060eaf5ab88ab6bae57c1a9a5',
   medium: 'b0ad6e959d6fbd84a481219019c141e8259edea1c28f1d01dde0d30d3ae4d320',
   hard: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
 };
@@ -417,7 +417,8 @@ const flameCellOf = (world, bd) => u32(world.H('flame', bd.x, bd.y), 4) % NCELL;
  * Primary pair of board i in tomb shape s: a route board joins the door it
  * enters its route by (its in-door, or the flame cell on S) to the door it
  * leads on by (the exit door on X); a dead end pairs its parent door with
- * -1 (deepest).
+ * -1 (deepest). A pair that meets in one cell, S's flame cell on the door
+ * it leaves by, measures to the deepest cell as well.
  */
 function primaryPair(world, s, i, bd) {
   const doorTo = (j) => s.adj[i].find((e) => e.to === j)?.cell;
@@ -427,7 +428,7 @@ function primaryPair(world, s, i, bd) {
   let a = r > 0 ? doorTo(route[r - 1]) : s.routeEntry[s.routeOf[i]];
   if (a < 0) a = flameCellOf(world, bd);
   const b = s.next[i] >= 0 ? doorTo(s.next[i]) : i === s.exitDoor.i ? s.exitDoor.cell : -1;
-  return [a, b];
+  return [a, b === a ? -1 : b];
 }
 
 /**
