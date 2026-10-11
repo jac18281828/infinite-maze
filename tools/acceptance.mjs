@@ -2,6 +2,9 @@
 // a world and returns { errors, ... }; it derives structure from boards, doors
 // and links alone.
 //
+// Every check reads the tomb size from its world. The run checks HARD over
+// bands -N..N and EASY and MEDIUM over -300..300, or -N..N when N is smaller.
+//
 //   node tools/acceptance.mjs [--code XXXX-XXXX] [--bands N]
 import { pathToFileURL } from 'node:url';
 import { sha3_256 } from '../src/world/keccak.mjs';
@@ -13,6 +16,14 @@ import { encodeSave, decodeSave } from '../src/world/save.mjs';
 
 export const SEED = '00000000';
 export const DIGEST_0_99 = 'cc19954c165a0e9430f4738b7d3cbc54f3ba76c0dfe0951bffc9c7890e2c2b6e';
+// Pinned bands 0..99 digests of SEED per difficulty; HARD's is DIGEST_0_99.
+export const DIGESTS = {
+  easy: '6c1bca5a30810173ea1661bebd00c31a428c2bf457782750b46493c6efbe17ea',
+  medium: '2a96d6100952937d01794be44522e90764046ecd3e2573d11011d5cbb6189bf0',
+  hard: DIGEST_0_99,
+};
+// EASY and MEDIUM run over at most -SMALL_BANDS..SMALL_BANDS.
+export const SMALL_BANDS = 300;
 export const GAP_LIMIT_MS = 150000;
 export const GALLERIES_MIN = 4;
 export const GALLERIES_MAX = 10;
@@ -26,7 +37,7 @@ export const CARVE_MEAN_MAX = 56;
 export const CEILING_PERCENT = 2;
 export const CEILING_MIN_BOARDS = 2000;
 
-const BW = 12, BH = 7, NCELL = 84, BANDW = 6, BANDH = 4;
+const BW = 12, BH = 7, NCELL = 84;
 const DX = [1, 0, -1, 0, 1, -1, -1, 1];
 const DY = [0, 1, 0, -1, 1, 1, -1, -1];
 // Walking time per link in ms over 48 px cells at 96, 48 and 72 px/s.
@@ -43,8 +54,8 @@ function hasDoor(bd, dir, cell) {
 
 function bandBoards(world, b) {
   const out = [];
-  for (let i = 0; i < BANDW * BANDH; i++) {
-    const { x, y } = boardCoords(b, i);
+  for (let i = 0; i < world.size.w * world.size.h; i++) {
+    const { x, y } = boardCoords(b, i, world.size);
     out.push(world.board(x, y));
   }
   return out;
@@ -53,17 +64,17 @@ function bandBoards(world, b) {
 /** The board across wall d of `bd` when both sides hold the door, else null. */
 function throughDoor(world, bd, dr) {
   const nx = bd.x + DX[dr.dir], ny = bd.y + DY[dr.dir];
-  if (nx < 0 || nx >= BANDW) return null;
+  if (nx < 0 || nx >= world.size.w) return null;
   const nb = world.board(nx, ny);
   const nc = acrossDoor(dr.cell, dr.dir);
   return hasDoor(nb, dr.dir ^ 2, nc) ? { board: nb, cell: nc } : null;
 }
 
 /** Boards of band b holding a floor door (entries) and a ceiling door (exits). */
-function bandEnds(boards, b) {
+function bandEnds(boards, b, { h }) {
   const has = (bd, dir) => bd.links && bd.doors.some((d) => d.dir === dir);
-  const entries = boards.filter((bd) => bd.y === BANDH * b && has(bd, 3));
-  const exits = boards.filter((bd) => bd.y === BANDH * b + 3 && has(bd, 1));
+  const entries = boards.filter((bd) => bd.y === h * b && has(bd, 3));
+  const exits = boards.filter((bd) => bd.y === h * b + h - 1 && has(bd, 1));
   const errors = [];
   if (entries.length !== 1) errors.push(`band ${b}: ${entries.length} floor doors`);
   if (exits.length !== 1) errors.push(`band ${b}: ${exits.length} ceiling doors`);
@@ -72,14 +83,15 @@ function bandEnds(boards, b) {
 
 /** Board adjacency of band b through doors held on both sides. */
 function boardGraph(world, boards, b) {
+  const { size } = world;
   const adj = boards.map(() => []);
   for (const bd of boards) {
     if (!bd.links) continue;
     for (const dr of bd.doors) {
-      if (dr.dir === 1 && bd.y === BANDH * b + 3) continue;
-      if (dr.dir === 3 && bd.y === BANDH * b) continue;
+      if (dr.dir === 1 && bd.y === size.h * b + size.h - 1) continue;
+      if (dr.dir === 3 && bd.y === size.h * b) continue;
       const t = throughDoor(world, bd, dr);
-      if (t) adj[boardIndex(bd.x, bd.y)].push({ to: boardIndex(t.board.x, t.board.y), dir: dr.dir, cell: dr.cell });
+      if (t) adj[boardIndex(bd.x, bd.y, size)].push({ to: boardIndex(t.board.x, t.board.y, size), dir: dr.dir, cell: dr.cell });
     }
   }
   return adj;
@@ -110,11 +122,12 @@ function routeAndDepth(adj, from, to) {
  */
 export function bandShape(world, b) {
   const boards = bandBoards(world, b);
-  const { entries, exits, errors } = bandEnds(boards, b);
+  const { entries, exits, errors } = bandEnds(boards, b, world.size);
   const adj = boardGraph(world, boards, b);
+  const index = (bd) => boardIndex(bd.x, bd.y, world.size);
   let route = [], depth = new Array(boards.length).fill(-1);
   if (entries.length >= 1 && exits.length >= 1) {
-    ({ route, depth } = routeAndDepth(adj, boardIndex(entries[0].x, entries[0].y), boardIndex(exits[0].x, exits[0].y)));
+    ({ route, depth } = routeAndDepth(adj, index(entries[0]), index(exits[0])));
     if (!route.length) errors.push(`band ${b}: no board route from entry to exit`);
   }
   return { boards, adj, route, depth, entry: entries[0], exit: exits[0], errors };
@@ -261,8 +274,8 @@ function bandTreeErrors(world, b) {
 /** Errors unless exactly one door joins bands b-1 and b, held on both sides. */
 function seamErrors(world, b) {
   let down = 0, upward = 0;
-  for (let x = 0; x < BANDW; x++) {
-    const top = world.board(x, BANDH * b - 1), bottom = world.board(x, BANDH * b);
+  for (let x = 0; x < world.size.w; x++) {
+    const top = world.board(x, world.size.h * b - 1), bottom = world.board(x, world.size.h * b);
     if (top.links) upward += top.doors.filter((d) => d.dir === 1).length;
     if (bottom.links) down += bottom.doors.filter((d) => d.dir === 3).length;
   }
@@ -291,16 +304,27 @@ function primaryPair(s, i, bd) {
 }
 
 /**
- * Dead ends reach at most 2 boards; boards meet section 4 or flag fallback;
- * a run of `minBoards` boards or more keeps fallbacks at or under 2%.
+ * Nothing outside the tomb's columns holds a link; the route holds at least
+ * half the tomb's boards; dead ends reach at most 2 boards; boards meet
+ * section 4 or flag fallback; a run of `minBoards` boards or more keeps
+ * fallbacks at or under 2%. Reports route lengths and rock boards.
  */
 export function checkBounds(world, b0, b1, minBoards = CEILING_MIN_BOARDS) {
+  const { w, h } = world.size;
   const errors = [];
-  let boards = 0, fallbacks = 0;
+  let boards = 0, fallbacks = 0, rock = 0, routeMin = Infinity, routeSum = 0, tombs = 0;
   for (let b = b0; b <= b1; b++) {
+    for (let y = h * b; y < h * b + h; y++) {
+      for (const x of [-1, w]) if (world.board(x, y).links) errors.push(`board (${x},${y}): outside the tomb's ${w} columns holds links`);
+    }
     const s = bandShape(world, b);
     errors.push(...s.errors);
     if (s.errors.length) continue;
+    tombs++;
+    routeSum += s.route.length;
+    routeMin = Math.min(routeMin, s.route.length);
+    rock += s.boards.filter((bd) => !bd.links).length;
+    if (2 * s.route.length < w * h) errors.push(`band ${b}: route of ${s.route.length} boards holds under half of ${w * h}`);
     s.boards.forEach((bd, i) => {
       if (!bd.links) return;
       boards++;
@@ -317,7 +341,8 @@ export function checkBounds(world, b0, b1, minBoards = CEILING_MIN_BOARDS) {
   if (boards >= minBoards && 100 * fallbacks > CEILING_PERCENT * boards) {
     errors.push(`${fallbacks} of ${boards} boards (${(100 * fallbacks / boards).toFixed(1)}%) fall back, over the ${CEILING_PERCENT}% ceiling`);
   }
-  return { errors, boards, fallbacks };
+  const routeMean = tombs ? routeSum / tombs : 0, rockMean = tombs ? rock / tombs : 0;
+  return { errors, boards, fallbacks, routeMin, routeMean, rockMean };
 }
 
 /**
@@ -394,7 +419,7 @@ export function checkCarve(world, b0, b1) {
 export function walkMs(world, boards, A, B) {
   const slot = new Map(boards.map((bd, i) => [bd.p, i]));
   const ms = new Float64Array(boards.length * NCELL).fill(-1);
-  const sA = slot.get(posOf(A.x, A.y)), sB = slot.get(posOf(B.x, B.y));
+  const sA = slot.get(posOf(A.x, A.y, world.size)), sB = slot.get(posOf(B.x, B.y, world.size));
   if (sA === undefined || sB === undefined) return Infinity;
   const start = sA * NCELL + A.cell, goal = sB * NCELL + B.cell;
   ms[start] = 0;
@@ -487,12 +512,13 @@ export function checkSolvability(world, b0, b1) {
   };
   const q = [s0.entry.p * 128 + startCell];
   mark(s0.entry.p, startCell);
-  const lo = BANDH * b0, hi = BANDH * b1 + 3;
+  const { size } = world;
+  const lo = size.h * b0, hi = size.h * b1 + size.h - 1;
   let reached = false, cells = 0;
   for (let h = 0; h < q.length; h++) {
     const p = Math.floor(q[h] / 128), c = q[h] - p * 128;
     cells++;
-    const { x, y } = boardOfPos(p);
+    const { x, y } = boardOfPos(p, size);
     if (p === s1.exit.p && c === goalCell) { reached = true; break; }
     const bd = world.board(x, y);
     for (let d = 0; d < 8; d++) {
@@ -510,14 +536,18 @@ export function checkSolvability(world, b0, b1) {
   return { errors: reached ? [] : [`band ${b1}'s exit is unreachable from band ${b0}'s entry`], cells };
 }
 
-/** Saves round-trip, and a resumed board matches one generated in sequence. */
+/**
+ * Saves round-trip at the world's size, and a board resumed at the world's
+ * difficulty matches one generated in sequence.
+ */
 export function checkSaves(world, positions) {
   const errors = [];
-  const fresh = createWorld(world.code);
+  const { size } = world;
+  const fresh = createWorld(world.code, { difficulty: world.difficulty });
   for (const p of positions) {
-    const { x, y } = boardOfPos(p);
-    const text = encodeSave(world.code, x, y);
-    const back = decodeSave(text);
+    const { x, y } = boardOfPos(p, size);
+    const text = encodeSave(world.code, x, y, size);
+    const back = decodeSave(text, size);
     if (!back || back.code !== world.code || back.p !== p || back.x !== x || back.y !== y) {
       errors.push(`save ${text} does not round-trip`);
     }
@@ -527,9 +557,9 @@ export function checkSaves(world, positions) {
   return { errors, saves: positions.length };
 }
 
-/** A fixed seed code yields the pinned digest of bands 0..99. */
-export function checkDeterminism(code = SEED, want = DIGEST_0_99) {
-  const got = digestBands(createWorld(code), 0, 99);
+/** A fixed seed code yields the pinned digest of bands 0..99 at a difficulty. */
+export function checkDeterminism(code = SEED, want = DIGEST_0_99, difficulty = 'hard') {
+  const got = digestBands(createWorld(code, { difficulty }), 0, 99);
   return { errors: got === want ? [] : [`digest of bands 0..99 is ${got}, pinned ${want}`], digest: got };
 }
 
@@ -538,18 +568,17 @@ function percentile(sorted, q) {
 }
 
 function saveSamples(world, b0, b1) {
+  const { size } = world, { w, h } = size;
   const samples = [];
   for (let b = b0; b <= b1; b += Math.max(1, Math.floor((b1 - b0) / 20))) {
-    samples.push(posOf(world.tree(b).entryX, BANDH * b), posOf(((b % BANDW) + BANDW) % BANDW, BANDH * b + 2));
+    samples.push(posOf(world.tree(b).entryX, h * b, size), posOf(((b % w) + w) % w, h * b + (h >> 1), size));
   }
   return samples;
 }
 
-/** Runs every check; returns [name, result, detail] rows and summary figures. */
+/** Runs every world check; returns [name, result, detail] rows and summary figures. */
 function runChecks(world, code, b0, b1) {
   const rows = [];
-  const k = checkKeccak();
-  rows.push(['keccak', k, `${k.vectors} FIPS 202 vectors`]);
   const flames = checkFlames(world, b0, b1);
   const gaps = flames.gaps.slice().sort((u, v) => u - v);
   const gapText = `max ${(gaps.at(-1) / 1000).toFixed(1)} s, p99 ${(percentile(gaps, 0.99) / 1000).toFixed(1)} s`;
@@ -567,17 +596,20 @@ function runChecks(world, code, b0, b1) {
   rows.push(['solvability', solve, `${solve.cells} cells searched`]);
   const saves = checkSaves(world, saveSamples(world, b0, b1));
   rows.push(['saves', saves, `${saves.saves} positions`]);
-  const det = code === SEED ? checkDeterminism() : { errors: [], digest: digestBands(createWorld(code), 0, 99) };
+  const d = world.difficulty;
+  const det = code === SEED
+    ? checkDeterminism(SEED, DIGESTS[d], d)
+    : { errors: [], digest: digestBands(createWorld(code, { difficulty: d }), 0, 99) };
   rows.push(['determinism', det, `bands 0..99 digest ${det.digest.slice(0, 16)}...`]);
-  return { rows, bounds, galleries, carve, gapText };
+  return { rows, bounds, galleries, carve, gapText, digest: det.digest };
 }
 
-function printRows(rows) {
+function printRows(rows, tag) {
   let failed = 0;
   for (const [name, r, detail] of rows) {
     const ok = r.errors.length === 0;
     if (!ok) failed++;
-    console.log(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(12)} ${detail}`);
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${tag.padEnd(7)}${name.padEnd(12)} ${detail}`);
     for (const e of r.errors.slice(0, 10)) console.log(`      ${e}`);
     if (r.errors.length > 10) console.log(`      ... ${r.errors.length - 10} more`);
   }
@@ -590,16 +622,29 @@ async function main(argv) {
   const code = parseCode(arg('--code', SEED));
   const half = Number(arg('--bands', 1000));
   if (!code || !Number.isInteger(half) || half < 1) { console.error('usage: acceptance.mjs [--code XXXX-XXXX] [--bands N]'); return 2; }
-  const b0 = -half, b1 = half;
-  const { rows, bounds, galleries, carve, gapText } = runChecks(createWorld(code), code, b0, b1);
-  const failed = printRows(rows);
+  const k = checkKeccak();
+  let failed = printRows([['keccak', k, `${k.vectors} FIPS 202 vectors`]], '');
+  const summaries = [];
+  for (const [difficulty, n] of [['hard', half], ['easy', Math.min(SMALL_BANDS, half)], ['medium', Math.min(SMALL_BANDS, half)]]) {
+    const world = createWorld(code, { difficulty });
+    const r = runChecks(world, code, -n, n);
+    failed += printRows(r.rows, difficulty.toUpperCase());
+    summaries.push({ difficulty, n, size: world.size, ...r });
+  }
+  for (const { difficulty, n, size, bounds, galleries, carve, gapText, digest } of summaries) {
+    console.log('');
+    console.log(`${difficulty.toUpperCase()}: tombs of ${size.w}x${size.h} = ${size.w * size.h} rooms`);
+    console.log(`bands checked:  ${-n}..${n} (${2 * n + 1}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
+    console.log(`route:          mean ${bounds.routeMean.toFixed(2)}, min ${bounds.routeMin} rooms (half the tomb: ${(size.w * size.h) >> 1})`);
+    console.log(`rock rooms:     ${bounds.rockMean.toFixed(2)} per tomb`);
+    console.log(`fallback boards: ${bounds.fallbacks} of ${bounds.boards} (${(100 * bounds.fallbacks / bounds.boards).toFixed(1)}%)`);
+    console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
+    console.log(`block conflicts: ${galleries.conflicts}`);
+    console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
+    console.log(`flame gap:      ${gapText}`);
+    console.log(`digest 0..99:   ${digest}`);
+  }
   console.log('');
-  console.log(`bands checked:  ${b0}..${b1} (${b1 - b0 + 1}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
-  console.log(`fallback boards: ${bounds.fallbacks} of ${bounds.boards} (${(100 * bounds.fallbacks / bounds.boards).toFixed(1)}%)`);
-  console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
-  console.log(`block conflicts: ${galleries.conflicts}`);
-  console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
-  console.log(`flame gap:      ${gapText}`);
   console.log(`run time:       ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   console.log(failed ? `FAILED: ${failed} check(s)` : 'ALL CHECKS PASS');
   return failed ? 1 : 0;

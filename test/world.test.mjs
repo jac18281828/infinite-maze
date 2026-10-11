@@ -1,18 +1,88 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, digestBands, serializeBoard, posOf, bandOf, midpointIndex } from '../src/world/world.mjs';
+import { createWorld, digestBands, serializeBoard, posOf, bandOf, boardCoords, midpointIndex } from '../src/world/world.mjs';
 import { COST, DX, DY, NCELL, growTree, repairTree, analyze } from '../src/world/board.mjs';
 import { parseCode, formatCode, codeFromBytes, makeHasher, worldKey, sfc32 } from '../src/world/hash.mjs';
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
-import { MIN_ROUTE, MAX_DEPTH } from '../src/world/band.mjs';
+import { MIN_ROUTE, MAX_DEPTH, DIFFICULTY } from '../src/world/band.mjs';
 import { checkFlames, checkDeterminism, bandShape, walkMs, measureTargets } from '../tools/acceptance.mjs';
 
-// Pinned digest of bands 0..99 for seed code 0000-0000.
+// Pinned digests of bands 0..99 for seed code 0000-0000; HARD is the world
+// from before difficulties.
 const DIGEST = 'cc19954c165a0e9430f4738b7d3cbc54f3ba76c0dfe0951bffc9c7890e2c2b6e';
+const DIGESTS = {
+  easy: '6c1bca5a30810173ea1661bebd00c31a428c2bf457782750b46493c6efbe17ea',
+  medium: '2a96d6100952937d01794be44522e90764046ecd3e2573d11011d5cbb6189bf0',
+  hard: DIGEST,
+};
 
 test('seed 0000-0000 yields the pinned digest over bands 0..99', () => {
   assert.equal(digestBands(createWorld('00000000'), 0, 99), DIGEST);
   assert.deepEqual(checkDeterminism('00000000', DIGEST).errors, []);
+});
+
+test('HARD is the default and today\'s world', () => {
+  const plain = createWorld('00000000'), hard = createWorld('00000000', { difficulty: 'hard' });
+  assert.equal(plain.difficulty, 'hard');
+  assert.deepEqual(plain.size, { w: 6, h: 4 });
+  assert.equal(digestBands(hard, 0, 99), DIGEST);
+  assert.equal(digestBands(plain, 0, 99), DIGEST);
+});
+
+test('EASY and MEDIUM are each a fixed world of their own', () => {
+  for (const d of ['easy', 'medium']) {
+    const w = createWorld('00000000', { difficulty: d });
+    assert.equal(w.difficulty, d);
+    assert.deepEqual(w.size, DIFFICULTY[d]);
+    assert.equal(digestBands(w, 0, 99), DIGESTS[d], d);
+    assert.deepEqual(checkDeterminism('00000000', DIGESTS[d], d).errors, [], d);
+  }
+  assert.equal(new Set(Object.values(DIGESTS)).size, 3);
+  assert.deepEqual(DIFFICULTY, { easy: { w: 3, h: 2 }, medium: { w: 4, h: 3 }, hard: { w: 6, h: 4 } });
+});
+
+test('an unknown difficulty throws', () => {
+  assert.throws(() => createWorld('00000000', { difficulty: 'nightmare' }), /unknown difficulty/);
+  assert.throws(() => createWorld('00000000', { difficulty: 'toString' }), /unknown difficulty/);
+});
+
+test('each tomb spans its size: boards in x [0, W), H rows, a route of half its rooms, exits on the next entry', () => {
+  for (const [d, W, H] of [['easy', 3, 2], ['medium', 4, 3]]) {
+    const w = createWorld('00000000', { difficulty: d });
+    for (let b = 0; b <= 9; b++) {
+      const s = bandShape(w, b), next = bandShape(w, b + 1);
+      assert.deepEqual(s.errors, [], `${d} band ${b}`);
+      const tree = s.boards.filter((bd) => bd.links);
+      assert.equal(s.boards.length, W * H);
+      for (const bd of tree) {
+        assert.ok(bd.x >= 0 && bd.x < W, `${d} band ${b}: board x ${bd.x}`);
+        assert.ok(bd.y >= H * b && bd.y < H * b + H, `${d} band ${b}: board y ${bd.y}`);
+        assert.equal(bd.band, b);
+      }
+      assert.equal(s.entry.y, H * b);
+      assert.equal(s.exit.y, H * b + H - 1);
+      assert.ok(2 * s.route.length >= W * H, `${d} band ${b}: route ${s.route.length}`);
+      assert.equal(s.exit.x, next.entry.x, `${d} band ${b}: exit column`);
+      assert.equal(w.tree(b + 1).entryX, s.exit.x);
+      for (const y of [H * b, H * b + H - 1]) for (const x of [-1, W]) assert.equal(w.board(x, y).links, null);
+    }
+  }
+});
+
+test('a board outside the tomb is rock and never stands in for a board inside it', () => {
+  const w = createWorld('00000000', { difficulty: 'easy' }), fresh = createWorld('00000000', { difficulty: 'easy' });
+  // At EASY, p = 3 is board (0, 1) and p = 6 is board (0, 2).
+  for (const [x, y] of [[3, 0], [3, 1], [-1, 2]]) {
+    const bd = w.board(x, y);
+    assert.equal(bd.kind, 'rock');
+    assert.equal(bd.p, null);
+    assert.deepEqual(w.flamesAt(x, y), []);
+  }
+  for (const [x, y] of [[0, 1], [0, 2], [2, 1]]) {
+    assert.deepEqual(serializeBoard(w, x, y), serializeBoard(fresh, x, y), `(${x},${y})`);
+    assert.equal(w.board(x, y).x, x);
+  }
+  assert.equal(w.resumePoint(3, 0).board.p, posOf(w.tree(0).entryX, 0, w.size));
 });
 
 test('a different seed yields a different digest', () => {
@@ -41,6 +111,39 @@ test('saves round-trip, negative p included', () => {
   assert.equal(decodeSave('K7Q2-M9XA'), null);
   assert.equal(decodeSave('K7Q2-M9XA:1.5'), null);
   assert.equal(decodeSave('K7Q2-M9XU:3'), null);
+});
+
+test('at each difficulty a board resumed from p equals the same board reached along the route', () => {
+  for (const d of ['easy', 'medium', 'hard']) {
+    const size = DIFFICULTY[d];
+    const seq = createWorld('00000000', { difficulty: d });
+    const ps = [];
+    // Along the route, band by band, then each band's other boards.
+    for (let b = -2; b <= 2; b++) {
+      const t = seq.tree(b);
+      for (const i of t.route) {
+        const { x, y } = boardCoords(b, i, size);
+        ps.push(seq.board(x, y).p);
+      }
+      seq.bandFlames(b);
+      for (let i = 0; i < size.w * size.h; i++) {
+        const { x, y } = boardCoords(b, i, size);
+        if (!ps.includes(posOf(x, y, size))) ps.push(posOf(x, y, size));
+      }
+    }
+    for (const p of ps.filter((_, k) => k % 3 === 0)) {
+      const save = decodeSave(`0000-0000:${p}`, size);
+      assert.equal(encodeSave('00000000', save.x, save.y, size), `0000-0000:${p}`);
+      assert.equal(seq.board(save.x, save.y).p, p);
+      const fresh = createWorld('00000000', { difficulty: d });
+      assert.deepEqual(serializeBoard(fresh, save.x, save.y), serializeBoard(seq, save.x, save.y), `${d} p=${p}`);
+    }
+  }
+  // One p names different boards at EASY and HARD.
+  const easy = decodeSave('0000-0000:13', DIFFICULTY.easy), hard = decodeSave('0000-0000:13', DIFFICULTY.hard);
+  assert.deepEqual([easy.x, easy.y], [1, 4]);
+  assert.deepEqual([hard.x, hard.y], [1, 2]);
+  assert.equal(encodeSave('00000000', 1, 4, DIFFICULTY.easy), '0000-0000:13');
 });
 
 test('a board resumed from p equals the same board generated in sequence', () => {

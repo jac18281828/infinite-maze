@@ -4,7 +4,8 @@ import { createWorld } from '../src/world/world.mjs';
 import { NCELL, BW, BH } from '../src/world/board.mjs';
 import { createSim, step, inputEdges, createTrail, recordStood, BURN_S } from '../src/game/sim.mjs';
 import { createAutopilot, SELFTEST_CODE, SELFTEST_TICKS } from '../src/game/autopilot.mjs';
-import { frameOf, panFrame, mapModel } from '../src/game/map.mjs';
+import { frameOf, panFrame, mapModel, mapCells } from '../src/game/map.mjs';
+import { DIFFICULTY } from '../src/world/band.mjs';
 
 const EMPTY = { lines: [], stubs: [], outlines: [], flames: [], explorer: null };
 
@@ -226,4 +227,41 @@ test('a fresh run frames a map of its start cell alone', () => {
   assert.equal(m.outlines.length, 1);
   assert.deepEqual(m.outlines[0].gaps, []);
   assert.ok(m.stubs.length >= 1);
+});
+
+test('an EASY frame is its 3x2 tomb: 36x14 cells, bands of 2 rows', () => {
+  assert.deepEqual(mapCells(DIFFICULTY.easy), { cols: 36, rows: 14 });
+  assert.deepEqual(mapCells(DIFFICULTY.medium), { cols: 48, rows: 21 });
+  assert.deepEqual(mapCells(DIFFICULTY.hard), { cols: 72, rows: 28 });
+  assert.equal(frameOf({ y: 3 }, DIFFICULTY.easy), 1);
+  assert.equal(frameOf({ y: -1 }, DIFFICULTY.easy), -1);
+  const world = createWorld(SELFTEST_CODE, { difficulty: 'easy' });
+  const s = createSim(world, world.resumePoint(world.tree(1).entryX, 2));
+  const w = watcher(world, s);
+  let seed = 5;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed >>> 16; };
+  let h = 0, v = 0, ph = 0, pv = 0;
+  for (let i = 0; i < 3000; i++) {
+    if (i % 20 === 0) { h = (rnd() % 3) - 1; v = (rnd() % 3) - 1; }
+    step(s, h, v, rnd() % 12 === 0, inputEdges(ph, pv, h, v));
+    ph = h;
+    pv = v;
+    s.burn = BURN_S;
+    w.observe();
+  }
+  const at = { bd: s.bd, cell: s.cell };
+  assert.equal(frameOf(s.bd, world.size), s.bd.band);
+  // Every band the trail entered, the start's band 1 among them.
+  const bands = new Set([...s.trail.values()].map((t) => frameOf(t, world.size)));
+  assert.ok(bands.has(1));
+  for (const b of bands) {
+    const m = mapModel(world, s.trail, b, at);
+    assert.ok(m.outlines.length >= 1, `band ${b} outlines its entered boards`);
+    for (const e of [...m.lines, ...m.stubs, ...m.outlines, ...m.flames, ...(m.explorer ? [m.explorer] : [])]) {
+      assert.ok(e.col >= 0 && e.col < 36 && e.row >= 0 && e.row < 14, `band ${b}: (${e.col},${e.row}) stays in the EASY frame`);
+    }
+  }
+  // The model's rows count from the tomb's floor at row 2b.
+  const m = mapModel(world, s.trail, s.bd.band, at);
+  assert.equal(m.explorer.row, (s.bd.y - 2 * s.bd.band) * BH + Math.floor(s.cell / BW));
 });

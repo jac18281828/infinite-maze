@@ -1,9 +1,10 @@
 # Infinite Maze
 
 An endless tomb maze, climbed by torchlight. One seed code grows a world of
-bands stacked without end. Every band is a 6x4 grid of boards and every board
-a 12x7 grid of cells, of which a board carves about 60% and leaves the rest
-rock. The maze has no loops at any scale, and one route always leads up.
+bands stacked without end. The difficulty picked on the title sets a band's
+size: EASY 3x2 boards, MEDIUM 4x3 and HARD 6x4. Every board is a 12x7 grid of
+cells, of which a board carves about 60% and leaves the rest rock. The maze
+has no loops at any scale, and one route always leads up.
 `docs/SPEC.md` is the full specification.
 
 ## Play
@@ -24,10 +25,10 @@ and no assets.
   the save code. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:
-  BEGIN, NEW ROLL, TYPE CODE (a prompt that takes a pasted save code),
-  CONTINUE, COPY, SOUND, PAUSE, RESUME and TITLE. Pressing a key switches back to
-  the keyboard layout; `#touch` on the URL forces touch on a desktop. The pause
-  map shows the explorer's band; panning needs a keyboard.
+  RESUME, BEGIN, RESET, TYPE CODE (a prompt that takes a pasted save code),
+  the difficulty, COPY, SOUND, PAUSE, CONTINUE and TITLE. Pressing a key
+  switches back to the keyboard layout; `#touch` on the URL forces touch on a
+  desktop. The pause map shows the explorer's band; panning needs a keyboard.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends.
@@ -35,15 +36,19 @@ and no assets.
   150 s between flames.
 
 The title screen shows the seed code. **Enter** begins at band 0. **R** rolls
-a new world. **T** takes a typed seed or save code. **C** continues the last
-save. **K** copies the save code shown, or the seed code. The end screen's
-**C** copies its save code. The game keeps that save and the best band per
-seed in `localStorage` and runs without them where storage is blocked.
+a new world. **T** takes a typed seed or save code. **L** cycles the
+difficulty, and Left and Right step it. **Esc** resumes the run left by
+pause, or the last save at its own difficulty. **K** copies the save code
+shown, or the seed code. The end screen's **C** copies its save code. The
+game keeps that save with its difficulty, the setting and the best band per
+seed and difficulty in `localStorage`, and runs without them where storage is
+blocked.
 
 ## Save codes
 
 A save is the seed code and one integer: `K7Q2-M9XA:4813`. The integer is
-`p = 6y + x` for board `(x, y)`, and it may be negative below band 0.
+`p = Wy + x` for board `(x, y)` in bands W boards wide, and it may be negative
+below band 0. A typed save code plays at the title's difficulty.
 Resuming regenerates that board from the seed and lights the torch to full.
 The explorer stands at the board's door back toward its band entry. The end
 screen offers the code of the last band entry reached; Continue resumes there.

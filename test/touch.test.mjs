@@ -147,7 +147,7 @@ test('every soft key names a key its screen handler accepts', () => {
 
 test('the keys of one screen share a label scale', () => {
   const lay = layout(LANDSCAPE);
-  const rects = keyRects(lay, 'title', ['BEGIN', 'NEW ROLL', 'TYPE CODE', 'CONTINUE', 'COPY', 'SOUND']);
+  const rects = keyRects(lay, 'title', ['RESUME', 'BEGIN', 'RESET', 'TYPE CODE', 'MEDIUM', 'COPY', 'SOUND']);
   assert.equal(new Set(rects.map((r) => r.scale)).size, 1);
 });
 
@@ -168,13 +168,19 @@ test('PANEL_X matches the panels main.mjs draws', () => {
 
 test('soft keys follow the game state', () => {
   const ids = (st) => softKeys(st).map((k) => k.id);
-  assert.deepEqual(ids({ screen: 'title', typing: false, save: false }), ['begin', 'roll', 'type', 'copy', 'sound']);
-  assert.deepEqual(ids({ screen: 'title', typing: false, save: true }), ['begin', 'roll', 'type', 'continue', 'copy', 'sound']);
-  assert.deepEqual(ids({ screen: 'title', typing: true, save: true }), ['accept', 'cancel']);
+  assert.deepEqual(ids({ screen: 'title', typing: false, resume: false }), ['begin', 'reset', 'type', 'difficulty', 'copy', 'sound']);
+  assert.deepEqual(ids({ screen: 'title', typing: false, resume: true }), ['resume', 'begin', 'reset', 'type', 'difficulty', 'copy', 'sound']);
+  assert.deepEqual(ids({ screen: 'title', typing: true, resume: true }), ['accept', 'cancel']);
   assert.deepEqual(ids({ screen: 'play' }), ['pause']);
   assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'copy', 'sound', 'title']);
   assert.deepEqual(ids({ screen: 'over' }), ['continue', 'copy', 'title']);
   assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
+  // The difficulty key reads the setting, as SOUND reads mute.
+  for (const d of ['easy', 'medium', 'hard']) {
+    const keys = softKeys({ screen: 'title', difficulty: d, muted: true });
+    assert.equal(keys.find((k) => k.id === 'difficulty').text, d.toUpperCase());
+    assert.equal(keys.find((k) => k.id === 'sound').text, 'MUTED');
+  }
 });
 
 const inside = (r, o) => r.x >= o.x - 1e-9 && r.y >= o.y - 1e-9 && r.x + r.w <= o.x + o.w + 1e-9 && r.y + r.h <= o.y + o.h + 1e-9;
@@ -183,10 +189,11 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
   for (const spec of [PORTRAIT, LANDSCAPE, { ...LANDSCAPE, w: 667, h: 375, insets: {} }, { w: 1024, h: 768, dpr: 2, insets: {}, touch: true }]) {
     const lay = layout(spec);
     for (const sid of ['title', 'typing', 'pause', 'over', 'play']) {
-      const state = { screen: sid === 'typing' ? 'title' : sid, typing: sid === 'typing', save: true };
+      const state = { screen: sid === 'typing' ? 'title' : sid, typing: sid === 'typing', resume: true, difficulty: 'medium' };
       const labels = softKeys(state).map((k) => k.text);
       const rects = keyRects(lay, sid, labels);
       assert.equal(rects.length, labels.length);
+      if (sid === 'title') assert.equal(labels.length, 7, 'the title shows seven keys');
       assert.ok(new Set(rects.map((r) => r.scale)).size <= 1, `${lay.mode} ${sid}: one label scale`);
       rects.forEach((r, i) => assert.ok(textWidth(labels[i]) * r.scale + 8 <= r.w, `${lay.mode} ${sid}: ${labels[i]} fits its key`));
       for (const r of rects) {
@@ -213,8 +220,8 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
 });
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
-// it here, and again with the touch layer removed, a control mis-keyed and
-// the zoom guard dropped.
+// it here, and again with the touch layer removed, a control mis-keyed, the
+// zoom guard dropped and each difficulty rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -231,7 +238,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control or without the zoom guard',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -240,8 +247,19 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     assert.match(verdict(noTouch, '500,1000'), /^fail: .*touch/);
     const miskeyed = html.replace("...K('KeyR', 'r')", "...K('KeyX', 'x')");
     assert.notEqual(miskeyed, html);
-    assert.match(verdict(miskeyed, '500,1000'), /^fail: touch NEW ROLL/);
+    assert.match(verdict(miskeyed, '500,1000'), /^fail: touch RESET/);
     const zoomable = html.replace('stopDoubleTapZoom();', '');
     assert.notEqual(zoomable, html);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
+    // Each difficulty rule broken in turn: [from, to, the leg's first miss].
+    for (const [from, to, miss] of [
+      ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
+      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
+      ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 3) % 3', /^fail: touch ArrowRight steps the setting to HARD/],
+      ["return difficulty === 'hard' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
+    ]) {
+      const broken = html.replace(from, to);
+      assert.notEqual(broken, html, from);
+      assert.match(verdict(broken, '500,1000'), miss, from);
+    }
   });

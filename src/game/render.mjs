@@ -8,7 +8,7 @@ import { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN
 import { BW, BH, NCELL, DX, DY } from '../world/board.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { boardMask } from './mask.mjs';
-import { MAP_COLS, MAP_ROWS } from './map.mjs';
+import { mapCells } from './map.mjs';
 
 export const VIEW_W = 320;
 export const VIEW_H = 180;
@@ -16,7 +16,7 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
-const MAP_SCALE = 3;
+export const MAP_SCALE = 3;
 
 /** CSS colour of palette character `ch`. */
 function pal(ch) {
@@ -196,7 +196,7 @@ export function createRenderer(canvas, world) {
   }
 
   function boardArt(bx, by) {
-    if (bx < 0 || bx >= 6) return null;
+    if (bx < 0 || bx >= world.size.w) return null;
     const bd = world.board(bx, by);
     if (!bd.links) return null;
     let art = boards.get(bd.p);
@@ -209,14 +209,14 @@ export function createRenderer(canvas, world) {
     const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - 1, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + 1;
     const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - 1, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + 1;
     for (let by = by0; by <= by1 && budget > 0; by++) {
-      for (let bx = Math.max(0, bx0); bx <= Math.min(5, bx1) && budget > 0; bx++) {
+      for (let bx = Math.max(0, bx0); bx <= Math.min(world.size.w - 1, bx1) && budget > 0; bx++) {
         const bd = world.board(bx, by);
         if (bd.links && !boards.has(bd.p)) { boardArt(bx, by); budget--; }
       }
     }
     if (boards.size > 48) {
       for (const p of boards.keys()) {
-        const { x, y } = boardOfPos(p);
+        const { x, y } = boardOfPos(p, world.size);
         if (Math.abs(x * BOARD_W - cam.x) > 3 * BOARD_W || Math.abs(y * BOARD_H - cam.y) > 3 * BOARD_H) boards.delete(p);
       }
     }
@@ -420,12 +420,13 @@ export function createRenderer(canvas, world) {
   }
 
   /**
-   * Draws a map model at 3 px per cell, top left at (x, y); `t` is seconds
-   * since the pause began. A link joins the centre pixels of its two cells and
-   * a stub stays inside its own cell.
+   * Draws a map model of the world's tomb at 3 px per cell, top left at
+   * (x, y); `t` is seconds since the pause began. A link joins the centre
+   * pixels of its two cells and a stub stays inside its own cell.
    */
   function drawMap(model, x, y, t) {
     const S = MAP_SCALE;
+    const { cols: MAP_COLS, rows: MAP_ROWS } = mapCells(world.size);
     // Top left pixel of a frame cell; rows run up the screen.
     const cellPx = (col, row) => [x + col * S, y + (MAP_ROWS - 1 - row) * S];
     const dot = (col, row, i, d, color) => {

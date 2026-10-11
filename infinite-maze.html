@@ -758,33 +758,44 @@ return { BW, BH, NCELL, MAX_REROLL, MAX_SWAPS, MAX_BLOCKS, BLOCK_DRAWS, CARVE_CE
 // src/world/band.mjs
 const __m3 = (() => {
 const { sfc32, u32 } = __m1;
-// Band maze (spec section 3): a randomized DFS route through the 6x4 boards,
-// then dead-end branches at most two boards deep. Board index i = 6 * row + x.
+// Band maze (spec section 3): a randomized DFS route through the tomb's W x H
+// boards, then dead-end branches at most two boards deep. Board index
+// i = W * row + x.
 
 
-const BANDW = 6;
-const BANDH = 4;
-const NBOARD = BANDW * BANDH;
-const MIN_ROUTE = 12;
+/** Tomb size per difficulty, in boards; `hard` is the original 6x4 world. */
+const DIFFICULTY = {
+  easy: { w: 3, h: 2 },
+  medium: { w: 4, h: 3 },
+  hard: { w: 6, h: 4 },
+};
+const DIFFICULTIES = ['easy', 'medium', 'hard'];
+// HARD's route minimum.
+const MIN_ROUTE = minRoute(DIFFICULTY.hard);
 const MAX_DEPTH = 2;
+
+/** The route's minimum length: half the tomb's boards. */
+function minRoute(size) {
+  return (size.w * size.h) >> 1;
+}
 
 // Board directions match cell directions 0..3: E N W S.
 const BDX = [1, 0, -1, 0];
 const BDY = [0, 1, 0, -1];
 
-function boardNeighbor(i, d) {
-  const x = (i % BANDW) + BDX[d], y = ((i / BANDW) | 0) + BDY[d];
-  if (x < 0 || x >= BANDW || y < 0 || y >= BANDH) return -1;
-  return y * BANDW + x;
+function boardNeighbor(i, d, size = DIFFICULTY.hard) {
+  const x = (i % size.w) + BDX[d], y = ((i / size.w) | 0) + BDY[d];
+  if (x < 0 || x >= size.w || y < 0 || y >= size.h) return -1;
+  return y * size.w + x;
 }
 
 /** Column e_b of the door between bands b-1 and b. */
-function edgeColumn(H, b) {
-  return u32(H('edge', b)) % BANDW;
+function edgeColumn(H, b, size = DIFFICULTY.hard) {
+  return u32(H('edge', b)) % size.w;
 }
 
-function dfsRoute(rng, entry, exit) {
-  const seen = new Uint8Array(NBOARD);
+function dfsRoute(rng, entry, exit, size) {
+  const seen = new Uint8Array(size.w * size.h);
   const stack = [entry];
   seen[entry] = 1;
   const open = [];
@@ -792,7 +803,7 @@ function dfsRoute(rng, entry, exit) {
     const top = stack[stack.length - 1];
     open.length = 0;
     for (let d = 0; d < 4; d++) {
-      const n = boardNeighbor(top, d);
+      const n = boardNeighbor(top, d, size);
       if (n >= 0 && !seen[n]) open.push(n);
     }
     if (open.length === 0) { stack.pop(); continue; }
@@ -807,14 +818,14 @@ function dfsRoute(rng, entry, exit) {
  * Attaches dead ends: repeatedly picks, uniformly, a tree board at depth
  * below MAX_DEPTH with an unused neighbour and attaches one such neighbour.
  */
-function attachDeadEnds(rng, depth, parent) {
+function attachDeadEnds(rng, depth, parent, size) {
   const cands = [], free = [];
   for (;;) {
     cands.length = 0;
-    for (let i = 0; i < NBOARD; i++) {
+    for (let i = 0; i < depth.length; i++) {
       if (depth[i] < 0 || depth[i] >= MAX_DEPTH) continue;
       for (let d = 0; d < 4; d++) {
-        const n = boardNeighbor(i, d);
+        const n = boardNeighbor(i, d, size);
         if (n >= 0 && depth[n] < 0) { cands.push(i); break; }
       }
     }
@@ -822,7 +833,7 @@ function attachDeadEnds(rng, depth, parent) {
     const i = cands[rng() % cands.length];
     free.length = 0;
     for (let d = 0; d < 4; d++) {
-      const n = boardNeighbor(i, d);
+      const n = boardNeighbor(i, d, size);
       if (n >= 0 && depth[n] < 0) free.push(n);
     }
     const n = free[rng() % free.length];
@@ -832,27 +843,28 @@ function attachDeadEnds(rng, depth, parent) {
 }
 
 /**
- * The band tree of band b. `routeIndex[i]` is the route position or -1;
- * `depth[i]` is 0 on the route, 1..2 on a dead end, -1 for rock;
- * `parent[i]` is the board a dead end hangs from, else -1.
+ * The band tree of band b in a tomb of `size` boards. `routeIndex[i]` is the
+ * route position or -1; `depth[i]` is 0 on the route, 1..2 on a dead end, -1
+ * for rock; `parent[i]` is the board a dead end hangs from, else -1.
  */
-function buildBandTree(H, b) {
-  const entryX = edgeColumn(H, b);
-  const exitX = edgeColumn(H, b + 1);
-  const entry = entryX, exit = (BANDH - 1) * BANDW + exitX;
+function buildBandTree(H, b, size = DIFFICULTY.hard) {
+  const n = size.w * size.h, min = minRoute(size);
+  const entryX = edgeColumn(H, b, size);
+  const exitX = edgeColumn(H, b + 1, size);
+  const entry = entryX, exit = (size.h - 1) * size.w + exitX;
   for (let k = 0; ; k++) {
     const rng = sfc32(H('band', b, k));
-    const route = dfsRoute(rng, entry, exit);
-    if (route.length < MIN_ROUTE) continue;
-    const routeIndex = new Int8Array(NBOARD).fill(-1);
-    const depth = new Int8Array(NBOARD).fill(-1);
-    const parent = new Int8Array(NBOARD).fill(-1);
+    const route = dfsRoute(rng, entry, exit, size);
+    if (route.length < min) continue;
+    const routeIndex = new Int8Array(n).fill(-1);
+    const depth = new Int8Array(n).fill(-1);
+    const parent = new Int8Array(n).fill(-1);
     route.forEach((i, r) => { routeIndex[i] = r; depth[i] = 0; });
-    attachDeadEnds(rng, depth, parent);
+    attachDeadEnds(rng, depth, parent, size);
     return { b, k, entryX, exitX, route, routeIndex, depth, parent };
   }
 }
-return { BANDW, BANDH, NBOARD, MIN_ROUTE, MAX_DEPTH, BDX, BDY, boardNeighbor, edgeColumn, buildBandTree };
+return { DIFFICULTY, DIFFICULTIES, MIN_ROUTE, MAX_DEPTH, minRoute, BDX, BDY, boardNeighbor, edgeColumn, buildBandTree };
 })();
 
 // src/world/world.mjs
@@ -860,7 +872,7 @@ const __m4 = (() => {
 const { makeHasher, worldKey, u32, toHex, writeInt64BE } = __m1;
 const { sha3_256 } = __m0;
 const { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } = __m2;
-const { BANDW, BANDH, NBOARD, BDX, BDY, buildBandTree } = __m3;
+const { DIFFICULTY, BDX, BDY, buildBandTree } = __m3;
 // The world: band trees, boards with doors, flames and the cell graph across
 // seams. Everything derives from H; caches only memoize.
 
@@ -870,27 +882,31 @@ const { BANDW, BANDH, NBOARD, BDX, BDY, buildBandTree } = __m3;
 
 const GAP_LIMIT_MS = 150000;
 
-function bandOf(y) {
-  return Math.floor(y / BANDH);
+// Coordinate helpers take the tomb size { w, h } of their world; the
+// default is HARD's 6x4.
+const HARD = DIFFICULTY.hard;
+
+function bandOf(y, size = HARD) {
+  return Math.floor(y / size.h);
 }
 
-function posOf(x, y) {
-  return BANDW * y + x;
+function posOf(x, y, size = HARD) {
+  return size.w * y + x;
 }
 
-function boardOfPos(p) {
-  const y = Math.floor(p / BANDW);
-  return { x: p - BANDW * y, y };
+function boardOfPos(p, size = HARD) {
+  const y = Math.floor(p / size.w);
+  return { x: p - size.w * y, y };
 }
 
-/** Board (x, y) at index i = 6 * row + x within band b. */
-function boardCoords(b, i) {
-  return { x: i % BANDW, y: BANDH * b + ((i / BANDW) | 0) };
+/** Board (x, y) at index i = W * row + x within band b. */
+function boardCoords(b, i, size = HARD) {
+  return { x: i % size.w, y: size.h * b + ((i / size.w) | 0) };
 }
 
 /** Index of board (x, y) within its band. */
-function boardIndex(x, y) {
-  return (y - BANDH * bandOf(y)) * BANDW + x;
+function boardIndex(x, y, size = HARD) {
+  return (y - size.h * bandOf(y, size)) * size.w + x;
 }
 
 /** Door cell on wall d (E N W S) of board (x, y); both sides read one key. */
@@ -940,7 +956,7 @@ function boardLinks(t, i) {
     aDir = dirBetween(i, t.parent[i]);
   }
   const dirs = bDir >= 0 ? [aDir, bDir] : [aDir];
-  for (let n = 0; n < NBOARD; n++) if (t.parent[n] === i) dirs.push(dirBetween(i, n));
+  for (let n = 0; n < t.parent.length; n++) if (t.parent[n] === i) dirs.push(dirBetween(i, n));
   dirs.sort((u, v) => u - v);
   return { aDir, bDir, dirs };
 }
@@ -991,11 +1007,14 @@ function cellPath(links, from, to) {
 }
 
 /**
- * `gapLimitMs` bounds the walking time between consecutive route flames;
- * spec section 3 sets 150 s. `carveCells` sets the cells each board keeps;
- * NCELL keeps them all.
+ * `difficulty` ('easy', 'medium' or 'hard') sets the tomb size and enters no
+ * hash. `gapLimitMs` bounds the walking time between consecutive route
+ * flames; spec section 3 sets 150 s. `carveCells` sets the cells each board
+ * keeps; NCELL keeps them all.
  */
-function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = {}) {
+function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = {}) {
+  if (!Object.hasOwn(DIFFICULTY, difficulty)) throw new Error(`unknown difficulty ${difficulty}`);
+  const size = DIFFICULTY[difficulty];
   const H = makeHasher(worldKey(code));
   const trees = new Map();
   const boards = new Map();
@@ -1004,21 +1023,29 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
 
   function tree(b) {
     let t = trees.get(b);
-    if (!t) { t = buildBandTree(H, b); trees.set(b, t); }
+    if (!t) { t = buildBandTree(H, b, size); trees.set(b, t); }
     return t;
   }
 
+  /** Board (x, y); a column outside [0, W) is rock, built fresh and never cached. */
   function board(x, y) {
-    const p = posOf(x, y);
+    if (x < 0 || x >= size.w) return outside(x, y);
+    const p = posOf(x, y, size);
     let bd = boards.get(p);
     if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); }
     return bd;
   }
 
+  // Its p is null: posOf there names a board inside the tomb.
+  function outside(x, y) {
+    const base = { x, y, p: null, band: bandOf(y, size), index: -1, routeIndex: -1, depth: -1 };
+    return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
+  }
+
   function buildBoard(x, y, p) {
-    const band = bandOf(y);
+    const band = bandOf(y, size);
     const t = tree(band);
-    const i = boardIndex(x, y);
+    const i = boardIndex(x, y, size);
     const base = { x, y, p, band, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i] };
     if (t.depth[i] < 0) return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
     const { aDir, bDir, dirs } = boardLinks(t, i);
@@ -1038,8 +1065,8 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
   /** Board at route position pos of band b; pos = route length is band b+1's entry. */
   function routeBoard(b, pos) {
     const t = tree(b);
-    if (pos === t.route.length) return board(tree(b + 1).entryX, BANDH * (b + 1));
-    const { x, y } = boardCoords(b, t.route[pos]);
+    if (pos === t.route.length) return board(tree(b + 1).entryX, size.h * (b + 1));
+    const { x, y } = boardCoords(b, t.route[pos], size);
     return board(x, y);
   }
 
@@ -1060,9 +1087,9 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
   function deadEndFlames(b) {
     const t = tree(b);
     const out = [];
-    for (let i = 0; i < NBOARD; i++) {
+    for (let i = 0; i < t.depth.length; i++) {
       if (t.depth[i] <= 0) continue;
-      const { x, y } = boardCoords(b, i);
+      const { x, y } = boardCoords(b, i, size);
       if (H('flame', x, y)[0] < 128) out.push({ x, y, cell: board(x, y).b, kind: 'dead', pos: -1 });
     }
     return out;
@@ -1109,15 +1136,16 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
 
   /** Flame cells on board (x, y), ascending; band b-1 may light b's entry. */
   function flamesAt(x, y) {
-    const p = posOf(x, y);
+    if (x < 0 || x >= size.w) return [];
+    const p = posOf(x, y, size);
     let cells = flameCells.get(p);
     if (cells) return cells;
-    const b = bandOf(y);
+    const b = bandOf(y, size);
     const t = tree(b);
     const set = new Set();
-    if (t.depth[boardIndex(x, y)] >= 0) {
+    if (t.depth[boardIndex(x, y, size)] >= 0) {
       for (const f of bandFlames(b).flames) if (f.x === x && f.y === y) set.add(f.cell);
-      if (y === BANDH * b && x === t.entryX) {
+      if (y === size.h * b && x === t.entryX) {
         for (const f of bandFlames(b - 1).flames) if (f.x === x && f.y === y) set.add(f.cell);
       }
     }
@@ -1145,8 +1173,8 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
   function resumePoint(x, y) {
     let bd = board(x, y);
     if (bd.kind === 'rock') {
-      const b = bandOf(y);
-      bd = board(tree(b).entryX, BANDH * b);
+      const b = bandOf(y, size);
+      bd = board(tree(b).entryX, size.h * b);
     }
     return { board: bd, cell: bd.a };
   }
@@ -1157,12 +1185,12 @@ function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS
     for (const b of flameSets.keys()) if (b < lo || b > hi) flameSets.delete(b);
     for (const [p, bd] of boards) if (bd.band < lo || bd.band > hi) boards.delete(p);
     for (const p of flameCells.keys()) {
-      const b = bandOf(boardOfPos(p).y);
+      const b = bandOf(boardOfPos(p, size).y, size);
       if (b < lo || b > hi) flameCells.delete(p);
     }
   }
 
-  return { code, H, tree, board, bandFlames, flamesAt, step, resumePoint, retain };
+  return { code, difficulty, size, H, tree, board, bandFlames, flamesAt, step, resumePoint, retain };
 }
 
 class Bytes {
@@ -1208,8 +1236,8 @@ function digestBands(world, b0, b1) {
     w.u8(fs.chain.length);
     for (const f of fs.chain) { w.i64(f.x); w.i64(f.y); w.u8(f.cell); }
     parts.push(w.done());
-    for (let i = 0; i < NBOARD; i++) {
-      const { x, y } = boardCoords(b, i);
+    for (let i = 0; i < world.size.w * world.size.h; i++) {
+      const { x, y } = boardCoords(b, i, world.size);
       parts.push(serializeBoard(world, x, y));
     }
   }
@@ -1227,22 +1255,26 @@ return { GAP_LIMIT_MS, bandOf, posOf, boardOfPos, boardCoords, boardIndex, doorC
 const __m5 = (() => {
 const { parseCode, formatCode } = __m1;
 const { boardOfPos, posOf } = __m4;
-// Save strings: `CODE4-CODE4:p` with p = 6y + x, p possibly negative.
+const { DIFFICULTY } = __m3;
+// Save strings: `CODE4-CODE4:p` with p = W*y + x for the tomb width W of the
+// world the save belongs to, p possibly negative. The string omits the
+// difficulty; its reader supplies the size.
 
 
 
-function encodeSave(code, x, y) {
-  return formatCode(code) + ':' + posOf(x, y);
+
+function encodeSave(code, x, y, size = DIFFICULTY.hard) {
+  return formatCode(code) + ':' + posOf(x, y, size);
 }
 
-/** `{ code, p, x, y }` from a save string, or null when malformed. */
-function decodeSave(text) {
+/** `{ code, p, x, y }` from a save string read at tomb `size`, or null when malformed. */
+function decodeSave(text, size = DIFFICULTY.hard) {
   const m = /^\s*([^:]+):\s*(-?\d+)\s*$/.exec(String(text));
   if (!m) return null;
   const code = parseCode(m[1]);
   const p = Number(m[2]);
   if (!code || !Number.isSafeInteger(p)) return null;
-  return { code, p, ...boardOfPos(p) };
+  return { code, p, ...boardOfPos(p, size) };
 }
 return { encodeSave, decodeSave };
 })();
@@ -2508,7 +2540,7 @@ return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 // src/game/map.mjs
 const __m9 = (() => {
 const { BW, BH, NCELL } = __m2;
-const { BANDW, BANDH } = __m3;
+const { DIFFICULTY } = __m3;
 const { bandOf } = __m4;
 // The pause-screen map: what the explorer's trail shows of one tower band.
 // DOM-free. The model holds the walked links, the openings of stood cells,
@@ -2518,16 +2550,17 @@ const { bandOf } = __m4;
 
 
 
-/** Frame size in cells: 6x4 boards of 12x7 cells. */
-const MAP_COLS = BANDW * BW;
-const MAP_ROWS = BANDH * BH;
+/** Frame size in cells for a tomb of `size` boards of 12x7 cells. */
+function mapCells(size) {
+  return { cols: size.w * BW, rows: size.h * BH };
+}
 
 // Each link is listed once, from the end whose direction is one of these.
 const LINE_DIRS = [0, 1, 4, 5];
 
-/** The band that holds board `bd`. */
-function frameOf(bd) {
-  return bandOf(bd.y);
+/** The band that holds board `bd` in a tomb of `size` boards. */
+function frameOf(bd, size = DIFFICULTY.hard) {
+  return bandOf(bd.y, size);
 }
 
 /** The frame after a pan key `dir` ('l', 'r', 'u' or 'd'); the tower is one band wide. */
@@ -2537,13 +2570,14 @@ function panFrame(b, dir) {
 
 /**
  * Lines, stubs, outlines, flames and the explorer of band `b`, in frame
- * cells: column x * 12 + cell % 12, row (y - 4b) * 7 + floor(cell / 12), row
- * 0 at the bottom. `at` is the explorer's { bd, cell }.
+ * cells: column x * 12 + cell % 12, row (y - Hb) * 7 + floor(cell / 12), row
+ * 0 at the bottom, for the world's tomb height H. `at` is the explorer's
+ * { bd, cell }.
  */
 function mapModel(world, trail, b, at) {
   const lines = [], stubs = [], outlines = [], flames = [];
-  const y0 = BANDH * b;
-  const inBand = (y) => y >= y0 && y < y0 + BANDH;
+  const y0 = world.size.h * b;
+  const inBand = (y) => y >= y0 && y < y0 + world.size.h;
   const cellAt = (bd, cell) => ({ col: bd.x * BW + (cell % BW), row: (bd.y - y0) * BH + ((cell / BW) | 0) });
   const boards = [...trail.values()].filter((t) => inBand(t.y)).sort((p, q) => p.y - q.y || p.x - q.x);
   for (const t of boards) {
@@ -2570,7 +2604,7 @@ function mapModel(world, trail, b, at) {
   const explorer = at && inBand(at.bd.y) ? cellAt(at.bd, at.cell) : null;
   return { lines, stubs, outlines, flames, explorer };
 }
-return { MAP_COLS, MAP_ROWS, frameOf, panFrame, mapModel };
+return { mapCells, frameOf, panFrame, mapModel };
 })();
 
 // src/game/render.mjs
@@ -2580,7 +2614,7 @@ const { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_
 const { BW, BH, NCELL, DX, DY } = __m2;
 const { boardOfPos } = __m4;
 const { boardMask } = __m8;
-const { MAP_COLS, MAP_ROWS } = __m9;
+const { mapCells } = __m9;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 
@@ -2776,7 +2810,7 @@ function createRenderer(canvas, world) {
   }
 
   function boardArt(bx, by) {
-    if (bx < 0 || bx >= 6) return null;
+    if (bx < 0 || bx >= world.size.w) return null;
     const bd = world.board(bx, by);
     if (!bd.links) return null;
     let art = boards.get(bd.p);
@@ -2789,14 +2823,14 @@ function createRenderer(canvas, world) {
     const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - 1, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + 1;
     const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - 1, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + 1;
     for (let by = by0; by <= by1 && budget > 0; by++) {
-      for (let bx = Math.max(0, bx0); bx <= Math.min(5, bx1) && budget > 0; bx++) {
+      for (let bx = Math.max(0, bx0); bx <= Math.min(world.size.w - 1, bx1) && budget > 0; bx++) {
         const bd = world.board(bx, by);
         if (bd.links && !boards.has(bd.p)) { boardArt(bx, by); budget--; }
       }
     }
     if (boards.size > 48) {
       for (const p of boards.keys()) {
-        const { x, y } = boardOfPos(p);
+        const { x, y } = boardOfPos(p, world.size);
         if (Math.abs(x * BOARD_W - cam.x) > 3 * BOARD_W || Math.abs(y * BOARD_H - cam.y) > 3 * BOARD_H) boards.delete(p);
       }
     }
@@ -3000,12 +3034,13 @@ function createRenderer(canvas, world) {
   }
 
   /**
-   * Draws a map model at 3 px per cell, top left at (x, y); `t` is seconds
-   * since the pause began. A link joins the centre pixels of its two cells and
-   * a stub stays inside its own cell.
+   * Draws a map model of the world's tomb at 3 px per cell, top left at
+   * (x, y); `t` is seconds since the pause began. A link joins the centre
+   * pixels of its two cells and a stub stays inside its own cell.
    */
   function drawMap(model, x, y, t) {
     const S = MAP_SCALE;
+    const { cols: MAP_COLS, rows: MAP_ROWS } = mapCells(world.size);
     // Top left pixel of a frame cell; rows run up the screen.
     const cellPx = (col, row) => [x + col * S, y + (MAP_ROWS - 1 - row) * S];
     const dot = (col, row, i, d, color) => {
@@ -3034,7 +3069,7 @@ function createRenderer(canvas, world) {
 
   return { ctx, scene, hud, text, panel, prepare, drawMap };
 }
-return { VIEW_W, VIEW_H, shade, spriteCanvas, createRenderer };
+return { VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs
@@ -3468,7 +3503,7 @@ const MARGIN = 16;
 const PAD_MAX = 160;
 const PAD_FRAC = 0.42;
 const GAP = 8;
-const KEY_H = 48;
+const KEY_H = 44;
 const KEY_MIN_W = 44;
 const DOUBLE_TAP_MS = 350;
 
@@ -3610,14 +3645,16 @@ function createPad() {
 const K = (code, key) => ({ code, key });
 /**
  * Soft keys per screen, each a key that screen's handler accepts. `when`
- * gates a key on the game's state; `alt` is its label when muted.
+ * gates a key on the game's state; `alt` is its label when muted; a key with
+ * `setting` reads the difficulty setting as its label.
  */
 const SOFT = {
   title: [
+    { id: 'resume', label: 'RESUME', ...K('Escape', 'Escape'), when: 'resume' },
     { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },
-    { id: 'roll', label: 'NEW ROLL', ...K('KeyR', 'r') },
+    { id: 'reset', label: 'RESET', ...K('KeyR', 'r') },
     { id: 'type', label: 'TYPE CODE', act: 'type' },
-    { id: 'continue', label: 'CONTINUE', ...K('KeyC', 'c'), when: 'save' },
+    { id: 'difficulty', label: 'MEDIUM', setting: true, ...K('KeyL', 'l') },
     { id: 'copy', label: 'COPY', ...K('KeyK', 'k') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
   ],
@@ -3648,9 +3685,10 @@ function screenId({ screen, typing }) {
 
 /** The soft keys shown for a game state, with labels resolved. */
 function softKeys(state) {
+  const text = (k) => (k.setting && state.difficulty ? state.difficulty.toUpperCase() : state.muted && k.alt ? k.alt : k.label);
   return (SOFT[screenId(state)] || [])
-    .filter((k) => k.when !== 'save' || state.save)
-    .map((k) => ({ ...k, text: state.muted && k.alt ? k.alt : k.label }));
+    .filter((k) => !k.when || state[k.when])
+    .map((k) => ({ ...k, text: text(k) }));
 }
 
 function textWidth(str) {
@@ -3771,7 +3809,7 @@ function stopDoubleTapZoom() {
 
 /**
  * The controls. `state()` reports what the game shows: { screen, typing,
- * save, muted }. `onMode()` runs when touch mode changes, so the caller can
+ * resume, muted, difficulty }. `onMode()` runs when touch mode changes, so the caller can
  * refit the canvas through `relayout`.
  */
 function createTouch({ state, onMode }) {
@@ -3933,7 +3971,7 @@ function createTouch({ state, onMode }) {
     // A layout from before a mode change waits for `relayout`.
     if (!lay || (lay.mode !== 'keyboard') !== on) return;
     const st = state();
-    const next = `${on}|${screenId(st)}|${st.save}|${st.muted}`;
+    const next = `${on}|${screenId(st)}|${st.resume}|${st.muted}|${st.difficulty}`;
     if (next !== sig) { sig = next; place(); }
     if (on && padEl.style.display === 'block') {
       const held = pad.held(), centre = pad.centre();
@@ -3990,15 +4028,16 @@ return { copyText, copyWithStatus, saveLabel };
 // src/game/main.mjs
 const __m15 = (() => {
 const { createWorld, boardOfPos } = __m4;
+const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m5;
 const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose } = __m6;
-const { createRenderer, VIEW_W, VIEW_H, shade } = __m10;
+const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m10;
 const { createAudio } = __m11;
 const { runScript, SELFTEST_CODE } = __m12;
 const { createTouch, layout, viewport } = __m13;
 const { copyWithStatus, saveLabel } = __m14;
-const { frameOf, panFrame, mapModel } = __m9;
+const { frameOf, panFrame, mapModel, mapCells } = __m9;
 const { RGB, idx } = __m7;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
@@ -4014,7 +4053,13 @@ const { RGB, idx } = __m7;
 
 
 
+
 const KEY_SAVE = 'infinite-maze.save';
+// The difficulty of the run that wrote KEY_SAVE; absent means HARD, the
+// only size before difficulties.
+const KEY_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
+// The title's difficulty setting; absent means MEDIUM.
+const KEY_DIFFICULTY = 'infinite-maze.difficulty';
 const KEY_BEST = 'infinite-maze.best';
 
 // Every storage access is guarded; the game runs without storage.
@@ -4044,6 +4089,25 @@ function fit() {
   s.top = `${lay.view.y}px`;
   s.width = `${lay.view.w}px`;
   s.height = `${lay.view.h}px`;
+}
+
+/** The difficulty stored under `key`, or `fallback` when absent or invalid. */
+function storedDifficulty(key, fallback) {
+  const d = load(key);
+  return DIFFICULTIES.includes(d) ? d : fallback;
+}
+
+/** The stored save read at the difficulty that wrote it, or null. */
+function readSave() {
+  const difficulty = storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard');
+  const s = decodeSave(load(KEY_SAVE) || '', DIFFICULTY[difficulty]);
+  return s && { ...s, difficulty };
+}
+
+/** Stores a save of the current run with the run's difficulty. */
+function writeSave(g, text) {
+  store(KEY_SAVE, text);
+  store(KEY_SAVE_DIFFICULTY, g.world.difficulty);
 }
 
 function present() {
@@ -4095,7 +4159,7 @@ function selftest() {
     r.scene(sim, cam, 0);
     r.hud(sim);
     // Draws the pause screen over the scene, so a draw-time error fails the gate.
-    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd), pauseMap: null, pausedAt: null });
+    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd, world.size), pauseMap: null, pausedAt: null });
     present();
     const px = view.getContext('2d').getImageData(0, 0, VIEW_W, VIEW_H).data;
     const colours = new Set();
@@ -4116,8 +4180,9 @@ function selftest() {
  * `touch <what>` on the first miss.
  */
 function touchLeg() {
-  // The leg writes the save and best band; it restores the player's own.
-  const kept = [KEY_SAVE, KEY_BEST].map((k) => [k, load(k)]);
+  // The leg writes the save, its difficulty, the setting and the best band;
+  // it restores the player's own.
+  const kept = [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST].map((k) => [k, load(k)]);
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
@@ -4137,6 +4202,8 @@ function touchLeg() {
 function driveTouch(copied) {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
   const g = boot();
+  // Boot reads the player's setting; the leg starts from its own.
+  setDifficulty(g, 'medium');
   need(touch && !touch.on, 'starts in keyboard mode');
   need(touch.soft('title', 'begin').getBoundingClientRect().width === 0, 'controls hidden in keyboard mode');
   // A dispatched click fires on a hidden button, so a control must have a box first.
@@ -4160,8 +4227,9 @@ function driveTouch(copied) {
   const offEntry = () => {
     const s = g.sim, b = s.bd.band;
     const carry = { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry };
-    for (let i = 0; i < 24; i++) {
-      const bd = g.world.board(i % 6, 4 * b + Math.floor(i / 6));
+    const { w, h } = g.world.size;
+    for (let i = 0; i < w * h; i++) {
+      const bd = g.world.board(i % w, h * b + Math.floor(i / w));
       if (!bd.links || bd.routeIndex === 0 || bd === s.bd || bd.p === s.lastEntry) continue;
       g.sim = createSim(g.world, g.world.resumePoint(bd.x, bd.y), carry);
       break;
@@ -4204,8 +4272,8 @@ function driveTouch(copied) {
 
   // Title.
   const rolled = g.code;
-  click('title', 'roll');
-  need(g.code !== rolled, 'NEW ROLL changes the code');
+  click('title', 'reset');
+  need(g.code !== rolled, 'RESET changes the code');
   toggles('title');
   const sound = touch.soft('title', 'sound'), soundArt = sound.querySelector('canvas'), muted = g.audio.muted;
   need(!touchTap(display, 1000, 1100), 'a lone tap on the view is left to the browser');
@@ -4272,6 +4340,7 @@ function driveTouch(copied) {
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
   need(g.frame === g.sim.bd.band, 'PAUSE frames the explorer\'s band');
+  need(load(KEY_SAVE_DIFFICULTY) === g.world.difficulty, 'PAUSE stores the save\'s difficulty');
   press('ArrowUp', 'ArrowUp');
   need(g.frame === g.sim.bd.band + 1, 'Up pans one band up');
   press('ArrowUp', 'ArrowUp', true);
@@ -4293,16 +4362,26 @@ function driveTouch(copied) {
     if (g.sim.cell !== cell || g.sim.bd !== bd) break;
   }
   need(g.sim.bd.band === band && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its band');
+  // A torch and clock that a rebuild from the save would reset.
+  const run = g.sim, runWorld = g.world, runCode = g.code;
+  run.burn = BURN_S / 2;
+  run.time = 77;
   click('play', 'pause');
-  need(g.frame === frameOf(g.sim.bd), 'PAUSE frames the explorer\'s band again');
+  need(g.frame === frameOf(g.sim.bd, g.world.size), 'PAUSE frames the explorer\'s band again');
   const after = pauseModel(g).explorer;
   need(after && (!before || after.col !== before.col || after.row !== before.row), 'PAUSE draws the explorer where it now stands');
   click('pause', 'title');
   need(g.screen === 'title', 'TITLE reaches the title');
 
-  // Continue.
-  click('title', 'continue');
-  need(g.screen === 'play', 'CONTINUE reaches play');
+  // Resume the open run: the title's keys change only its preview.
+  click('title', 'difficulty');
+  need(g.world !== runWorld && g.difficulty !== runWorld.difficulty, 'the difficulty key rebuilds the preview');
+  click('title', 'reset');
+  need(g.code !== runCode, 'RESET changes the preview\'s seed');
+  click('title', 'resume');
+  need(g.screen === 'play' && g.sim === run && g.world === runWorld && g.code === runCode, 'pause, TITLE and RESUME return to the same run');
+  need(run.burn === BURN_S / 2 && run.time === 77, 'the resumed run keeps its torch and time');
+  need(g.difficulty === runWorld.difficulty, 'RESUME moves the setting to the run\'s');
 
   // End screen.
   offEntry();
@@ -4318,19 +4397,95 @@ function driveTouch(copied) {
   click('over', 'title');
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
 
+  difficultyLeg(g, { need, click, press, offEntry });
+
   // Leave the self-test script's run paused on screen for the screenshot.
+  setDifficulty(g, 'hard');
   useCode(g, SELFTEST_CODE);
   g.sim = runScript(g.world).sim;
   snapCam(g.cam, g.sim);
   g.screen = 'play';
   g.keys.clear();
   press('Escape', 'Escape');
-  need(g.screen === 'pause' && g.frame === frameOf(g.sim.bd), 'Esc pauses on the explorer\'s band');
+  need(g.screen === 'pause' && g.frame === frameOf(g.sim.bd, g.world.size), 'Esc pauses on the explorer\'s band');
   // The first pause frame lands half a second into the page and shows the explorer's dot.
   draw(g, 0.5);
-  const e = pauseModel(g).explorer;
-  const dot = view.getContext('2d').getImageData(52 + e.col * 3 + 1, 28 + (27 - e.row) * 3 + 1, 1, 1).data;
+  const e = pauseModel(g).explorer, o = mapOrigin(g.world);
+  const dot = view.getContext('2d').getImageData(o.x + e.col * MAP_SCALE + 1, o.y + (o.rows - 1 - e.row) * MAP_SCALE + 1, 1, 1).data;
   need(RGB[idx('p')].every((v, i) => dot[i] === v), 'the pause map shows the explorer first');
+}
+
+/** The touch leg's difficulty steps, from the title with no run open. */
+function difficultyLeg(g, { need, click, press, offEntry }) {
+  const sized = (d) => g.difficulty === d && g.world.difficulty === d && load(KEY_DIFFICULTY) === d
+    && g.world.size.w === DIFFICULTY[d].w && g.world.size.h === DIFFICULTY[d].h;
+
+  // The key cycles the setting, and the preview's tomb size follows.
+  setDifficulty(g, 'easy');
+  need(sized('easy'), 'the setting starts at EASY');
+  for (const d of ['medium', 'hard', 'easy']) {
+    click('title', 'difficulty');
+    need(sized(d), `the difficulty key moves to ${d.toUpperCase()}`);
+  }
+  // The arrows step it and stop at the ends.
+  for (const [code, d] of [['ArrowRight', 'medium'], ['ArrowRight', 'hard'], ['ArrowRight', 'hard'],
+    ['ArrowLeft', 'medium'], ['ArrowLeft', 'easy'], ['ArrowLeft', 'easy']]) {
+    press(code, code);
+    need(sized(d), `${code} steps the setting to ${d.toUpperCase()}`);
+  }
+
+  // A save resumes at the difficulty that wrote it, with no run open, as at startup.
+  const saveAt = (d) => {
+    setDifficulty(g, d);
+    click('title', 'begin');
+    offEntry();
+    click('play', 'pause');
+    need(load(KEY_SAVE_DIFFICULTY) === d, `PAUSE stores ${d.toUpperCase()} with the save`);
+    const where = { x: g.sim.bd.x, y: g.sim.bd.y, sim: g.sim };
+    click('pause', 'title');
+    g.open = null;
+    return where;
+  };
+  const resumesAt = (d, where) => {
+    click('title', 'resume');
+    need(g.screen === 'play' && sized(d), `RESUME rebuilds the save at ${d.toUpperCase()} and moves the setting`);
+    need(g.sim !== where.sim && g.sim.bd.x === where.x && g.sim.bd.y === where.y, `the ${d.toUpperCase()} save resumes on its board`);
+  };
+  const hard = saveAt('hard');
+  press('ArrowLeft', 'ArrowLeft');
+  press('ArrowLeft', 'ArrowLeft');
+  need(sized('easy'), 'the setting moves to EASY over a HARD save');
+  resumesAt('hard', hard);
+  click('play', 'pause');
+  click('pause', 'title');
+  g.open = null;
+  const easy = saveAt('easy');
+  press('ArrowRight', 'ArrowRight');
+  need(sized('medium'), 'the setting moves to MEDIUM over an EASY save');
+  resumesAt('easy', easy);
+
+  // RESET rolls a new seed and keeps the save.
+  click('play', 'pause');
+  click('pause', 'title');
+  const save = [load(KEY_SAVE), load(KEY_SAVE_DIFFICULTY)], code = g.code;
+  click('title', 'reset');
+  need(g.code !== code && load(KEY_SAVE) === save[0] && load(KEY_SAVE_DIFFICULTY) === save[1], 'RESET changes the seed and keeps the save');
+
+  // The best tomb is per seed and difficulty; HARD keeps the bare seed code.
+  click('title', 'resume');
+  store(KEY_BEST, '{}');
+  g.sim.maxBand = 7;
+  endRun(g);
+  draw(g, 0);
+  const bests = JSON.parse(load(KEY_BEST));
+  need(bests[`${g.code}:EASY`] === 7 && bests[g.code] === undefined, 'an EASY run records its best under the seed and EASY');
+  click('over', 'title');
+  store(KEY_BEST, JSON.stringify({ [g.code]: 5, [`${g.code}:EASY`]: 2, [`${g.code}:MEDIUM`]: 3 }));
+  for (const [d, best] of [['easy', 2], ['medium', 3], ['hard', 5]]) {
+    setDifficulty(g, d);
+    need(titleBest(g) === best, `BEST TOMB reads ${best} at ${d.toUpperCase()}`);
+  }
+  draw(g, 0);
 }
 
 const DIRS = {
@@ -4338,15 +4493,23 @@ const DIRS = {
 };
 const DIR_BITS = { l: KEY.L, r: KEY.R, u: KEY.U, d: KEY.D };
 const JUMP_KEYS = ['Space', 'KeyZ'];
+// Title keys that step the difficulty setting, stopping at the ends.
+const SETTING_STEP = { ArrowLeft: -1, KeyA: -1, ArrowRight: 1, KeyD: 1 };
 
-function readBest(code) {
-  try { return JSON.parse(load(KEY_BEST) || '{}')[code] ?? null; } catch { return null; }
+// HARD keeps the bare seed code, so bests from before difficulties carry over.
+function bestKey(code, difficulty) {
+  return difficulty === 'hard' ? code : `${code}:${difficulty.toUpperCase()}`;
 }
 
-function writeBest(code, band) {
+function readBest(code, difficulty) {
+  try { return JSON.parse(load(KEY_BEST) || '{}')[bestKey(code, difficulty)] ?? null; } catch { return null; }
+}
+
+function writeBest(code, difficulty, band) {
+  const key = bestKey(code, difficulty);
   let all = {};
   try { all = JSON.parse(load(KEY_BEST) || '{}'); } catch { all = {}; }
-  if (all[code] === undefined || band > all[code]) { all[code] = band; store(KEY_BEST, JSON.stringify(all)); }
+  if (all[key] === undefined || band > all[key]) { all[key] = band; store(KEY_BEST, JSON.stringify(all)); }
 }
 
 /** State shared by input, tick and draw. */
@@ -4355,8 +4518,12 @@ function createGame() {
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
     // Key edges since the last tick: KEY bits pressed and released, and a jump press.
     press: 0, release: 0, jump: false,
-    code: parseCode((decodeSave(load(KEY_SAVE) || '') || {}).code || '') || rollCode(),
+    code: parseCode((readSave() || {}).code || '') || rollCode(),
+    // The title's setting; `world` is always built at it.
+    difficulty: storedDifficulty(KEY_DIFFICULTY, 'medium'),
     world: null, renderer: null, sim: null, preview: null,
+    // The run left for the title by Q: { code, world, renderer, preview, sim }.
+    open: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
     // The band the pause map frames, and its model.
     frame: 0, pauseMap: null, pausedAt: null,
@@ -4371,16 +4538,26 @@ function titleCam(g) {
 
 function useCode(g, code) {
   g.code = code;
-  g.world = createWorld(code);
+  g.world = createWorld(code, { difficulty: g.difficulty });
   g.renderer = createRenderer(view, g.world);
   g.preview = createSim(g.world, g.world.resumePoint(g.world.tree(0).entryX, 0));
   titleCam(g);
 }
 
-/** Starts a run at save position p, or at band 0's entry when p is null. */
-function begin(g, p = null, carry = null) {
-  const at = p === null ? { x: g.world.tree(0).entryX, y: 0 } : boardOfPos(p);
-  g.sim = createSim(g.world, g.world.resumePoint(at.x, at.y), carry);
+/** Moves the setting, storing it; the caller rebuilds the world when needed. */
+function keepSetting(g, difficulty) {
+  g.difficulty = difficulty;
+  store(KEY_DIFFICULTY, difficulty);
+}
+
+/** Changes the setting and rebuilds the title preview at it. */
+function setDifficulty(g, difficulty) {
+  if (difficulty === g.difficulty) return;
+  keepSetting(g, difficulty);
+  useCode(g, g.code);
+}
+
+function play(g) {
   snapCam(g.cam, g.sim);
   g.screen = 'play';
   g.note = '';
@@ -4389,17 +4566,45 @@ function begin(g, p = null, carry = null) {
   g.jump = false;
 }
 
+/** Starts a new run at save position p, or at band 0's entry when p is null. */
+function begin(g, p = null, carry = null) {
+  const at = p === null ? { x: g.world.tree(0).entryX, y: 0 } : boardOfPos(p, g.world.size);
+  g.sim = createSim(g.world, g.world.resumePoint(at.x, at.y), carry);
+  g.open = null;
+  play(g);
+}
+
+/**
+ * RESUME: back to the open run unchanged, or with none open, the save rebuilt
+ * at its own difficulty. Either way the setting follows the run.
+ */
+function resume(g) {
+  const o = g.open;
+  if (o) {
+    g.open = null;
+    Object.assign(g, { code: o.code, world: o.world, renderer: o.renderer, preview: o.preview, sim: o.sim });
+    keepSetting(g, o.world.difficulty);
+    play(g);
+    return;
+  }
+  const s = readSave();
+  if (!s) return;
+  keepSetting(g, s.difficulty);
+  if (s.code !== g.code || g.world.difficulty !== s.difficulty) useCode(g, s.code);
+  begin(g, s.p);
+}
+
 function hereCode(g) {
-  return encodeSave(g.code, g.sim.bd.x, g.sim.bd.y);
+  return encodeSave(g.code, g.sim.bd.x, g.sim.bd.y, g.world.size);
 }
 
 function entryCode(g) {
-  const { x, y } = boardOfPos(g.sim.lastEntry);
-  return encodeSave(g.code, x, y);
+  const { x, y } = boardOfPos(g.sim.lastEntry, g.world.size);
+  return encodeSave(g.code, x, y, g.world.size);
 }
 
 function submitTyped(g) {
-  const save = decodeSave(g.typing);
+  const save = decodeSave(g.typing, g.world.size);
   if (save) {
     if (save.code !== g.code) useCode(g, save.code);
     g.typing = null;
@@ -4420,15 +4625,17 @@ function typingKey(g, e) {
 
 function titleKey(g, e) {
   if (g.typing !== null) { typingKey(g, e); return; }
+  const at = DIFFICULTIES.indexOf(g.difficulty);
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) begin(g);
+  else if (e.key === 'Escape') { if (!e.repeat) resume(g); }
   else if (e.code === 'KeyR') { useCode(g, rollCode()); g.note = ''; }
   else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
-  else if (e.code === 'KeyC') {
-    const s = decodeSave(load(KEY_SAVE) || '');
-    if (s) { if (s.code !== g.code) useCode(g, s.code); begin(g, s.p); }
+  else if (e.code === 'KeyL') setDifficulty(g, DIFFICULTIES[(at + 1) % DIFFICULTIES.length]);
+  else if (SETTING_STEP[e.code]) {
+    setDifficulty(g, DIFFICULTIES[Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))]);
   } else if (e.code === 'KeyK') {
     // The save code the title shows, or the seed code when it shows none.
-    const s = decodeSave(load(KEY_SAVE) || '');
+    const s = readSave();
     const shown = s ? `${formatCode(s.code)}:${s.p}` : formatCode(g.code);
     copyWithStatus(globalThis.navigator.clipboard, shown, (status) => {
       if (g.screen === 'title') g.note = status;
@@ -4439,10 +4646,10 @@ function titleKey(g, e) {
 function playKey(g, e) {
   if (e.key === 'Escape') {
     g.screen = 'pause';
-    g.frame = frameOf(g.sim.bd);
+    g.frame = frameOf(g.sim.bd, g.world.size);
     g.pauseMap = null;
     g.pausedAt = null;
-    store(KEY_SAVE, hereCode(g));
+    writeSave(g, hereCode(g));
     return;
   }
   if (DIRS[e.code]) {
@@ -4455,8 +4662,12 @@ function playKey(g, e) {
 // g.copied: the copy status the pause or end screen shows, cleared on leaving it.
 function pauseKey(g, e) {
   if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }
-  else if (e.code === 'KeyQ') { g.screen = 'title'; g.copied = ''; titleCam(g); }
-  else if (e.code === 'KeyC') {
+  else if (e.code === 'KeyQ') {
+    g.open = { code: g.code, world: g.world, renderer: g.renderer, preview: g.preview, sim: g.sim };
+    g.screen = 'title';
+    g.copied = '';
+    titleCam(g);
+  } else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => {
       if (g.screen === 'pause') g.copied = status;
     });
@@ -4499,8 +4710,8 @@ function handleEvents(g) {
   for (const ev of s.events) {
     if (ev === 'relight') { g.audio.play('relight'); g.audio.relight(); }
     else if (ev === 'ember' || ev === 'over' || ev === 'band') g.audio.play(ev);
-    if (ev === 'band') writeBest(g.code, s.maxBand);
-    if (ev === 'entry') store(KEY_SAVE, entryCode(g));
+    if (ev === 'band') writeBest(g.code, g.world.difficulty, s.maxBand);
+    if (ev === 'entry') writeSave(g, entryCode(g));
     if (ev === 'seam') g.world.retain(s.bd.band - 1, s.bd.band + 1);
   }
 }
@@ -4521,8 +4732,8 @@ function soundCues(g) {
 
 function endRun(g) {
   g.screen = 'over';
-  writeBest(g.code, g.sim.maxBand);
-  store(KEY_SAVE, entryCode(g));
+  writeBest(g.code, g.world.difficulty, g.sim.maxBand);
+  writeSave(g, entryCode(g));
 }
 
 function tick(g) {
@@ -4534,33 +4745,56 @@ function tick(g) {
   if (g.sim.state === 'over') endRun(g);
 }
 
+/** The best tomb the title shows: the shown seed's, at the setting. */
+function titleBest(g) {
+  return readBest(g.code, g.difficulty);
+}
+
 function drawTitle(g, t) {
   const r = g.renderer;
   r.scene(g.preview, g.cam, t);
-  const saved = decodeSave(load(KEY_SAVE) || '');
-  const best = readBest(g.code);
+  const saved = readSave();
+  const best = titleBest(g);
   r.ctx.fillStyle = shade(0.45);
   r.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   r.text('INFINITE MAZE', VIEW_W / 2, 18, 'm', { align: 'center', scale: 2 });
   r.text('A TOMB WITHOUT END', VIEW_W / 2, 38, 'a', { align: 'center' });
-  r.panel(62, 54, 196, saved ? 92 : 82);
-  r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 62, 'i', { align: 'center' });
+  r.panel(62, 50, 196, saved || g.typing !== null ? 100 : 88);
+  r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 58, 'i', { align: 'center' });
   if (g.typing !== null) {
-    r.text(`CODE  ${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 80, 'c');
-    r.text('ENTER  ACCEPT', 72, 96, 'b');
-    r.text('ESC    CANCEL', 72, 108, 'b');
-    r.text('SEED  XXXX-XXXX', 72, 124, '9');
-    r.text('SAVE  XXXX-XXXX:P', 72, 134, '9');
+    r.text(`CODE  ${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 74, 'c');
+    r.text('ENTER  ACCEPT', 72, 90, 'b');
+    r.text('ESC    CANCEL', 72, 102, 'b');
+    r.text('SEED  XXXX-XXXX', 72, 118, '9');
+    r.text('SAVE  XXXX-XXXX:P', 72, 130, '9');
   } else {
-    r.text('ENTER  BEGIN', 72, 80, 'c');
-    r.text('R      NEW ROLL', 72, 92, 'b');
-    r.text('K COPY', 248, 92, 'b', { align: 'right' });
-    r.text('T      TYPE A CODE', 72, 104, 'b');
-    if (saved) r.text(`C      ${formatCode(saved.code)}:${saved.p}`, 72, 116, 'b');
-    r.text(best === null ? 'NO TOMB REACHED YET' : `BEST TOMB  ${best}`, VIEW_W / 2, saved ? 132 : 120, 'p', { align: 'center' });
+    r.text('ENTER  BEGIN', 72, 74, 'c');
+    // The setting row: all three names, the current one lit.
+    r.text('L', 72, 86, 'b');
+    let x = 114;
+    for (const d of DIFFICULTIES) {
+      const name = d.toUpperCase();
+      r.text(name, x, 86, d === g.difficulty ? 'p' : '7');
+      x += (name.length + 1) * 6;
+    }
+    r.text('R      RESET', 72, 98, 'b');
+    r.text('K COPY', 248, 98, 'b', { align: 'right' });
+    r.text('T      TYPE A CODE', 72, 110, 'b');
+    // At most 26 characters right of ESC: a 9-character p and MEDIUM fit the panel.
+    if (saved) {
+      r.text('ESC', 72, 122, 'b');
+      r.text(`${formatCode(saved.code)}:${saved.p} ${saved.difficulty.toUpperCase()}`, 248, 122, 'b', { align: 'right' });
+    }
+    r.text(best === null ? 'NO TOMB REACHED YET' : `BEST TOMB  ${best}`, VIEW_W / 2, saved ? 136 : 124, 'p', { align: 'center' });
   }
   if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
   r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+}
+
+/** Top left of the pause map and its rows: centred in HARD's 216x84 px frame, the largest. */
+function mapOrigin(world) {
+  const { cols, rows } = mapCells(world.size);
+  return { x: 52 + (216 - cols * MAP_SCALE) / 2, y: 28 + Math.floor((84 - rows * MAP_SCALE) / 2), rows };
 }
 
 /** The pause map's model for the frame, rebuilt when the frame changes. */
@@ -4579,9 +4813,10 @@ function drawPause(g, t = 0) {
   r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
   r.text(`TOMB ${g.frame}`, 267, 16, 'a', { align: 'right' });
   if (g.pausedAt === null) g.pausedAt = t;
-  r.drawMap(pauseModel(g), 52, 28, t - g.pausedAt);
+  const o = mapOrigin(g.world);
+  r.drawMap(pauseModel(g), o.x, o.y, t - g.pausedAt);
   r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
-  r.text(hereCode(g), VIEW_W / 2, 129, 'i', { align: 'center' });
+  r.text(`${hereCode(g)}  ${g.world.difficulty.toUpperCase()}`, VIEW_W / 2, 129, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });
   r.text('ESC RESUME  UP/DOWN PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
   r.text('M MUTE  C COPY', VIEW_W / 2, 164, 'b', { align: 'center' });
@@ -4594,7 +4829,7 @@ function drawOver(g) {
   r.text(`TOMBS CLIMBED  ${s.maxBand - s.startBand}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
   r.text(saveLabel(g.copied), VIEW_W / 2, 96, 'a', { align: 'center' });
-  r.text(entryCode(g), VIEW_W / 2, 108, 'i', { align: 'center' });
+  r.text(`${entryCode(g)}  ${g.world.difficulty.toUpperCase()}`, VIEW_W / 2, 108, 'i', { align: 'center' });
   r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 126, 'b', { align: 'center' });
 }
 
@@ -4629,8 +4864,8 @@ function boot() {
   const g = createGame();
   touch = createTouch({
     state: () => ({
-      screen: g.screen, typing: g.typing !== null, muted: g.audio.muted,
-      save: g.screen === 'title' && Boolean(decodeSave(load(KEY_SAVE) || '')),
+      screen: g.screen, typing: g.typing !== null, muted: g.audio.muted, difficulty: g.difficulty,
+      resume: g.screen === 'title' && (g.open !== null || readSave() !== null),
     }),
     onMode: fit,
   });

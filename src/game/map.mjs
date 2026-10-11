@@ -3,19 +3,20 @@
 // the entered boards, the flames at stood cells and the explorer; it never
 // names a cell the explorer did not stand on or a passage beyond a stub.
 import { BW, BH, NCELL } from '../world/board.mjs';
-import { BANDW, BANDH } from '../world/band.mjs';
+import { DIFFICULTY } from '../world/band.mjs';
 import { bandOf } from '../world/world.mjs';
 
-/** Frame size in cells: 6x4 boards of 12x7 cells. */
-export const MAP_COLS = BANDW * BW;
-export const MAP_ROWS = BANDH * BH;
+/** Frame size in cells for a tomb of `size` boards of 12x7 cells. */
+export function mapCells(size) {
+  return { cols: size.w * BW, rows: size.h * BH };
+}
 
 // Each link is listed once, from the end whose direction is one of these.
 const LINE_DIRS = [0, 1, 4, 5];
 
-/** The band that holds board `bd`. */
-export function frameOf(bd) {
-  return bandOf(bd.y);
+/** The band that holds board `bd` in a tomb of `size` boards. */
+export function frameOf(bd, size = DIFFICULTY.hard) {
+  return bandOf(bd.y, size);
 }
 
 /** The frame after a pan key `dir` ('l', 'r', 'u' or 'd'); the tower is one band wide. */
@@ -25,13 +26,14 @@ export function panFrame(b, dir) {
 
 /**
  * Lines, stubs, outlines, flames and the explorer of band `b`, in frame
- * cells: column x * 12 + cell % 12, row (y - 4b) * 7 + floor(cell / 12), row
- * 0 at the bottom. `at` is the explorer's { bd, cell }.
+ * cells: column x * 12 + cell % 12, row (y - Hb) * 7 + floor(cell / 12), row
+ * 0 at the bottom, for the world's tomb height H. `at` is the explorer's
+ * { bd, cell }.
  */
 export function mapModel(world, trail, b, at) {
   const lines = [], stubs = [], outlines = [], flames = [];
-  const y0 = BANDH * b;
-  const inBand = (y) => y >= y0 && y < y0 + BANDH;
+  const y0 = world.size.h * b;
+  const inBand = (y) => y >= y0 && y < y0 + world.size.h;
   const cellAt = (bd, cell) => ({ col: bd.x * BW + (cell % BW), row: (bd.y - y0) * BH + ((cell / BW) | 0) });
   const boards = [...trail.values()].filter((t) => inBand(t.y)).sort((p, q) => p.y - q.y || p.x - q.x);
   for (const t of boards) {

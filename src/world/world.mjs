@@ -3,31 +3,35 @@
 import { makeHasher, worldKey, u32, toHex, writeInt64BE } from './hash.mjs';
 import { sha3_256 } from './keccak.mjs';
 import { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } from './board.mjs';
-import { BANDW, BANDH, NBOARD, BDX, BDY, buildBandTree } from './band.mjs';
+import { DIFFICULTY, BDX, BDY, buildBandTree } from './band.mjs';
 
 export const GAP_LIMIT_MS = 150000;
 
-export function bandOf(y) {
-  return Math.floor(y / BANDH);
+// Coordinate helpers take the tomb size { w, h } of their world; the
+// default is HARD's 6x4.
+const HARD = DIFFICULTY.hard;
+
+export function bandOf(y, size = HARD) {
+  return Math.floor(y / size.h);
 }
 
-export function posOf(x, y) {
-  return BANDW * y + x;
+export function posOf(x, y, size = HARD) {
+  return size.w * y + x;
 }
 
-export function boardOfPos(p) {
-  const y = Math.floor(p / BANDW);
-  return { x: p - BANDW * y, y };
+export function boardOfPos(p, size = HARD) {
+  const y = Math.floor(p / size.w);
+  return { x: p - size.w * y, y };
 }
 
-/** Board (x, y) at index i = 6 * row + x within band b. */
-export function boardCoords(b, i) {
-  return { x: i % BANDW, y: BANDH * b + ((i / BANDW) | 0) };
+/** Board (x, y) at index i = W * row + x within band b. */
+export function boardCoords(b, i, size = HARD) {
+  return { x: i % size.w, y: size.h * b + ((i / size.w) | 0) };
 }
 
 /** Index of board (x, y) within its band. */
-export function boardIndex(x, y) {
-  return (y - BANDH * bandOf(y)) * BANDW + x;
+export function boardIndex(x, y, size = HARD) {
+  return (y - size.h * bandOf(y, size)) * size.w + x;
 }
 
 /** Door cell on wall d (E N W S) of board (x, y); both sides read one key. */
@@ -77,7 +81,7 @@ function boardLinks(t, i) {
     aDir = dirBetween(i, t.parent[i]);
   }
   const dirs = bDir >= 0 ? [aDir, bDir] : [aDir];
-  for (let n = 0; n < NBOARD; n++) if (t.parent[n] === i) dirs.push(dirBetween(i, n));
+  for (let n = 0; n < t.parent.length; n++) if (t.parent[n] === i) dirs.push(dirBetween(i, n));
   dirs.sort((u, v) => u - v);
   return { aDir, bDir, dirs };
 }
@@ -128,11 +132,14 @@ export function cellPath(links, from, to) {
 }
 
 /**
- * `gapLimitMs` bounds the walking time between consecutive route flames;
- * spec section 3 sets 150 s. `carveCells` sets the cells each board keeps;
- * NCELL keeps them all.
+ * `difficulty` ('easy', 'medium' or 'hard') sets the tomb size and enters no
+ * hash. `gapLimitMs` bounds the walking time between consecutive route
+ * flames; spec section 3 sets 150 s. `carveCells` sets the cells each board
+ * keeps; NCELL keeps them all.
  */
-export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = {}) {
+export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS } = {}) {
+  if (!Object.hasOwn(DIFFICULTY, difficulty)) throw new Error(`unknown difficulty ${difficulty}`);
+  const size = DIFFICULTY[difficulty];
   const H = makeHasher(worldKey(code));
   const trees = new Map();
   const boards = new Map();
@@ -141,21 +148,29 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARV
 
   function tree(b) {
     let t = trees.get(b);
-    if (!t) { t = buildBandTree(H, b); trees.set(b, t); }
+    if (!t) { t = buildBandTree(H, b, size); trees.set(b, t); }
     return t;
   }
 
+  /** Board (x, y); a column outside [0, W) is rock, built fresh and never cached. */
   function board(x, y) {
-    const p = posOf(x, y);
+    if (x < 0 || x >= size.w) return outside(x, y);
+    const p = posOf(x, y, size);
     let bd = boards.get(p);
     if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); }
     return bd;
   }
 
+  // Its p is null: posOf there names a board inside the tomb.
+  function outside(x, y) {
+    const base = { x, y, p: null, band: bandOf(y, size), index: -1, routeIndex: -1, depth: -1 };
+    return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
+  }
+
   function buildBoard(x, y, p) {
-    const band = bandOf(y);
+    const band = bandOf(y, size);
     const t = tree(band);
-    const i = boardIndex(x, y);
+    const i = boardIndex(x, y, size);
     const base = { x, y, p, band, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i] };
     if (t.depth[i] < 0) return { ...base, kind: 'rock', doors: [], links: null, doorMask: null };
     const { aDir, bDir, dirs } = boardLinks(t, i);
@@ -175,8 +190,8 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARV
   /** Board at route position pos of band b; pos = route length is band b+1's entry. */
   function routeBoard(b, pos) {
     const t = tree(b);
-    if (pos === t.route.length) return board(tree(b + 1).entryX, BANDH * (b + 1));
-    const { x, y } = boardCoords(b, t.route[pos]);
+    if (pos === t.route.length) return board(tree(b + 1).entryX, size.h * (b + 1));
+    const { x, y } = boardCoords(b, t.route[pos], size);
     return board(x, y);
   }
 
@@ -197,9 +212,9 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARV
   function deadEndFlames(b) {
     const t = tree(b);
     const out = [];
-    for (let i = 0; i < NBOARD; i++) {
+    for (let i = 0; i < t.depth.length; i++) {
       if (t.depth[i] <= 0) continue;
-      const { x, y } = boardCoords(b, i);
+      const { x, y } = boardCoords(b, i, size);
       if (H('flame', x, y)[0] < 128) out.push({ x, y, cell: board(x, y).b, kind: 'dead', pos: -1 });
     }
     return out;
@@ -246,15 +261,16 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARV
 
   /** Flame cells on board (x, y), ascending; band b-1 may light b's entry. */
   function flamesAt(x, y) {
-    const p = posOf(x, y);
+    if (x < 0 || x >= size.w) return [];
+    const p = posOf(x, y, size);
     let cells = flameCells.get(p);
     if (cells) return cells;
-    const b = bandOf(y);
+    const b = bandOf(y, size);
     const t = tree(b);
     const set = new Set();
-    if (t.depth[boardIndex(x, y)] >= 0) {
+    if (t.depth[boardIndex(x, y, size)] >= 0) {
       for (const f of bandFlames(b).flames) if (f.x === x && f.y === y) set.add(f.cell);
-      if (y === BANDH * b && x === t.entryX) {
+      if (y === size.h * b && x === t.entryX) {
         for (const f of bandFlames(b - 1).flames) if (f.x === x && f.y === y) set.add(f.cell);
       }
     }
@@ -282,8 +298,8 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARV
   function resumePoint(x, y) {
     let bd = board(x, y);
     if (bd.kind === 'rock') {
-      const b = bandOf(y);
-      bd = board(tree(b).entryX, BANDH * b);
+      const b = bandOf(y, size);
+      bd = board(tree(b).entryX, size.h * b);
     }
     return { board: bd, cell: bd.a };
   }
@@ -294,12 +310,12 @@ export function createWorld(code, { gapLimitMs = GAP_LIMIT_MS, carveCells = CARV
     for (const b of flameSets.keys()) if (b < lo || b > hi) flameSets.delete(b);
     for (const [p, bd] of boards) if (bd.band < lo || bd.band > hi) boards.delete(p);
     for (const p of flameCells.keys()) {
-      const b = bandOf(boardOfPos(p).y);
+      const b = bandOf(boardOfPos(p, size).y, size);
       if (b < lo || b > hi) flameCells.delete(p);
     }
   }
 
-  return { code, H, tree, board, bandFlames, flamesAt, step, resumePoint, retain };
+  return { code, difficulty, size, H, tree, board, bandFlames, flamesAt, step, resumePoint, retain };
 }
 
 class Bytes {
@@ -345,8 +361,8 @@ export function digestBands(world, b0, b1) {
     w.u8(fs.chain.length);
     for (const f of fs.chain) { w.i64(f.x); w.i64(f.y); w.u8(f.cell); }
     parts.push(w.done());
-    for (let i = 0; i < NBOARD; i++) {
-      const { x, y } = boardCoords(b, i);
+    for (let i = 0; i < world.size.w * world.size.h; i++) {
+      const { x, y } = boardCoords(b, i, world.size);
       parts.push(serializeBoard(world, x, y));
     }
   }

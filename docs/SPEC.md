@@ -15,11 +15,18 @@ The world has two scales, and both use the same maze rule:
 
 - **Board:** a 12×7 grid of cells. This is one room of the tomb, a little
   larger than two screens in each direction.
-- **Band:** a 6×4 grid of boards. Bands stack upward without end.
+- **Band:** a W×H grid of boards. Bands stack upward without end.
 
-Board coordinates are integers `(x, y)` with `x ∈ [0, 6)` and `y ∈ ℤ`, where y
-increases upward. Board `(x, y)` belongs to band `b = ⌊y / 4⌋`. Band 0 holds
+The difficulty, picked on the title (§8), sets the band's size in boards:
+EASY 3×2 (6 boards), MEDIUM 4×3 (12) and HARD 6×4 (24). Every other rule
+holds at every difficulty, and a world never mixes sizes. A band depends on
+the seed, its position and the difficulty alone; the difficulty enters no
+hash, so HARD is the world from before difficulties existed.
+
+Board coordinates are integers `(x, y)` with `x ∈ [0, W)` and `y ∈ ℤ`, where y
+increases upward. Board `(x, y)` belongs to band `b = ⌊y / H⌋`. Band 0 holds
 the start, and negative bands exist, so retreating downward is endless too.
+Every position outside `[0, W)` is rock.
 
 Within a band, the boards form a tree with one route from a door in the band's
 floor to a door in its ceiling. Dead-end branches hang off that route, and
@@ -55,7 +62,7 @@ the same world on every engine.
 
 | Value | Source | Range |
 |---|---|---|
-| Band edge column `e_b`: column of the door between bands `b−1` and `b` | `H("edge", b)` u32 mod 6 | `[0, 6)` |
+| Band edge column `e_b`: column of the door between bands `b−1` and `b` | `H("edge", b)` u32 mod W | `[0, W)` |
 | Band maze | sfc32 of `H("band", b, k)`, k = reroll | — |
 | Side door between `(x,y)` and `(x+1,y)` | `H("hdoor", x, y)` u32 mod 5 + 1 | cell row `[1, 5]` |
 | Floor door between `(x,y)` and `(x,y+1)` | `H("vdoor", x, y)` u32 mod 10 + 1 | cell column `[1, 10]` |
@@ -69,12 +76,13 @@ doors of one board never share a cell.
 
 ## 3. Band maze
 
-Band `b` spans board rows `4b … 4b+3`. Its entry is board `(e_b, 4b)`, through
-the floor. Its exit is board `(e_{b+1}, 4b+3)`, through the ceiling.
+Band `b` spans board rows `Hb … Hb+H−1`. Its entry is board `(e_b, Hb)`,
+through the floor. Its exit is board `(e_{b+1}, Hb+H−1)`, through the ceiling.
 
-1. **Route.** Run a randomized depth-first search over the 6×4 boards from
+1. **Route.** Run a randomized depth-first search over the W×H boards from
    entry to exit. The search stack on arrival is the route. Reroll `k` until
-   the route covers at least 12 boards.
+   the route covers at least half the band's boards: 3 at EASY, 6 at MEDIUM
+   and 12 at HARD.
 2. **Dead ends.** Repeatedly pick, uniformly, a board in the tree at depth
    below 2 with an unused neighbour, and attach that neighbour. The route sits
    at depth 0. Stop when no candidate remains. Every dead-end branch is
@@ -167,15 +175,26 @@ builds a board when it first comes within one board of the camera.
 
 ## 5. Save code
 
-A position is one integer, `p = 6y + x`. The full save is the seed code plus
-`p`, written `K7Q2-M9XA:4813`. Resuming computes `y = ⌊p / 6⌋` and
-`x = p mod 6`, then regenerates that band and board directly from `H`. No
+A position is one integer, `p = W·y + x`. The full save is the seed code plus
+`p`, written `K7Q2-M9XA:4813`. Resuming computes `y = ⌊p / W⌋` and
+`x = p mod W`, then regenerates that band and board directly from `H`. No
 replay is needed. The hero appears at the board's door that leads back toward
-the band entry. Any band entry is a valid start, a million bands up included.
+the band entry. A rock position resumes at its band's entry. Any band entry is
+a valid start, a million bands up included.
+
+The save code omits the difficulty, so one `p` names different boards at
+different difficulties. The player picks the difficulty on the title, and the
+code reads at the difficulty in force:
+
+- The game stores the title setting; absent, it is MEDIUM.
+- Every stored save keeps the difficulty of the run that wrote it; absent,
+  it is HARD, the one size of every save from before difficulties.
+- RESUME plays the stored save at its own difficulty, and the title setting
+  moves to match. A typed save code plays at the title setting.
 
 Resuming lights the torch to full. Flames never run out, so the save carries
 no pickup state. The game separately keeps the deepest band reached, as the
-score.
+score, per seed and difficulty.
 
 ## 6. Movement
 
@@ -309,7 +328,12 @@ sconces and the flames, composited multiplicatively over the scene. Hieroglyph w
 behind at 0.5× for depth, and dust motes drift in the torch beam.
 
 **Labels.** On screen a band is a tomb: the HUD reads `TOMB n`, the title
-`BEST TOMB`, and the end screen `TOMBS CLIMBED`.
+`BEST TOMB`, and the end screen `TOMBS CLIMBED`. The title's panel holds a
+difficulty row naming EASY, MEDIUM and HARD with the setting lit, and its
+save line names the save's difficulty. Its best tomb is the shown seed's at
+the setting. The pause and end screens name the run's difficulty after the
+save code. The pause map draws the run's band at 3 px per cell, a frame of
+`W·36 × H·21` px: 108×42 at EASY, 144×63 at MEDIUM and 216×84 at HARD.
 
 **Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
 pixels. It scrolls freely across board seams, and rock fills every position
@@ -348,13 +372,28 @@ Audio starts on the first key press or touch, as browser autoplay policy
 requires.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
-mute and Esc to pause and show the save code. The title and end screens
-ignore auto-repeated Space presses, so a held jump cannot skip the end screen
-and its save code.
+mute and Esc to pause and show the save code. Esc returns the player to where
+they were: from pause or the title it goes back to the game. The title and
+end screens ignore auto-repeated Space presses, and the title ignores an
+auto-repeated Esc, so a held key cannot skip the end screen and its save
+code.
+
+On the title, Enter begins the shown seed at tomb 0, R rolls a new seed and
+keeps the save, and T opens code entry. L cycles the difficulty EASY, MEDIUM,
+HARD and round again; Left and Right, or A and D, step it and stop at the
+ends. A change rebuilds the title's world. Esc resumes:
+
+- A title reached from pause by Q leaves the run open, and Esc returns to it
+  unchanged: torch, time, trail and difficulty. The open run keeps its own
+  seed and world, so R, a typed seed and the difficulty change only the
+  title's world; Enter or a typed save code starts a new run.
+- With no run open, as at startup, Esc rebuilds the stored save at its
+  difficulty (§5). A rebuild never happens while a run is open, so a
+  pause, title and resume cannot refill the torch.
 
 C on the pause and end screens writes the save code shown to the clipboard.
-On the title, where C continues, K copies the save code it shows, or the seed
-code when it shows none; during code entry K types a letter. Each screen then
+On the title K copies the save code it shows, or the seed code when it shows
+none; during code entry A, D, K and L type letters. Each screen then
 reads COPIED, or COPY FAILED when the clipboard is absent or refuses. The copy
 uses `navigator.clipboard.writeText`, which browsers allow from a key press
 in a secure context, https and `file://` alike.
@@ -370,11 +409,11 @@ scrolls, zooms or selects.
   holds its arrow key while a pointer is on it, a slide from arm to arm swaps
   the key, and a pointer that left the pad keeps mapping by angle until it
   lifts. The pad has no diagonals.
-- **Soft keys.** Each acts on `click`:
+- **Soft keys.** Each is 44 px tall and acts on `click`:
 
   | Screen | Keys |
   |---|---|
-  | title | BEGIN (Enter), NEW ROLL (R), TYPE CODE, CONTINUE (C, with a save), COPY (K), SOUND (M) |
+  | title | RESUME (Esc, with a save or an open run), BEGIN (Enter), RESET (R), TYPE CODE, the difficulty (L, labelled with the setting), COPY (K), SOUND (M) |
   | title, typing | ACCEPT (Enter), CANCEL (Esc) |
   | play | PAUSE (Esc) |
   | pause | RESUME (Esc), COPY (C), SOUND (M), TITLE (Q) |
@@ -388,15 +427,21 @@ scrolls, zooms or selects.
 ## 10. Acceptance
 
 A headless test harness, run with `node`, checks the generator against the
-same source the game uses:
+same source the game uses, at every difficulty: HARD over bands −1000 to 1000
+and EASY and MEDIUM over −300 to 300, or each over a shorter range when the
+run asks for one. Each check reads the band size from its world, and the
+summary reports each difficulty's route lengths, rock boards per band,
+fallback rate and flame gaps.
 
 - **Keccak:** SHA3-256 matches the FIPS 202 test vectors.
-- **Continuity:** over bands −1000 to 1000, every door matches in position on
-  both sides of its wall.
+- **Continuity:** over the range, every door matches in position on both
+  sides of its wall.
 - **Tree:** over the same range, the graph of all carved cells and doors is
   connected and has edges = nodes − 1 for each band. A carved cell holds a
   link or a door. Exactly one door joins consecutive bands.
-- **Bounds:** every dead-end branch is at most 2 boards deep, and every board
+- **Bounds:** every band's route covers at least half its boards, no board
+  at `x = −1` or `x = W` holds a link, every dead-end branch is at most 2
+  boards deep, and every board
   meets the targets in §4 or records its best-attempt fallback. A run of at
   least 2,000 boards fails when more than 2% of them fall back; a shorter run
   reports the rate.
@@ -409,8 +454,10 @@ same source the game uses:
 - **Flames:** every band entry holds a flame, and the walking time between
   consecutive route flames stays at or under 150 s. The harness reports the
   maximum and the 99th percentile.
-- **Solvability:** a breadth-first search from band −1000's entry reaches band
-  1000's exit.
-- **Saves:** encoding and decoding round-trip for a sample of positions, and
-  a resumed board is byte-identical to one generated in sequence.
-- **Determinism:** a fixed seed code produces a fixed digest of bands 0–99.
+- **Solvability:** a breadth-first search from the first band's entry reaches
+  the last band's exit.
+- **Saves:** encoding and decoding round-trip at the world's size for a sample
+  of positions, and a board resumed at the world's difficulty is
+  byte-identical to one generated in sequence.
+- **Determinism:** a fixed seed code produces a fixed digest of bands 0–99 at
+  each difficulty; HARD's is the digest from before difficulties.

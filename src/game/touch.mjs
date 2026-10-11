@@ -10,7 +10,7 @@ export const MARGIN = 16;
 export const PAD_MAX = 160;
 export const PAD_FRAC = 0.42;
 const GAP = 8;
-const KEY_H = 48;
+const KEY_H = 44;
 const KEY_MIN_W = 44;
 const DOUBLE_TAP_MS = 350;
 
@@ -152,14 +152,16 @@ export function createPad() {
 const K = (code, key) => ({ code, key });
 /**
  * Soft keys per screen, each a key that screen's handler accepts. `when`
- * gates a key on the game's state; `alt` is its label when muted.
+ * gates a key on the game's state; `alt` is its label when muted; a key with
+ * `setting` reads the difficulty setting as its label.
  */
 export const SOFT = {
   title: [
+    { id: 'resume', label: 'RESUME', ...K('Escape', 'Escape'), when: 'resume' },
     { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },
-    { id: 'roll', label: 'NEW ROLL', ...K('KeyR', 'r') },
+    { id: 'reset', label: 'RESET', ...K('KeyR', 'r') },
     { id: 'type', label: 'TYPE CODE', act: 'type' },
-    { id: 'continue', label: 'CONTINUE', ...K('KeyC', 'c'), when: 'save' },
+    { id: 'difficulty', label: 'MEDIUM', setting: true, ...K('KeyL', 'l') },
     { id: 'copy', label: 'COPY', ...K('KeyK', 'k') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
   ],
@@ -190,9 +192,10 @@ export function screenId({ screen, typing }) {
 
 /** The soft keys shown for a game state, with labels resolved. */
 export function softKeys(state) {
+  const text = (k) => (k.setting && state.difficulty ? state.difficulty.toUpperCase() : state.muted && k.alt ? k.alt : k.label);
   return (SOFT[screenId(state)] || [])
-    .filter((k) => k.when !== 'save' || state.save)
-    .map((k) => ({ ...k, text: state.muted && k.alt ? k.alt : k.label }));
+    .filter((k) => !k.when || state[k.when])
+    .map((k) => ({ ...k, text: text(k) }));
 }
 
 export function textWidth(str) {
@@ -313,7 +316,7 @@ function stopDoubleTapZoom() {
 
 /**
  * The controls. `state()` reports what the game shows: { screen, typing,
- * save, muted }. `onMode()` runs when touch mode changes, so the caller can
+ * resume, muted, difficulty }. `onMode()` runs when touch mode changes, so the caller can
  * refit the canvas through `relayout`.
  */
 export function createTouch({ state, onMode }) {
@@ -475,7 +478,7 @@ export function createTouch({ state, onMode }) {
     // A layout from before a mode change waits for `relayout`.
     if (!lay || (lay.mode !== 'keyboard') !== on) return;
     const st = state();
-    const next = `${on}|${screenId(st)}|${st.save}|${st.muted}`;
+    const next = `${on}|${screenId(st)}|${st.resume}|${st.muted}|${st.difficulty}`;
     if (next !== sig) { sig = next; place(); }
     if (on && padEl.style.display === 'block') {
       const held = pad.held(), centre = pad.centre();

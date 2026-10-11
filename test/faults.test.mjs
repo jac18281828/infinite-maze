@@ -417,3 +417,32 @@ test('saves rejects a resumed board that differs from the board in sequence', ()
   const errors = checkSaves(w, [p]).errors;
   assert.ok(errors.includes(`board at p=${p} differs when resumed`), errors.join('\n'));
 });
+
+const easy = createWorld('00000000', { difficulty: 'easy' });
+
+test('bounds passes the sound EASY world and rejects an EASY tomb whose route holds 2 rooms', () => {
+  assert.deepEqual(checkBounds(easy, B0, B1).errors, []);
+  // A band whose entry and exit share a column: a door straight up between
+  // them cuts the route to 2 of the tomb's 6 rooms.
+  let b = 0;
+  while (easy.tree(b).entryX !== easy.tree(b + 1).entryX) b++;
+  const x = easy.tree(b).entryX, lower = easy.board(x, 2 * b), upper = easy.board(x, 2 * b + 1);
+  assert.ok(bandShape(easy, b).route.length >= 3);
+  const cell = 72 + 1 + (x % 10);
+  const w = broken(easy);
+  w._set(x, 2 * b, { ...copyBoard(lower), doors: [...lower.doors, { dir: 1, cell }] });
+  w._set(x, 2 * b + 1, { ...copyBoard(upper), doors: [...upper.doors, { dir: 3, cell: acrossDoor(cell, 1) }] });
+  assert.equal(bandShape(w, b).route.length, 2);
+  const errors = checkBounds(w, b, b).errors;
+  assert.ok(errors.includes(`band ${b}: route of 2 boards holds under half of 6`), errors.join('\n'));
+});
+
+test('bounds rejects a board with links outside an EASY tomb\'s columns', () => {
+  const w = broken(easy);
+  const inside = easy.board(easy.tree(0).entryX, 0);
+  w._set(3, 1, { ...copyBoard(inside), x: 3, y: 1, p: null });
+  const errors = checkBounds(w, B0, B1).errors;
+  assert.ok(errors.includes('board (3,1): outside the tomb\'s 3 columns holds links'), errors.join('\n'));
+  // No door reaches it, so the tomb's own structure stays sound.
+  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+});
