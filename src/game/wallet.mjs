@@ -1,12 +1,20 @@
 // Coins: the payout rule and the storage shapes of the wallet, the collected
 // set and the payout record. DOM-free; main.mjs does the reading and writing.
+import { MILESTONE } from './ranks.mjs';
 
 // Coins per tomb, by the world's difficulty.
 export const COIN_RATE = { easy: 1, medium: 2, hard: 5 };
 
-/** Coins due when a run's tomb count rises from `record`, the highest count paid, to `count`. */
+/**
+ * Coins due when a run's tomb count rises from `record`, the highest count paid, to `count`:
+ * the level rate per tomb, plus 100 x k for each milestone k with record < 100k <= count.
+ */
 export function tombPayout(difficulty, record, count) {
-  return count > record ? COIN_RATE[difficulty] * (count - record) : 0;
+  const tombs = count > record ? COIN_RATE[difficulty] * (count - record) : 0;
+  const last = Math.floor(count / MILESTONE);
+  const first = Math.floor(record / MILESTONE) + 1;
+  const milestones = last >= first ? (MILESTONE * (first + last) * (last - first + 1)) / 2 : 0;
+  return tombs + milestones;
 }
 
 /** The key of a seed and level in the collected set and the record: `K7Q2M9XA:MEDIUM`. */

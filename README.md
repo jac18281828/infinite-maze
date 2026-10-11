@@ -30,7 +30,7 @@ and no assets.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:
   RESUME, BEGIN, RESET, TYPE CODE (a prompt that takes a pasted save code),
-  the difficulty, COPY, SOUND, PAUSE, CONTINUE and TITLE. Pressing a key
+  the difficulty, COPY, SOUND, PAUSE, CONTINUE, HOME and TITLE. Pressing a key
   switches back to the keyboard layout; `#touch` on the URL forces touch on a
   desktop. The pause map shows the explorer's tomb; panning needs a keyboard.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
@@ -48,6 +48,9 @@ and no assets.
   earned this run. The game keeps the wallet, one per device, and the coins
   taken and payout record, per seed and level, in `localStorage`. Nothing buys
   with coins yet.
+- Every 100 tombs a splash names an adventure rank and pays 100 × k coins once
+  per seed and level; **Enter** or CONTINUE plays on, and **Q** or HOME goes to
+  the title with the run open.
 - The score counts tombs solved: a tomb is solved when the explorer leaves it
   through its exit door, if it lies on the way on from the run's start tomb:
   that tomb, the tomb its exit leads to, and so on. A tomb off that way on

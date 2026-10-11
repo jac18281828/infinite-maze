@@ -187,6 +187,10 @@ export const SOFT = {
     { id: 'copy', label: 'COPY', ...K('KeyC', 'c') },
     { id: 'title', label: 'TITLE', ...K('KeyQ', 'q') },
   ],
+  splash: [
+    { id: 'continue', label: 'CONTINUE', ...K('Enter', 'Enter') },
+    { id: 'home', label: 'HOME', ...K('KeyQ', 'q') },
+  ],
 };
 
 /** The table row for the game's state: 'typing' is the title with its field open. */
@@ -214,7 +218,7 @@ export function textWidth(str) {
 // Horizontal extent of each screen's panel in view pixels (the r.panel calls
 // in main.mjs). Overlay-mode keys stay in the strips outside it, so they
 // never cover the panel, the title's note line or its footer.
-export const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280] };
+export const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280], splash: [50, 270] };
 
 function keyRegion(lay, sid) {
   const { safe } = lay;

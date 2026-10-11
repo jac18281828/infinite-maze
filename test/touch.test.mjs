@@ -135,7 +135,7 @@ test('every soft key names a key its screen handler accepts', () => {
     assert.ok(m, `${name} found`);
     return m[0];
   };
-  const handler = { title: 'titleKey', typing: 'typingKey', play: 'playKey', pause: 'pauseKey', over: 'overKey' };
+  const handler = { title: 'titleKey', typing: 'typingKey', play: 'playKey', pause: 'pauseKey', over: 'overKey', splash: 'splashKey' };
   for (const [sid, list] of Object.entries(SOFT)) {
     for (const k of list) {
       if (k.act === 'type') { assert.match(body('titleKey'), /'KeyT'/); continue; }
@@ -164,6 +164,7 @@ test('PANEL_X matches the panels main.mjs draws', () => {
   assert.deepEqual(PANEL_X.typing, extent('drawTitle'));
   assert.deepEqual(PANEL_X.pause, extent('drawPause'));
   assert.deepEqual(PANEL_X.over, extent('drawOver'));
+  assert.deepEqual(PANEL_X.splash, extent('drawSplash'));
 });
 
 test('the title\'s typing line fits its panel at TYPED_MAX characters', () => {
@@ -185,6 +186,7 @@ test('soft keys follow the game state', () => {
   assert.deepEqual(ids({ screen: 'play' }), ['pause']);
   assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'copy', 'sound', 'title']);
   assert.deepEqual(ids({ screen: 'over' }), ['continue', 'copy', 'title']);
+  assert.deepEqual(ids({ screen: 'splash' }), ['continue', 'home']);
   assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
   // The difficulty key reads the setting, as SOUND reads mute.
   for (const d of ['easy', 'medium', 'hard']) {
@@ -202,7 +204,7 @@ const SHORT = { w: 640, h: 360, dpr: 2, insets: {}, touch: true };
 test('soft keys are at least 44 px, in the safe area, and clear of the panel in overlay mode', () => {
   for (const spec of [PORTRAIT, LANDSCAPE, { ...LANDSCAPE, w: 667, h: 375, insets: {} }, { w: 1024, h: 768, dpr: 2, insets: {}, touch: true }, SHORT]) {
     const lay = layout(spec);
-    for (const sid of ['title', 'typing', 'pause', 'over', 'play']) {
+    for (const sid of ['title', 'typing', 'pause', 'over', 'splash', 'play']) {
       const state = { screen: sid === 'typing' ? 'title' : sid, typing: sid === 'typing', resume: true, difficulty: 'medium' };
       const labels = softKeys(state).map((k) => k.text);
       const rects = keyRects(lay, sid, labels);
@@ -265,7 +267,7 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty, pause-key and coin rule broken.
+// zoom guard dropped and each difficulty, pause-key, coin and splash rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -282,7 +284,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key or coin rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin or splash rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -295,7 +297,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     const zoomable = html.replace('stopDoubleTapZoom();', '');
     assert.equal(html.split('stopDoubleTapZoom();').length, 2);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
-    // Each difficulty, pause-key and coin rule broken in turn: [from, to, the leg's first miss].
+    // Each difficulty, pause-key, coin and splash rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
@@ -315,6 +317,12 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['const COIN_RATE = { easy: 1, medium: 2, hard: 5 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1 };', /^fail: touch a new best tomb pays 5 at HARD/],
       ['const record = g.paid.get(key) || 0;', 'const record = 0;', /^fail: touch a replay at the record pays nothing at EASY/],
       ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
+      ['else if (k > Math.floor(was / MILESTONE))', 'else if (false)', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
+      ['return tombs + milestones;', 'return tombs;', /^fail: touch tomb 100 pays 1 plus 100 at EASY/],
+      ['function splashKey(g, e) {\n  if (e.repeat) return;\n', 'function splashKey(g, e) {\n', /^fail: touch a repeated Enter leaves the splash showing/],
+      ["if (e.key === 'Enter') {\n    g.splash = null;", "if (e.key === 'Enter' || e.code === 'KeyP') {\n    g.splash = null;", /^fail: touch P leaves the splash showing/],
+      ['const first = Math.floor(record / MILESTONE) + 1;', 'const first = last;', /^fail: touch a second crossing of tomb 100 pays nothing/],
+      ['g.open = { code, world, renderer, preview, sim };', 'g.open = null;', /^fail: touch Q reaches the title with the run open/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

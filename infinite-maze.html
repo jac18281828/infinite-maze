@@ -1610,18 +1610,62 @@ function itemSpot(bd, cell) {
 return { FLOOR_ITEMS, deadEnds, floorItems, itemSpot };
 })();
 
-// src/game/wallet.mjs
+// src/game/ranks.mjs
 const __m8 = (() => {
 
+// Adventure ranks for the milestone splash: one name per 100 tombs. DOM-free.
+
+// Tombs between milestones.
+const MILESTONE = 100;
+
+// Ranks for milestones 1 to 10. Every name uses only characters art.mjs's FONT draws.
+const RANKS = [
+  'TORCHBEARER', 'RELIC HUNTER', 'TOMB DELVER', 'SCARAB SEEKER', 'PATHFINDER',
+  'ROYAL SCRIBE', 'HIGH PRIEST', 'GRAND VIZIER', 'HEIR OF THE NILE', 'PHARAOH',
+];
+
+const NUMERALS = [
+  [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'],
+  [5, 'V'], [4, 'IV'], [1, 'I'],
+];
+
+// One M per thousand, so a numeral past 3999 stays well formed.
+function roman(n) {
+  let out = 'M'.repeat(Math.floor(n / 1000));
+  let rest = n % 1000;
+  for (const [value, glyphs] of NUMERALS) {
+    while (rest >= value) { out += glyphs; rest -= value; }
+  }
+  return out;
+}
+
+/** The rank of milestone k >= 1: PHARAOH II at k = 11, PHARAOH III at 12, and so on. */
+function rankName(k) {
+  return k <= RANKS.length ? RANKS[k - 1] : `PHARAOH ${roman(k - RANKS.length + 1)}`;
+}
+return { MILESTONE, RANKS, rankName };
+})();
+
+// src/game/wallet.mjs
+const __m9 = (() => {
+const { MILESTONE } = __m8;
 // Coins: the payout rule and the storage shapes of the wallet, the collected
 // set and the payout record. DOM-free; main.mjs does the reading and writing.
+
 
 // Coins per tomb, by the world's difficulty.
 const COIN_RATE = { easy: 1, medium: 2, hard: 5 };
 
-/** Coins due when a run's tomb count rises from `record`, the highest count paid, to `count`. */
+/**
+ * Coins due when a run's tomb count rises from `record`, the highest count paid, to `count`:
+ * the level rate per tomb, plus 100 x k for each milestone k with record < 100k <= count.
+ */
 function tombPayout(difficulty, record, count) {
-  return count > record ? COIN_RATE[difficulty] * (count - record) : 0;
+  const tombs = count > record ? COIN_RATE[difficulty] * (count - record) : 0;
+  const last = Math.floor(count / MILESTONE);
+  const first = Math.floor(record / MILESTONE) + 1;
+  const milestones = last >= first ? (MILESTONE * (first + last) * (last - first + 1)) / 2 : 0;
+  return tombs + milestones;
 }
 
 /** The key of a seed and level in the collected set and the record: `K7Q2M9XA:MEDIUM`. */
@@ -1681,10 +1725,10 @@ return { COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, se
 })();
 
 // src/game/sim.mjs
-const __m9 = (() => {
+const __m10 = (() => {
 const { DX, DY, BW, NCELL } = __m2;
 const { floorItems, itemSpot } = __m7;
-const { coinId } = __m8;
+const { coinId } = __m9;
 // Simulation: the explorer moves along the cell graph, so motion admits
 // exactly the tree's links. A jump is an air state of the current cell: on
 // the ground or in the air, the explorer leaves a cell only along a link or
@@ -2229,7 +2273,7 @@ return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, B
 })();
 
 // src/game/art.mjs
-const __m10 = (() => {
+const __m11 = (() => {
 
 // Palette-indexed art. Each character indexes PALETTE in base 32
 // ('0'-'9', 'a'-'v'); '.' is transparent.
@@ -3035,7 +3079,7 @@ return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCON
 })();
 
 // src/world/signs.mjs
-const __m11 = (() => {
+const __m12 = (() => {
 const { NCELL, cellNeighbor } = __m2;
 const { BDX, BDY } = __m3;
 const { u32 } = __m1;
@@ -3120,7 +3164,7 @@ return { SIGN_MOD, SIGN_THRESHOLD, junctions, signs, signSide };
 })();
 
 // src/game/mask.mjs
-const __m12 = (() => {
+const __m13 = (() => {
 const { BW, NCELL } = __m2;
 // Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
 // opening joins exactly the cells of one tree link or door:
@@ -3185,10 +3229,10 @@ return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 })();
 
 // src/game/fixtures.mjs
-const __m13 = (() => {
+const __m14 = (() => {
 const { BW, NCELL } = __m2;
-const { boardMask, MASK_W, MASK_H, CELL_PX } = __m12;
-const { LADDER, SCONCE, SIGNS, idx } = __m10;
+const { boardMask, MASK_W, MASK_H, CELL_PX } = __m13;
+const { LADDER, SCONCE, SIGNS, idx } = __m11;
 // Pixel geometry of a board's drawn fixtures and of the dust, DOM-free. Board
 // pixels, y up: X = col * 48, Y = row * 48. A north-east flight from cell c
 // has t = x - (X + 24) over [X + 24, X + 72); a north-west flight mirrors
@@ -3370,7 +3414,7 @@ return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, signSpot, sig
 })();
 
 // src/game/map.mjs
-const __m14 = (() => {
+const __m15 = (() => {
 const { BW, BH, NCELL } = __m2;
 const { tombOf } = __m5;
 // The pause-screen map: what the explorer's trail shows of one tomb. DOM-free.
@@ -3444,17 +3488,17 @@ return { mapCells, frameOf, panFrame, sameFrame, mapModel };
 })();
 
 // src/game/render.mjs
-const __m15 = (() => {
-const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS } = __m10;
-const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m9;
+const __m16 = (() => {
+const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS } = __m11;
+const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m10;
 const { BW, BH, DX, DY } = __m2;
-const { signs, signSide } = __m11;
+const { signs, signSide } = __m12;
 const { boardOfPos } = __m5;
 const { floorItems, itemSpot } = __m7;
-const { coinId } = __m8;
-const { boardMask, MASK_W } = __m12;
-const { fixtureSets, dustMotes, maskRow, signSpot, ROLE } = __m13;
-const { mapCells } = __m14;
+const { coinId } = __m9;
+const { boardMask, MASK_W } = __m13;
+const { fixtureSets, dustMotes, maskRow, signSpot, ROLE } = __m14;
+const { mapCells } = __m15;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 
@@ -3934,7 +3978,7 @@ return { VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs
-const __m16 = (() => {
+const __m17 = (() => {
 
 // WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
@@ -4248,9 +4292,9 @@ return { createAudio };
 })();
 
 // src/game/autopilot.mjs
-const __m17 = (() => {
+const __m18 = (() => {
 const { DX, DY } = __m2;
-const { createSim, step, inputEdges } = __m9;
+const { createSim, step, inputEdges } = __m10;
 // Scripted input for the self-test: walks the explorer along tomb (0, 0)'s
 // first chain of flames by feeding the same arrow and jump input a player
 // would.
@@ -4355,9 +4399,9 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/touch.mjs
-const __m18 = (() => {
-const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m10;
-const { VIEW_W, VIEW_H } = __m15;
+const __m19 = (() => {
+const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m11;
+const { VIEW_W, VIEW_H } = __m16;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
 // keydown and keyup KeyboardEvents on window, so the key handlers, the held
 // Up, the jump edge and the tap buffer serve touch unchanged.
@@ -4547,6 +4591,10 @@ const SOFT = {
     { id: 'copy', label: 'COPY', ...K('KeyC', 'c') },
     { id: 'title', label: 'TITLE', ...K('KeyQ', 'q') },
   ],
+  splash: [
+    { id: 'continue', label: 'CONTINUE', ...K('Enter', 'Enter') },
+    { id: 'home', label: 'HOME', ...K('KeyQ', 'q') },
+  ],
 };
 
 /** The table row for the game's state: 'typing' is the title with its field open. */
@@ -4574,7 +4622,7 @@ function textWidth(str) {
 // Horizontal extent of each screen's panel in view pixels (the r.panel calls
 // in main.mjs). Overlay-mode keys stay in the strips outside it, so they
 // never cover the panel, the title's note line or its footer.
-const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280] };
+const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280], splash: [50, 270] };
 
 function keyRegion(lay, sid) {
   const { safe } = lay;
@@ -4879,7 +4927,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, layout, nextTouchMode, touchAtBoot, padZone,
 })();
 
 // src/game/clipboard.mjs
-const __m19 = (() => {
+const __m20 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -4907,23 +4955,25 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m20 = (() => {
+const __m21 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m6;
 const { floorItems, itemSpot } = __m7;
-const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m9;
-const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m15;
-const { createAudio } = __m16;
-const { runScript, createAutopilot, SELFTEST_CODE } = __m17;
-const { tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid } = __m8;
-const { createTouch, layout, viewport, difficultyLabel, PANEL_X } = __m18;
-const { copyWithStatus, saveLabel } = __m19;
-const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m14;
-const { RGB, idx } = __m10;
+const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
+const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m16;
+const { createAudio } = __m17;
+const { runScript, createAutopilot, SELFTEST_CODE } = __m18;
+const { COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid } = __m9;
+const { createTouch, layout, viewport, difficultyLabel, PANEL_X, textWidth } = __m19;
+const { MILESTONE, rankName } = __m8;
+const { copyWithStatus, saveLabel } = __m20;
+const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m15;
+const { RGB, idx } = __m11;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -5363,6 +5413,7 @@ function driveTouch(copied) {
 
   difficultyLeg(g, { need, click, press, offEntry });
   coinLeg(g, { need, click });
+  splashLeg(g, { need, click, press });
 
   // Leave the self-test script's run paused on screen for the screenshot.
   setDifficulty(g, 'hard');
@@ -5633,6 +5684,88 @@ function coinLeg(g, { need, click }) {
   draw(g, 0);
 }
 
+/**
+ * The splash steps of the touch leg. `oneTombOn(g, 99)` crosses tomb 100
+ * through the shipped tick, so each step reads the screen the game chose.
+ */
+function splashLeg(g, { need, click, press }) {
+  const keep = () => {
+    store(KEY_WALLET, String(g.wallet));
+    store(KEY_COINS, serializeCollected(g.coins));
+    store(KEY_PAID, serializePaid(g.paid));
+  };
+
+  // Step 1: the first crossing of tomb 100 shows TORCHBEARER and pays the rate plus 100, at every level.
+  g.wallet = 0;
+  g.coins = new Map();
+  g.paid = new Map();
+  for (const d of DIFFICULTIES) {
+    setDifficulty(g, d);
+    useCode(g, SELFTEST_CODE);
+    const key = coinKey(SELFTEST_CODE, d), label = difficultyLabel(d);
+    g.paid.set(key, 99);
+    keep();
+    const was = g.wallet, earned = g.earned;
+    oneTombOn(g, 99);
+    need(g.screen === 'splash' && g.splash.k === 1 && rankName(g.splash.k) === 'TORCHBEARER' && g.splash.paid,
+      `tomb 100 shows the splash with TORCHBEARER at ${label}`);
+    need(g.wallet - was === COIN_RATE[d] + 100, `tomb 100 pays ${COIN_RATE[d]} plus 100 at ${label}`);
+    need(g.earned - earned === g.wallet - was, `the milestone payout counts in the coins earned at ${label}`);
+    need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[key] === 100,
+      `the ${label} milestone payout stores the wallet and the record`);
+    need(load(KEY_SAVE) === hereCode(g), `the ${label} splash stores the save`);
+  }
+  draw(g, 0);
+
+  // Step 2: P, Esc, Space and a repeated Enter leave the splash showing, and the run stands still.
+  const run = g.sim;
+  for (const [code, key, repeat, name] of [['KeyP', 'p', false, 'P'], ['Escape', 'Escape', false, 'Esc'],
+    ['Space', ' ', false, 'Space'], ['Enter', 'Enter', true, 'a repeated Enter']]) {
+    press(code, key, repeat);
+    need(g.screen === 'splash', `${name} leaves the splash showing`);
+  }
+  const time = run.time;
+  for (let i = 0; i < 30; i++) tick(g);
+  need(g.screen === 'splash' && run.time === time, 'the run stands still under the splash');
+
+  // Step 3: Enter returns to the same run.
+  press('Enter', 'Enter');
+  need(g.screen === 'play' && g.sim === run, 'Enter returns to play on the same run');
+
+  // Step 4: the second crossing shows the splash and pays nothing.
+  const wallet = g.wallet;
+  oneTombOn(g, 99);
+  need(g.screen === 'splash' && g.splash.k === 1 && !g.splash.paid, 'a second crossing of tomb 100 shows the splash');
+  need(g.wallet === wallet, 'a second crossing of tomb 100 pays nothing');
+  draw(g, 0);
+
+  // Step 5: Q leaves the run open, and P on the title returns to it in play with its torch and time.
+  const second = g.sim;
+  second.burn = BURN_S / 2;
+  second.time = 77;
+  press('KeyQ', 'q');
+  need(g.screen === 'title' && g.open !== null && g.open.sim === second, 'Q reaches the title with the run open');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === second, 'P on the title returns to the run in play');
+  need(second.burn === BURN_S / 2 && second.time === 77, 'the resumed run keeps its torch and time');
+
+  // Step 6: the soft keys do what Enter and Q do.
+  oneTombOn(g, 99);
+  draw(g, 0);
+  need(g.screen === 'splash', 'a third crossing of tomb 100 shows the splash');
+  const third = g.sim;
+  click('splash', 'continue');
+  need(g.screen === 'play' && g.sim === third, 'the splash CONTINUE reaches play on the same run');
+  oneTombOn(g, 99);
+  draw(g, 0);
+  const fourth = g.sim;
+  click('splash', 'home');
+  need(g.screen === 'title' && g.open !== null && g.open.sim === fourth, 'the splash HOME reaches the title with the run open');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === fourth, 'P after the splash HOME returns to the run');
+  draw(g, 0);
+}
+
 const DIRS = {
   ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
 };
@@ -5714,6 +5847,8 @@ function createGame() {
     world: null, renderer: null, sim: null, preview: null,
     // The run left for the title by Q: { code, world, renderer, preview, sim }.
     open: null,
+    // The milestone the splash shows: { k, paid }, where paid is whether this crossing paid.
+    splash: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
     // The tomb { u, v } the pause map frames, and its model.
     frame: { u: 0, v: 0 }, pauseMap: null, pausedAt: null,
@@ -5882,7 +6017,23 @@ function overKey(g, e) {
   }
 }
 
-const SCREEN_KEYS = { title: titleKey, play: playKey, pause: pauseKey, over: overKey };
+// Enter continues and Q leaves the run open on the title. P and Esc do nothing, and
+// no repeat counts, so neither a pause press nor a held key skips the screen.
+function splashKey(g, e) {
+  if (e.repeat) return;
+  if (e.key === 'Enter') {
+    g.splash = null;
+    play(g);
+  } else if (e.code === 'KeyQ') {
+    const { code, world, renderer, preview, sim } = g;
+    g.open = { code, world, renderer, preview, sim };
+    g.splash = null;
+    g.screen = 'title';
+    titleCam(g);
+  }
+}
+
+const SCREEN_KEYS = { title: titleKey, play: playKey, pause: pauseKey, over: overKey, splash: splashKey };
 
 function onKeyDown(g, e) {
   g.audio.start();
@@ -5932,14 +6083,26 @@ function endRun(g) {
   writeSave(g, entryCode(g));
 }
 
+/** Shows the splash for milestone k and stores the save, as PAUSE does. */
+function showSplash(g, k, paid) {
+  g.screen = 'splash';
+  g.splash = { k, paid };
+  writeSave(g, hereCode(g));
+}
+
 function tick(g) {
   if (g.screen !== 'play') return;
+  const was = tombCount(g.sim);
   stepSim(g);
   handleEvents(g);
+  const record = g.paid.get(coinKey(g.code, g.world.difficulty)) || 0;
   payTombs(g);
   soundCues(g);
   followCam(g.cam, g.sim);
+  const k = Math.floor(tombCount(g.sim) / MILESTONE);
+  // A run that ends on the milestone's tick shows the end screen; the payout stands.
   if (g.sim.state === 'over') endRun(g);
+  else if (k > Math.floor(was / MILESTONE)) showSplash(g, k, record < k * MILESTONE);
 }
 
 /** The best tomb the title shows: the shown seed's, at the setting. */
@@ -6046,6 +6209,19 @@ function drawOver(g) {
   r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 138, 'b', { align: 'center' });
 }
 
+// The panel spans y 40..135; its rules leave y 43..132 for rows at least 4 px apart.
+function drawSplash(g) {
+  const r = g.renderer, { k, paid } = g.splash;
+  const [x0, x1] = PANEL_X.splash;
+  const name = rankName(k);
+  r.panel(50, 40, 220, 96);
+  r.text(`${k * MILESTONE} TOMBS`, VIEW_W / 2, 52, 'a', { align: 'center' });
+  const scale = textWidth(name) * 2 <= x1 - x0 - 16 ? 2 : 1;
+  r.text(name, VIEW_W / 2, 68, 'm', { align: 'center', scale });
+  if (paid) r.text(`${k * MILESTONE} COINS`, VIEW_W / 2, 92, 'p', { align: 'center' });
+  r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
+}
+
 function draw(g, t) {
   if (g.screen === 'title') {
     drawTitle(g, t);
@@ -6054,6 +6230,7 @@ function draw(g, t) {
     g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
+    else if (g.screen === 'splash') drawSplash(g);
   }
   present();
   if (touch) touch.refresh();

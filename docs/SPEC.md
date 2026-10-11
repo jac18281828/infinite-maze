@@ -338,8 +338,10 @@ already paid for a seed and level, 0 when absent. When the run's tomb count
 the record becomes the count. The rate is 1 per tomb at EASY, 2 at MEDIUM and
 5 at HARD, set by the world's difficulty alone. A replay pays only past its
 record, and a resumed save counts from 0 and pays once its run climbs past the
-record. The game holds the three values in memory from boot and writes each
-through on every change. Absent, blocked or malformed storage reads as empty,
+record. A milestone pays on top: for each k with `record < 100k ≤ count`, the
+wallet gains 100 × k, once per seed and level because the record passes it. A
+record already past 100k counts as paid. The game holds the three values in
+memory from boot and writes each through on every change. Absent, blocked or malformed storage reads as empty,
 and the game plays on.
 
 ## 6. Movement
@@ -514,6 +516,37 @@ during the run, from the floor and from tombs. The count carries through
 Continue and through pause, title and resume of the open run, and restarts on
 BEGIN, on RESUME from a stored save and on a typed code.
 
+**Splash.** When the tomb count rises to 100 × k, k ≥ 1, the game shows the
+`splash` screen once that tick ends, and stores the save as pause does. A run
+that ends on the same tick shows the end screen, and the payout stands. The
+run stands still under the splash: the sim does not step, so the torch and the
+clock hold until CONTINUE. Every run that reaches a milestone shows its
+splash; only the payout is once per seed and level (§5). One panel, x 50 to
+270, holds these rows:
+- the milestone, `<100 × k> TOMBS`;
+- the rank name, at scale 2 when it fits the panel and else at scale 1;
+- `<100 × k> COINS`, only when this crossing paid (the font draws no `+`);
+- the key hint `ENTER CONTINUE  Q HOME`.
+
+The rank names below are the owner's to revise:
+
+| k | Rank |
+|---|---|
+| 1 | TORCHBEARER |
+| 2 | RELIC HUNTER |
+| 3 | TOMB DELVER |
+| 4 | SCARAB SEEKER |
+| 5 | PATHFINDER |
+| 6 | ROYAL SCRIBE |
+| 7 | HIGH PRIEST |
+| 8 | GRAND VIZIER |
+| 9 | HEIR OF THE NILE |
+| 10 | PHARAOH |
+
+Past k = 10 the rank reads `PHARAOH` and the Roman numeral of k − 9: PHARAOH II
+at k = 11, PHARAOH III at 12. A numeral past 3999 adds a leading M per
+thousand. Every name uses only characters the font draws.
+
 **Labels.** The title's panel holds a difficulty row naming EASY, MEDIUM and
 HARD with the setting lit, and its save line names the save's difficulty. Its
 best tomb is the shown seed's at the setting. The pause and end screens name
@@ -568,6 +601,13 @@ screen and its save code. The title and end screens ignore auto-repeated
 Space presses, and the title ignores an auto-repeated P or Esc, so a held key
 cannot skip a screen.
 
+On the milestone splash (§8), Enter continues the same run and Q goes to the
+title with the run open, as from pause: P there returns to it in play with its
+torch, time and trail. P and Esc do nothing there, since P pauses and Esc
+leaves full screen, and Space does nothing, since a fresh jump as tomb 100
+lands would otherwise skip the screen. The splash ignores every auto-repeated
+keydown, so a held key cannot skip it. M mutes, as on every screen.
+
 On the title, Enter begins the shown seed at tomb 0, R rolls a new seed and
 keeps the save, and T opens code entry. L cycles the difficulty EASY, MEDIUM,
 HARD and round again; Left and Right, or A and D, step it and stop at the
@@ -609,6 +649,7 @@ scrolls, zooms or selects.
   | play | PAUSE (P) |
   | pause | RESUME (P), COPY (C), SOUND (M), TITLE (Q) |
   | over | CONTINUE (Enter), COPY (C), TITLE (Q) |
+  | splash | CONTINUE (Enter), HOME (Q) |
 
   Each P key has Esc as its keyboard alias. CANCEL sends Esc, because P types
   a letter during code entry.

@@ -12,9 +12,10 @@ import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
-  tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
+  COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
 } from './wallet.mjs';
-import { createTouch, layout, viewport, difficultyLabel, PANEL_X } from './touch.mjs';
+import { createTouch, layout, viewport, difficultyLabel, PANEL_X, textWidth } from './touch.mjs';
+import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
 import { RGB, idx } from './art.mjs';
@@ -443,6 +444,7 @@ function driveTouch(copied) {
 
   difficultyLeg(g, { need, click, press, offEntry });
   coinLeg(g, { need, click });
+  splashLeg(g, { need, click, press });
 
   // Leave the self-test script's run paused on screen for the screenshot.
   setDifficulty(g, 'hard');
@@ -713,6 +715,88 @@ function coinLeg(g, { need, click }) {
   draw(g, 0);
 }
 
+/**
+ * The splash steps of the touch leg. `oneTombOn(g, 99)` crosses tomb 100
+ * through the shipped tick, so each step reads the screen the game chose.
+ */
+function splashLeg(g, { need, click, press }) {
+  const keep = () => {
+    store(KEY_WALLET, String(g.wallet));
+    store(KEY_COINS, serializeCollected(g.coins));
+    store(KEY_PAID, serializePaid(g.paid));
+  };
+
+  // Step 1: the first crossing of tomb 100 shows TORCHBEARER and pays the rate plus 100, at every level.
+  g.wallet = 0;
+  g.coins = new Map();
+  g.paid = new Map();
+  for (const d of DIFFICULTIES) {
+    setDifficulty(g, d);
+    useCode(g, SELFTEST_CODE);
+    const key = coinKey(SELFTEST_CODE, d), label = difficultyLabel(d);
+    g.paid.set(key, 99);
+    keep();
+    const was = g.wallet, earned = g.earned;
+    oneTombOn(g, 99);
+    need(g.screen === 'splash' && g.splash.k === 1 && rankName(g.splash.k) === 'TORCHBEARER' && g.splash.paid,
+      `tomb 100 shows the splash with TORCHBEARER at ${label}`);
+    need(g.wallet - was === COIN_RATE[d] + 100, `tomb 100 pays ${COIN_RATE[d]} plus 100 at ${label}`);
+    need(g.earned - earned === g.wallet - was, `the milestone payout counts in the coins earned at ${label}`);
+    need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[key] === 100,
+      `the ${label} milestone payout stores the wallet and the record`);
+    need(load(KEY_SAVE) === hereCode(g), `the ${label} splash stores the save`);
+  }
+  draw(g, 0);
+
+  // Step 2: P, Esc, Space and a repeated Enter leave the splash showing, and the run stands still.
+  const run = g.sim;
+  for (const [code, key, repeat, name] of [['KeyP', 'p', false, 'P'], ['Escape', 'Escape', false, 'Esc'],
+    ['Space', ' ', false, 'Space'], ['Enter', 'Enter', true, 'a repeated Enter']]) {
+    press(code, key, repeat);
+    need(g.screen === 'splash', `${name} leaves the splash showing`);
+  }
+  const time = run.time;
+  for (let i = 0; i < 30; i++) tick(g);
+  need(g.screen === 'splash' && run.time === time, 'the run stands still under the splash');
+
+  // Step 3: Enter returns to the same run.
+  press('Enter', 'Enter');
+  need(g.screen === 'play' && g.sim === run, 'Enter returns to play on the same run');
+
+  // Step 4: the second crossing shows the splash and pays nothing.
+  const wallet = g.wallet;
+  oneTombOn(g, 99);
+  need(g.screen === 'splash' && g.splash.k === 1 && !g.splash.paid, 'a second crossing of tomb 100 shows the splash');
+  need(g.wallet === wallet, 'a second crossing of tomb 100 pays nothing');
+  draw(g, 0);
+
+  // Step 5: Q leaves the run open, and P on the title returns to it in play with its torch and time.
+  const second = g.sim;
+  second.burn = BURN_S / 2;
+  second.time = 77;
+  press('KeyQ', 'q');
+  need(g.screen === 'title' && g.open !== null && g.open.sim === second, 'Q reaches the title with the run open');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === second, 'P on the title returns to the run in play');
+  need(second.burn === BURN_S / 2 && second.time === 77, 'the resumed run keeps its torch and time');
+
+  // Step 6: the soft keys do what Enter and Q do.
+  oneTombOn(g, 99);
+  draw(g, 0);
+  need(g.screen === 'splash', 'a third crossing of tomb 100 shows the splash');
+  const third = g.sim;
+  click('splash', 'continue');
+  need(g.screen === 'play' && g.sim === third, 'the splash CONTINUE reaches play on the same run');
+  oneTombOn(g, 99);
+  draw(g, 0);
+  const fourth = g.sim;
+  click('splash', 'home');
+  need(g.screen === 'title' && g.open !== null && g.open.sim === fourth, 'the splash HOME reaches the title with the run open');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === fourth, 'P after the splash HOME returns to the run');
+  draw(g, 0);
+}
+
 const DIRS = {
   ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
 };
@@ -794,6 +878,8 @@ function createGame() {
     world: null, renderer: null, sim: null, preview: null,
     // The run left for the title by Q: { code, world, renderer, preview, sim }.
     open: null,
+    // The milestone the splash shows: { k, paid }, where paid is whether this crossing paid.
+    splash: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
     // The tomb { u, v } the pause map frames, and its model.
     frame: { u: 0, v: 0 }, pauseMap: null, pausedAt: null,
@@ -962,7 +1048,23 @@ function overKey(g, e) {
   }
 }
 
-const SCREEN_KEYS = { title: titleKey, play: playKey, pause: pauseKey, over: overKey };
+// Enter continues and Q leaves the run open on the title. P and Esc do nothing, and
+// no repeat counts, so neither a pause press nor a held key skips the screen.
+function splashKey(g, e) {
+  if (e.repeat) return;
+  if (e.key === 'Enter') {
+    g.splash = null;
+    play(g);
+  } else if (e.code === 'KeyQ') {
+    const { code, world, renderer, preview, sim } = g;
+    g.open = { code, world, renderer, preview, sim };
+    g.splash = null;
+    g.screen = 'title';
+    titleCam(g);
+  }
+}
+
+const SCREEN_KEYS = { title: titleKey, play: playKey, pause: pauseKey, over: overKey, splash: splashKey };
 
 function onKeyDown(g, e) {
   g.audio.start();
@@ -1012,14 +1114,26 @@ function endRun(g) {
   writeSave(g, entryCode(g));
 }
 
+/** Shows the splash for milestone k and stores the save, as PAUSE does. */
+function showSplash(g, k, paid) {
+  g.screen = 'splash';
+  g.splash = { k, paid };
+  writeSave(g, hereCode(g));
+}
+
 function tick(g) {
   if (g.screen !== 'play') return;
+  const was = tombCount(g.sim);
   stepSim(g);
   handleEvents(g);
+  const record = g.paid.get(coinKey(g.code, g.world.difficulty)) || 0;
   payTombs(g);
   soundCues(g);
   followCam(g.cam, g.sim);
+  const k = Math.floor(tombCount(g.sim) / MILESTONE);
+  // A run that ends on the milestone's tick shows the end screen; the payout stands.
   if (g.sim.state === 'over') endRun(g);
+  else if (k > Math.floor(was / MILESTONE)) showSplash(g, k, record < k * MILESTONE);
 }
 
 /** The best tomb the title shows: the shown seed's, at the setting. */
@@ -1126,6 +1240,19 @@ function drawOver(g) {
   r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 138, 'b', { align: 'center' });
 }
 
+// The panel spans y 40..135; its rules leave y 43..132 for rows at least 4 px apart.
+function drawSplash(g) {
+  const r = g.renderer, { k, paid } = g.splash;
+  const [x0, x1] = PANEL_X.splash;
+  const name = rankName(k);
+  r.panel(50, 40, 220, 96);
+  r.text(`${k * MILESTONE} TOMBS`, VIEW_W / 2, 52, 'a', { align: 'center' });
+  const scale = textWidth(name) * 2 <= x1 - x0 - 16 ? 2 : 1;
+  r.text(name, VIEW_W / 2, 68, 'm', { align: 'center', scale });
+  if (paid) r.text(`${k * MILESTONE} COINS`, VIEW_W / 2, 92, 'p', { align: 'center' });
+  r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
+}
+
 function draw(g, t) {
   if (g.screen === 'title') {
     drawTitle(g, t);
@@ -1134,6 +1261,7 @@ function draw(g, t) {
     g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
+    else if (g.screen === 'splash') drawSplash(g);
   }
   present();
   if (touch) touch.refresh();
