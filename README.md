@@ -20,7 +20,9 @@ and no assets.
 - **Space or Z** jumps. In the air, Up grabs the ladder overhead or the stair
   below, and a jump onto a stair lands on it. On a ladder, a jump lets go and
   drops to the floor below; a held Up grabs again once pressed anew.
-- **Esc** pauses and shows the map of the passages walked and the save code.
+- **P** pauses and shows the map of the passages walked and the save code;
+  P resumes. Esc does the same outside full screen, where a browser keeps Esc
+  for itself.
   Up and Down (or W and S) pan the map one band per press. **C** there copies
   the save code. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
@@ -37,8 +39,9 @@ and no assets.
 
 The title screen shows the seed code. **Enter** begins at band 0. **R** rolls
 a new world. **T** takes a typed seed or save code. **L** cycles the
-difficulty, and Left and Right step it. **Esc** resumes the run left by
-pause, or the last save at its own difficulty. **K** copies the save code
+difficulty, and Left and Right step it. **P** resumes the run left by
+pause, or the last save at its own difficulty. Esc is its alias outside full
+screen. **K** copies the save code
 shown, or the seed code. The end screen's **C** copies its save code. The
 game keeps that save with its difficulty, the setting and the best band per
 seed and difficulty in `localStorage`, and runs without them where storage is

@@ -379,28 +379,31 @@ Audio starts on the first key press or touch, as browser autoplay policy
 requires.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
-mute and Esc to pause and show the save code. Esc returns the player to where
-they were: from pause or the title it goes back to the game. The title and
-end screens ignore auto-repeated Space presses, and the title ignores an
-auto-repeated Esc, so a held key cannot skip the end screen and its save
-code.
+mute and P to pause and show the save code. P returns the player to where
+they were: from pause or the title it goes back to the game. Esc is the alias
+for players outside full screen, where a browser keeps Esc for itself and a
+real Esc press leaves full screen. The end screen takes Esc and Q to the
+title and takes no P, so a pause press as the torch dies cannot skip the end
+screen and its save code. The title and end screens ignore auto-repeated
+Space presses, and the title ignores an auto-repeated P or Esc, so a held key
+cannot skip a screen.
 
 On the title, Enter begins the shown seed at tomb 0, R rolls a new seed and
 keeps the save, and T opens code entry. L cycles the difficulty EASY, MEDIUM,
 HARD and round again; Left and Right, or A and D, step it and stop at the
-ends. A change rebuilds the title's world. Esc resumes:
+ends. A change rebuilds the title's world. P (or Esc) resumes:
 
-- A title reached from pause by Q leaves the run open, and Esc returns to it
+- A title reached from pause by Q leaves the run open, and P returns to it
   unchanged: torch, time, trail and difficulty. The open run keeps its own
   seed and world, so R, a typed seed and the difficulty change only the
   title's world; Enter or a typed save code starts a new run.
-- With no run open, as at startup, Esc rebuilds the stored save at its
+- With no run open, as at startup, P rebuilds the stored save at its
   difficulty (§5). A rebuild never happens while a run is open, so a
   pause, title and resume cannot refill the torch.
 
 C on the pause and end screens writes the save code shown to the clipboard.
 On the title K copies the save code it shows, or the seed code when it shows
-none; during code entry A, D, K and L type letters. Each screen then
+none; during code entry A, D, K, L and P type letters. Each screen then
 reads COPIED, or COPY FAILED when the clipboard is absent or refuses. The copy
 uses `navigator.clipboard.writeText`, which browsers allow from a key press
 in a secure context, https and `file://` alike.
@@ -420,12 +423,14 @@ scrolls, zooms or selects.
 
   | Screen | Keys |
   |---|---|
-  | title | RESUME (Esc, with a save or an open run), BEGIN (Enter), RESET (R), TYPE CODE, the difficulty (L, labelled with the setting), COPY (K), SOUND (M) |
+  | title | RESUME (P, with a save or an open run), BEGIN (Enter), RESET (R), TYPE CODE, the difficulty (L, labelled with the setting), COPY (K), SOUND (M) |
   | title, typing | ACCEPT (Enter), CANCEL (Esc) |
-  | play | PAUSE (Esc) |
-  | pause | RESUME (Esc), COPY (C), SOUND (M), TITLE (Q) |
+  | play | PAUSE (P) |
+  | pause | RESUME (P), COPY (C), SOUND (M), TITLE (Q) |
   | over | CONTINUE (Enter), COPY (C), TITLE (Q) |
 
+  Each P key has Esc as its keyboard alias. CANCEL sends Esc, because P types
+  a letter during code entry.
   TYPE CODE sends T, opens the browser's `prompt`, then sends each character
   of the answer as a key press and finally Enter, or Esc on cancel. The
   prompt takes a pasted save code.

@@ -159,7 +159,7 @@ const K = (code, key) => ({ code, key });
  */
 export const SOFT = {
   title: [
-    { id: 'resume', label: 'RESUME', ...K('Escape', 'Escape'), when: 'resume' },
+    { id: 'resume', label: 'RESUME', ...K('KeyP', 'p'), when: 'resume' },
     { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },
     { id: 'reset', label: 'RESET', ...K('KeyR', 'r') },
     { id: 'type', label: 'TYPE CODE', act: 'type' },
@@ -172,10 +172,10 @@ export const SOFT = {
     { id: 'cancel', label: 'CANCEL', ...K('Escape', 'Escape') },
   ],
   play: [
-    { id: 'pause', label: 'PAUSE', ...K('Escape', 'Escape') },
+    { id: 'pause', label: 'PAUSE', ...K('KeyP', 'p') },
   ],
   pause: [
-    { id: 'resume', label: 'RESUME', ...K('Escape', 'Escape') },
+    { id: 'resume', label: 'RESUME', ...K('KeyP', 'p') },
     { id: 'copy', label: 'COPY', ...K('KeyC', 'c') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
     { id: 'title', label: 'TITLE', ...K('KeyQ', 'q') },

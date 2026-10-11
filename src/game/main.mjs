@@ -266,6 +266,8 @@ function driveTouch(copied) {
   press('KeyT', 't');
   draw(g, 0);
   need(g.typing !== null, 'KeyT opens typing');
+  press('KeyP', 'p');
+  need(g.screen === 'title' && g.typing === 'P', 'P types a letter in the code field');
   click('typing', 'cancel');
   need(g.typing === null, 'CANCEL closes typing');
   press('KeyT', 't');
@@ -345,6 +347,24 @@ function driveTouch(copied) {
   need(g.screen === 'play' && g.sim === run && g.world === runWorld && g.code === runCode, 'pause, TITLE and RESUME return to the same run');
   need(run.burn === BURN_S / 2 && run.time === 77, 'the resumed run keeps its torch and time');
   need(g.difficulty === runWorld.difficulty, 'RESUME moves the setting to the run\'s');
+
+  // P pauses and resumes; Esc does the same as the alias.
+  press('KeyP', 'p');
+  need(g.screen === 'pause', 'P pauses in play');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === run, 'P resumes from pause');
+  press('Escape', 'Escape');
+  need(g.screen === 'pause', 'Esc still pauses in play');
+  press('Escape', 'Escape');
+  need(g.screen === 'play' && g.sim === run, 'Esc still resumes from pause');
+  for (const [code, key, name] of [['KeyP', 'p', 'P'], ['Escape', 'Escape', 'Esc']]) {
+    draw(g, 0);
+    click('play', 'pause');
+    click('pause', 'title');
+    need(g.screen === 'title', `TITLE reaches the title before ${name}`);
+    press(code, key);
+    need(g.screen === 'play' && g.sim === run && g.world === runWorld && g.code === runCode, `${name} on the title returns to the open run`);
+  }
 
   // End screen.
   offEntry();
@@ -428,7 +448,9 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   need(sized('easy'), 'the setting moves to EASY over a save with no difficulty');
-  // A held Esc repeats; the title ignores the repeat, as it does Space's.
+  // A held P or Esc repeats; the title ignores the repeat, as it does Space's.
+  press('KeyP', 'p', true);
+  need(g.screen === 'title', 'the title ignores an auto-repeated P');
   press('Escape', 'Escape', true);
   need(g.screen === 'title', 'the title ignores an auto-repeated Esc');
   click('title', 'resume');
@@ -604,7 +626,7 @@ function titleKey(g, e) {
   if (g.typing !== null) { typingKey(g, e); return; }
   const at = DIFFICULTIES.indexOf(g.difficulty);
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) begin(g);
-  else if (e.key === 'Escape') { if (!e.repeat) resume(g); }
+  else if (e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }
   else if (e.code === 'KeyR') { useCode(g, rollCode()); g.note = ''; }
   else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
   else if (e.code === 'KeyL') setDifficulty(g, DIFFICULTIES[(at + 1) % DIFFICULTIES.length]);
@@ -621,7 +643,7 @@ function titleKey(g, e) {
 }
 
 function playKey(g, e) {
-  if (e.key === 'Escape') {
+  if (e.code === 'KeyP' || e.key === 'Escape') {
     g.screen = 'pause';
     g.frame = frameOf(g.sim.bd, g.world.size);
     g.pauseMap = null;
@@ -638,7 +660,7 @@ function playKey(g, e) {
 
 // g.copied: the copy status the pause or end screen shows, cleared on leaving it.
 function pauseKey(g, e) {
-  if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }
+  if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }
   else if (e.code === 'KeyQ') {
     g.open = { code: g.code, world: g.world, renderer: g.renderer, preview: g.preview, sim: g.sim };
     g.screen = 'title';
@@ -750,15 +772,15 @@ function drawTitle(g, t) {
     r.text('R      RESET', 72, 98, 'b');
     r.text('K COPY', 248, 98, 'b', { align: 'right' });
     r.text('T      TYPE A CODE', 72, 110, 'b');
-    // At most 26 characters right of ESC: a 9-character p and MEDIUM fit the panel.
+    // At most 26 characters right of P: a 9-character p and MEDIUM fit the panel.
     if (saved) {
-      r.text('ESC', 72, 122, 'b');
+      r.text('P', 72, 122, 'b');
       r.text(`${formatCode(saved.code)}:${saved.p} ${difficultyLabel(saved.difficulty)}`, 248, 122, 'b', { align: 'right' });
     }
     r.text(best === null ? 'NO TOMB REACHED YET' : `BEST TOMB  ${best}`, VIEW_W / 2, saved ? 136 : 124, 'p', { align: 'center' });
   }
   if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
-  r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+  r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  P PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
 /** The title's setting row at y: all three names after L, the current one lit. */
@@ -809,7 +831,7 @@ function drawPause(g, t = 0) {
   r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
   r.text(`${hereCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 129, 'i', { align: 'center' });
   r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });
-  r.text('ESC RESUME  UP/DOWN PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
+  r.text('P RESUME  UP/DOWN PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
   r.text('M MUTE  C COPY', VIEW_W / 2, 164, 'b', { align: 'center' });
 }
 

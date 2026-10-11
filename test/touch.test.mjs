@@ -228,7 +228,7 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty rule broken.
+// zoom guard dropped and each difficulty and pause-key rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -245,31 +245,35 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty or pause-key rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
     const noTouch = html.replace('touch = createTouch({', 'touch = null; void ({');
-    assert.notEqual(noTouch, html);
+    assert.equal(html.split('touch = createTouch({').length, 2);
     assert.match(verdict(noTouch, '500,1000'), /^fail: .*touch/);
     const miskeyed = html.replace("...K('KeyR', 'r')", "...K('KeyX', 'x')");
-    assert.notEqual(miskeyed, html);
+    assert.equal(html.split("...K('KeyR', 'r')").length, 2);
     assert.match(verdict(miskeyed, '500,1000'), /^fail: touch RESET/);
     const zoomable = html.replace('stopDoubleTapZoom();', '');
-    assert.notEqual(zoomable, html);
+    assert.equal(html.split('stopDoubleTapZoom();').length, 2);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
-    // Each difficulty rule broken in turn: [from, to, the leg's first miss].
+    // Each difficulty and pause-key rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
       ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 3) % 3', /^fail: touch ArrowRight steps the setting to HARD/],
       ["return difficulty === 'hard' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_SAVE_DIFFICULTY, 'medium')", /^fail: touch RESUME plays a save with no stored difficulty at HARD/],
-      ['{ if (!e.repeat) resume(g); }', '{ resume(g); }', /^fail: touch the title ignores an auto-repeated Esc/],
+      ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.key === 'Escape') { if (!e.repeat) resume(g); }", /^fail: touch pause, TITLE and RESUME return to the same run/],
+      ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "(e.code === 'KeyP' && !e.repeat) || e.key === 'Escape') { resume(g); }", /^fail: touch the title ignores an auto-repeated Esc/],
+      ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.code === 'KeyP' || (e.key === 'Escape' && !e.repeat)) { resume(g); }", /^fail: touch the title ignores an auto-repeated P/],
+      ["if (e.code === 'KeyP' || e.key === 'Escape') {\n    g.screen = 'pause';", "if (e.key === 'Escape') {\n    g.screen = 'pause';", /^fail: touch PAUSE reaches pause and stores a save/],
+      ["if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", "if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", /^fail: touch RESUME returns to play/],
       ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
     ]) {
       const broken = html.replace(from, to);
-      assert.notEqual(broken, html, from);
+      assert.equal(html.split(from).length, 2, `${from} occurs once`);
       assert.match(verdict(broken, '500,1000'), miss, from);
     }
   });
