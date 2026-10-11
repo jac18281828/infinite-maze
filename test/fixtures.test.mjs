@@ -501,7 +501,12 @@ test('in either corner a drawn skeleton\'s fingertip lies in the box row or colu
             assert.equal(tips.length, 1, `${level} board ${bd.p} cell ${cell}: one fingertip`);
             const [[tx, ty]] = tips;
             if (key === 'up') assert.equal(ty, Y + 17);
-            if (key === 'down') assert.equal(ty, Y + 8);
+            if (key === 'down') {
+              // The fingertip stands in the box's second row from the bottom; air separates it from the floor row.
+              assert.equal(ty, Y + 9);
+              assert.equal(art.touched[px(tx, Y + 8)], 0, `${level} board ${bd.p} cell ${cell}: air under the fingertip`);
+              assert.equal(boardMask(bd)[px(tx, Y + 7)], 1, `${level} board ${bd.p} cell ${cell}: rock under the air`);
+            }
             if (key === 'right') { assert.equal(tx, x0 + 6); assert.ok(ty >= Y + 12 && ty <= Y + 14); }
             if (key === 'left') { assert.equal(tx, x0); assert.ok(ty >= Y + 12 && ty <= Y + 14); }
             need.delete(`${side} ${key}`);

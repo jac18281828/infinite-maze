@@ -682,11 +682,14 @@ the room's side edge is a doorway, the skeleton sits beside it.
   one `9` pixel, the fingertip. Right: the arm out at shoulder height, the
   fingertip in column 6, row 3 to 5. Left: the arm across the body toward the
   side edge, the fingertip in column 0, row 3 to 5. Up: the arm raised above the
-  skull, the fingertip in row 0. Down: the arm reaching to the floor in front of
-  the legs, the fingertip in row 9. The galleries fold to the key the player
-  presses: a north, north-east or north-west link is up and a south, south-west
-  or south-east link down. The right corner draws each pose mirrored, column `c`
-  to `6 − c`, so its left pose stands for right and its right pose for left.
+  skull, the fingertip in row 0. Down: the arm reaching down in front of the
+  legs, the fingertip in row 8. Every neighbour of the fingertip inside the
+  sprite is transparent except the arm pixel above it, so one row of room air
+  separates the fingertip from the floor's top row and one column of air from
+  the legs. The galleries fold to the key the player presses: a north,
+  north-east or north-west link is up and a south, south-west or south-east link
+  down. The right corner draws each pose mirrored, column `c` to `6 − c`, so its
+  left pose stands for right and its right pose for left.
 - **Palette.** Palette `5` to `9`, umber to sandstone, so a skeleton sits
   darker than the stair treads and the bone white.
 - **Tiers.** Tier 1 draws on the board layer after the mask's shading, as the

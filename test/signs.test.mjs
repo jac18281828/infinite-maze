@@ -364,6 +364,17 @@ test('the four poses differ pairwise, fill 7 x 10 and put their one fingertip wh
     if (k === 0) { assert.equal(x, 6); assert.ok(y >= 3 && y <= 5); }
     if (k === 1) assert.equal(y, 0);
     if (k === 2) { assert.equal(x, 0); assert.ok(y >= 3 && y <= 5); }
-    if (k === 3) assert.equal(y, 9);
+    if (k === 3) {
+      assert.equal(y, 8);
+      // The fingertip stands clear: every neighbour inside the sprite is air but the arm pixel above.
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if ((!dx && !dy) || nx < 0 || nx > 6 || ny < 0 || ny > 9) continue;
+          if (dx === 0 && dy === -1) assert.notEqual(rows[ny][nx], '.', 'the arm reaches the fingertip from above');
+          else assert.equal(rows[ny][nx], '.', `pixel (${nx}, ${ny}) beside the fingertip`);
+        }
+      }
+    }
   });
 });
