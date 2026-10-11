@@ -98,12 +98,28 @@ function recordWalk(trail, bd, cell, d, to) {
   b.walked[to.cell] |= 1 << (d ^ 2);
 }
 
-/** Everything a Continue carries into the next run. */
+/** Everything a Continue carries into the next run, its start tomb included. */
 export function runCarry(s) {
-  return { time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail };
+  return { time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail, start: s.start };
 }
 
 const tombKey = (bd) => `${bd.u},${bd.v}`;
+
+/**
+ * True when tomb (u, v) lies on the run's way on: its start tomb, the tomb
+ * that tomb's exit leads to, and so on. The way on never descends, so it is
+ * walked only up to row v, and only once.
+ */
+function onWayOn(s, u, v) {
+  const w = s.wayOn;
+  while (w.v <= v) {
+    const d = s.world.exit(w.u, w.v);
+    w.u += DX[d];
+    w.v += DY[d];
+    w.tombs.add(`${w.u},${w.v}`);
+  }
+  return w.tombs.has(`${u},${v}`);
+}
 
 /** A run from `start` = { board, cell }, standing on the door's cell. */
 export function createSim(world, start, carry = null) {
@@ -115,10 +131,9 @@ export function createSim(world, start, carry = null) {
     state: 'play', time: carry ? carry.time : 0,
     // The score: the tombs solved, each counted once, keyed "u,v".
     solved: carry && carry.solved ? carry.solved : new Set(),
-    // How the explorer last entered its tomb: 'start' in the run's start
-    // tomb until it first leaves, then 'in' through an in-door or 'exit'
-    // through the tomb's exit door.
-    entered: 'start',
+    // The run's start tomb, which Continue carries, and its way on walked so far.
+    start: carry && carry.start ? carry.start : { u: start.board.u, v: start.board.v },
+    wayOn: null,
     lastEntry: start.board.entry ? start.board.p : (carry ? carry.lastEntry : start.board.p),
     touching: false, walked: 0, climbed: 0, carry: 0,
     stats: {
@@ -127,6 +142,7 @@ export function createSim(world, start, carry = null) {
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
+  s.wayOn = { u: s.start.u, v: s.start.v, tombs: new Set([`${s.start.u},${s.start.v}`]) };
   recordStood(s.trail, s.bd, s.cell);
   return s;
 }
@@ -183,9 +199,8 @@ function engage(s, d, prog = 0) {
 
 /**
  * Crossing a seam. A tomb is solved when the explorer leaves it through its
- * exit door having entered it through an in-door, or having started the run
- * in it without leaving since; stepping back in at the exit and out again
- * solves nothing.
+ * exit door and it lies on the run's way on; a tomb upstream of that way
+ * never counts, whatever door the explorer used.
  */
 function enterBoard(s, bd) {
   if (bd === s.bd) return;
@@ -195,11 +210,10 @@ function enterBoard(s, bd) {
   if (bd.u !== from.u || bd.v !== from.v) {
     const d = bd.u > from.u ? 0 : bd.v > from.v ? 1 : bd.u < from.u ? 2 : 3;
     const key = tombKey(from);
-    if (s.world.tomb(from.u, from.v).exit === d && s.entered !== 'exit' && !s.solved.has(key)) {
+    if (s.world.exit(from.u, from.v) === d && !s.solved.has(key) && onWayOn(s, from.u, from.v)) {
       s.solved.add(key);
       s.events.push('solved');
     }
-    s.entered = s.world.tomb(bd.u, bd.v).exit === (d ^ 2) ? 'exit' : 'in';
   }
   if (bd.entry && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
 }

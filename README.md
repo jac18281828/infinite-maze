@@ -39,10 +39,10 @@ and no assets.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
 - The score counts tombs solved: a tomb is solved when the explorer leaves it
-  through its exit door, having entered it through one of its in-doors or
-  started the run there without leaving. Stepping back in at its exit and
-  out again solves nothing. Each tomb counts once, and Continue keeps the
-  count.
+  through its exit door, if it lies on the way on from the run's start tomb:
+  that tomb, the tomb its exit leads to, and so on. A tomb off that way on
+  never counts. Each tomb counts once, and Continue keeps the count and the
+  start tomb.
 
 The title screen shows the seed code. **Enter** begins at tomb (0, 0)'s
 first entry. **R** rolls a new world. **T** takes a typed seed or save code.

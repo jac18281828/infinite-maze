@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, boardCoords } from '../src/world/world.mjs';
+import { createWorld, boardCoords, boardOfPos } from '../src/world/world.mjs';
 import { BW, NCELL, cellNeighbor, DX, DY } from '../src/world/board.mjs';
 import { boardMask, rockAt, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import {
@@ -1069,58 +1069,52 @@ function tombsOfEachKind(pred = () => true) {
 
 const inTomb = (s, t) => s.bd.u === t.u && s.bd.v === t.v;
 
-test('the start tomb scores when left by its exit, and counts once', () => {
+/** Walks `s` by autopilot to `door` = { bd, cell } without leaving tomb t, the torch kept full. */
+function walkTo(s, door, t, w = world) {
+  const drive = createAutopilot(w, [{ x: door.bd.x, y: door.bd.y, cell: door.cell }]);
+  let ph = 0, pv = 0;
+  for (let i = 0; i < 80000 && !(s.bd === door.bd && s.cell === door.cell && s.mode === 'floor'); i++) {
+    const [h, v, jump] = drive(s);
+    step(s, h, v, jump, inputEdges(ph, pv, h, v));
+    ph = h;
+    pv = v;
+    s.burn = BURN_S;
+    assert.ok(inTomb(s, t), `the walk stays in tomb (${t.u},${t.v})`);
+  }
+  assert.ok(s.bd === door.bd && s.cell === door.cell, `the explorer reaches board (${door.bd.x},${door.bd.y}) cell ${door.cell}`);
+}
+
+test('leaving the start tomb by its exit scores it', () => {
   for (const [kind, t] of tombsOfEachKind()) {
     const s = simOn(exitDoor(t));
-    const [h, v] = [DX[t.exit], DY[t.exit]];
-    const out = crossSeam(s, h, v);
+    assert.deepEqual(s.start, { u: t.u, v: t.v });
+    const out = crossSeam(s, DX[t.exit], DY[t.exit]);
     assert.deepEqual([s.bd.u, s.bd.v], [t.u + DX[t.exit], t.v + DY[t.exit]], `${kind} exit leaves tomb (${t.u},${t.v})`);
     assert.ok(out.includes('solved'), `${kind}: solving fires an event`);
     assert.deepEqual([...s.solved], [`${t.u},${t.v}`]);
+  }
+});
+
+test('each tomb counts once: leaving the start tomb by its exit again scores nothing', () => {
+  for (const [kind, t] of tombsOfEachKind()) {
+    const s = simOn(exitDoor(t));
+    const [h, v] = [DX[t.exit], DY[t.exit]];
+    assert.ok(crossSeam(s, h, v).includes('solved'));
     crossSeam(s, -h, -v);
     assert.ok(inTomb(s, t));
-    assert.ok(!crossSeam(s, h, v).includes('solved'), `${kind}: a tomb counts once`);
+    assert.ok(!crossSeam(s, h, v).includes('solved'), `${kind}: tomb (${t.u},${t.v}) counts once`);
     assert.equal(s.solved.size, 1);
   }
 });
 
-test('a tomb entered at its exit and left back through it scores nothing', () => {
-  for (const [kind, t] of tombsOfEachKind()) {
-    // Start downstream, on the far side of t's exit door.
-    const door = exitDoor(t), across = world.step(door.bd, door.cell, t.exit);
-    const s = simOn({ bd: across.board, cell: across.cell });
-    const [h, v] = [DX[t.exit], DY[t.exit]];
-    const into = crossSeam(s, -h, -v);
-    assert.ok(inTomb(s, t), `${kind}: the explorer steps back into tomb (${t.u},${t.v})`);
-    assert.equal(s.entered, 'exit');
-    const out = crossSeam(s, h, v);
-    assert.ok(!inTomb(s, t));
-    assert.ok(!into.includes('solved') && !out.includes('solved'), `${kind}: tomb (${t.u},${t.v}) scores nothing`);
-    assert.equal(s.solved.size, 0);
-  }
-});
-
-test('a tomb entered through an in-door and left by its exit scores once', () => {
+test('the next tomb on the way on scores once, entered through its in-door and left by its exit', () => {
   for (const [kind, t] of tombsOfEachKind((q) => q.walls.length >= 2)) {
-    // Start upstream on the exit door of the tomb that feeds t's first in-door.
+    // Start on the exit door of the tomb that feeds t's first in-door.
     const wl = t.walls[1];
     const s = simOn(exitDoor(world.tomb(t.u + DX[wl.dir], t.v + DY[wl.dir])));
     crossSeam(s, -DX[wl.dir], -DY[wl.dir]);
     assert.ok(inTomb(s, t), `${kind}: the explorer enters tomb (${t.u},${t.v}) through an in-door`);
-    assert.equal(s.entered, 'in');
-    // Walk the tomb to its exit door.
-    const door = exitDoor(t);
-    const drive = createAutopilot(world, [{ x: door.bd.x, y: door.bd.y, cell: door.cell }]);
-    let ph = 0, pv = 0;
-    for (let i = 0; i < 80000 && !(s.bd === door.bd && s.cell === door.cell && s.mode === 'floor'); i++) {
-      const [h, v, jump] = drive(s);
-      step(s, h, v, jump, inputEdges(ph, pv, h, v));
-      ph = h;
-      pv = v;
-      s.burn = BURN_S;
-      assert.ok(inTomb(s, t), `${kind}: the walk stays in tomb (${t.u},${t.v})`);
-    }
-    assert.ok(s.bd === door.bd && s.cell === door.cell, `${kind}: the explorer reaches the exit door`);
+    walkTo(s, exitDoor(t), t);
     assert.ok(!s.solved.has(`${t.u},${t.v}`));
     const out = crossSeam(s, DX[t.exit], DY[t.exit]);
     assert.ok(out.includes('solved') && s.solved.has(`${t.u},${t.v}`), `${kind}: tomb (${t.u},${t.v}) scores`);
@@ -1131,6 +1125,79 @@ test('a tomb entered through an in-door and left by its exit scores once', () =>
   }
 });
 
+test('an upstream tomb entered at its exit and left back through it scores nothing', () => {
+  for (const [kind, t] of tombsOfEachKind()) {
+    // Start downstream, on the far side of t's exit door.
+    const door = exitDoor(t), across = world.step(door.bd, door.cell, t.exit);
+    const s = simOn({ bd: across.board, cell: across.cell });
+    const [h, v] = [DX[t.exit], DY[t.exit]];
+    const into = crossSeam(s, -h, -v);
+    assert.ok(inTomb(s, t), `${kind}: the explorer steps back into tomb (${t.u},${t.v})`);
+    const out = crossSeam(s, h, v);
+    assert.ok(!inTomb(s, t));
+    assert.ok(!into.includes('solved') && !out.includes('solved'), `${kind}: tomb (${t.u},${t.v}) scores nothing`);
+    assert.equal(s.solved.size, 0);
+  }
+});
+
+test('an upstream tomb entered through an in-door and left by its exit scores nothing', () => {
+  // A tomb u whose first in-door lies on its exit board, so each walk stays on one board.
+  let t = null;
+  for (let v = 0; v <= 40 && !t; v++) {
+    for (let u = -5; u <= 5 && !t; u++) {
+      const q = world.tomb(u, v);
+      if (q.walls.length >= 2 && q.entries[0] === q.X) t = q;
+    }
+  }
+  assert.ok(t, 'no tomb holds its first in-door on its exit board');
+  const wl = t.walls[1], feed = world.tomb(t.u + DX[wl.dir], t.v + DY[wl.dir]);
+  // Start downstream, on the far side of t's exit door.
+  const door = exitDoor(t), across = world.step(door.bd, door.cell, t.exit);
+  const s = simOn({ bd: across.board, cell: across.cell });
+  const events = crossSeam(s, -DX[t.exit], -DY[t.exit]);
+  assert.ok(inTomb(s, t));
+  const inBoard = door.bd, inCell = inBoard.doors.find((d) => d.dir === wl.dir).cell;
+  walkTo(s, { bd: inBoard, cell: inCell }, t);
+  events.push(...crossSeam(s, DX[wl.dir], DY[wl.dir]));
+  assert.ok(inTomb(s, feed), `the explorer steps out into tomb (${feed.u},${feed.v})`);
+  // Back into t through its in-door, then out by its exit.
+  events.push(...crossSeam(s, -DX[wl.dir], -DY[wl.dir]));
+  assert.ok(inTomb(s, t), `the explorer enters tomb (${t.u},${t.v}) through its in-door`);
+  walkTo(s, door, t);
+  events.push(...crossSeam(s, DX[t.exit], DY[t.exit]));
+  assert.ok(!inTomb(s, t));
+  assert.ok(!events.includes('solved'), `tombs (${t.u},${t.v}) and (${feed.u},${feed.v}) score nothing`);
+  assert.equal(s.solved.size, 0);
+});
+
+test('a Continue in EASY tomb (-2, 0), upstream of its run\'s start (-2, 1), scores nothing when it leaves', () => {
+  const easy = createWorld('00000000', { difficulty: 'easy' });
+  const t = easy.tomb(-2, 0);
+  assert.equal(t.exit, 1, 'tomb (-2, 0) exits up into (-2, 1)');
+  // A save resumed at tomb (-2, 1)'s first entry starts a run there.
+  const first = boardCoords(-2, 1, easy.tomb(-2, 1).entries[0], easy.size);
+  const s = createSim(easy, easy.resumePoint(first.x, first.y));
+  assert.deepEqual(s.start, { u: -2, v: 1 });
+  crossSeam(s, 0, -1);
+  assert.ok(inTomb(s, t), 'the explorer steps back down into tomb (-2, 0) at its exit');
+  // Walk on to an entry board of (-2, 0), which becomes the run's last entry.
+  const e = boardCoords(-2, 0, t.entries[t.entries.length - 1], easy.size);
+  const entry = easy.resumePoint(e.x, e.y);
+  walkTo(s, { bd: entry.board, cell: entry.cell }, t, easy);
+  assert.equal(s.lastEntry, entry.board.p);
+  // The torch dies there, and Continue resumes at the last entry with the run's carry.
+  const back = boardOfPos(s.lastEntry);
+  const n = createSim(easy, easy.resumePoint(back.x, back.y), runCarry(s));
+  assert.ok(inTomb(n, t));
+  assert.deepEqual(n.start, { u: -2, v: 1 });
+  const ex = boardCoords(-2, 0, t.X, easy.size), xb = easy.board(ex.x, ex.y);
+  walkTo(n, { bd: xb, cell: xb.doors.find((d) => d.dir === t.exit).cell }, t, easy);
+  const events = crossSeam(n, 0, 1);
+  assert.deepEqual([n.bd.u, n.bd.v], [-2, 1]);
+  assert.ok(!events.includes('solved'), 'tomb (-2, 0) scores nothing');
+  assert.equal(n.solved.size, 0);
+});
+
 test('createSim carries the trail and every field runCarry returns; a fresh run holds only its start', () => {
   const start = findCell((b, c) => b.routeIndex > 0 && has(b, c, 0) && !has(b, c, 1));
   const s = simOn(start);
@@ -1139,7 +1206,7 @@ test('createSim carries the trail and every field runCarry returns; a fresh run 
   s.time = 42;
   s.solved.add('3,5');
   const c = runCarry(s);
-  assert.deepEqual(Object.keys(c).sort(), ['lastEntry', 'solved', 'time', 'trail']);
+  assert.deepEqual(Object.keys(c).sort(), ['lastEntry', 'solved', 'start', 'time', 'trail']);
   const before = stoodCells(s);
   const next = world.resumePoint(start.bd.x, start.bd.y);
   const n = createSim(world, next, c);
@@ -1150,7 +1217,9 @@ test('createSim carries the trail and every field runCarry returns; a fresh run 
   assert.equal(n.solved, s.solved);
   assert.deepEqual([...n.solved], ['3,5']);
   assert.equal(n.lastEntry, s.lastEntry);
+  assert.equal(n.start, s.start);
   const fresh = createSim(world, next);
+  assert.deepEqual(fresh.start, { u: next.board.u, v: next.board.v });
   assert.equal(stoodCells(fresh), 1);
   assert.equal(walkedEnds(fresh), 0);
   assert.notEqual(fresh.trail, s.trail);

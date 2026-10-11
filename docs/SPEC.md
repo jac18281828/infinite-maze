@@ -418,13 +418,14 @@ cell, a ladder in that cell ends at the floor, and a bottom door's sconce
 stands clear of the flight.
 
 **Score.** A tomb is solved when the explorer leaves it through its exit
-door, and either the explorer's most recent entry into it was through one of
-its in-doors, or the run started there and the explorer has not left since.
-Stepping back in at a tomb's exit and out again solves nothing, so an
-upstream basin cannot be farmed. A run counts the distinct tombs it solves and
-carries the set through Continue. The HUD's `TOMB n`, the pause header's
-`TOMB n`, the title's `BEST TOMB` and the end screen's `TOMBS CLIMBED` show
-that count.
+door, and only if it lies on the run's way on: the run's start tomb, the tomb
+its exit leads to, and so on along the generator's exits. A tomb off that way
+on never counts, whatever door the explorer used, so an upstream basin cannot
+be farmed. Each tomb counts once. Continue carries the run's start tomb and
+its solved set, so the run keeps one way on; resuming a save or typing a code
+starts a new run with its own start tomb. The HUD's `TOMB n`, the pause
+header's `TOMB n`, the title's `BEST TOMB` and the end screen's `TOMBS
+CLIMBED` show that count.
 
 **Labels.** The title's panel holds a difficulty row naming EASY, MEDIUM and
 HARD with the setting lit, and its save line names the save's difficulty. Its
