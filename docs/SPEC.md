@@ -107,6 +107,7 @@ the same world on every engine.
 | Sign at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 48 | carved when under 8 (EASY), 6 (MEDIUM), 4 (HARD) or 3 (ULTIMATE) |
 | Corner of a sign | `H("sign", x, y, cell)` u32 bit 31 | left, right |
 | Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
+| Oil jar | `H("oil", x, y, cell)` u32 mod 100 < 10 | on a dead-end cell (§4) with no coin |
 
 Both boards on a shared wall read the same door key, and both tombs on a
 shared tomb wall read the same crossing key, so door positions match across
@@ -271,11 +272,14 @@ cell of §2, which the carve protects whether or not it burns, stays eligible.
 A rock board has none. An ordered item list names each kind, its hash tag and
 its percentage, and a dead-end cell takes the first kind whose
 `u32(H(tag, x, y, cell)) mod 100` falls below its percentage, so two items
-never share a cell. One kind ships, the coin, at 5 under the tag `coin`. Items
-are read off a built board and built into none, and the difficulty enters no
-tag and no percentage, so every pinned digest stands. On seed `0000-0000`,
-tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`, a tree board holds 6.5 to 6.6 dead-end
-cells and 4.4% to 5.2% of them hold a coin, by level.
+never share a cell. Two kinds ship, in this order: the coin, at 5 under the tag
+`coin`, then the oil jar, at 10 under the tag `oil`. The coin wins a tie, and
+placement reads hashes only, so a jar lies on a dead-end cell whose coin hash
+fails and whose oil hash passes: about 9.5% of them. Items are read off a built
+board and built into none, and the difficulty enters no tag and no percentage,
+so every pinned digest stands. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
+`v ∈ [0, 19]`, a tree board holds 6.5 to 6.6 dead-end cells; 4.4% to 5.2% of
+them hold a coin and 9.5% to 10.1% a jar, by level.
 
 ## 5. Save code
 
@@ -306,8 +310,9 @@ title, and the code reads at the difficulty in force:
   moves to match. A typed save code plays at the title setting.
 
 Resuming lights the torch to full. Flames never run out, so the save carries
-no pickup state, and it carries none of the coins taken: those live under a
-key of their own per seed and level, below. The game separately keeps the most
+no pickup state. It carries none of the coins taken, which live under a key of
+their own per seed and level, below, and none of the oil jars taken, which §7
+resets on every new run. The game separately keeps the most
 tombs solved, as the score, per seed and difficulty; HARD keeps the bare seed
 code as its key.
 
@@ -443,6 +448,15 @@ battery.
 - **Flames:** a brazier burning turquoise relights the torch to full on touch
   and never runs out. §3 places them. A flame inside a route board can sit on
   a dead-end branch of that board's maze.
+- **Oil jars:** touching a jar of §4, the feet within 12 px of its floor point
+  in x and in y, as for a flame, adds 60 s of burn, capped at a full torch,
+  before that tick's own burn. A jar is taken at any burn, a full torch
+  included, and the cap wastes the excess. During the ember a jar sets the
+  burn to 60 s and ends the ember, where a flame sets it to full. A jar pushes
+  the event a flame does, so the relight sound and the music's drop follow it.
+  A taken jar stays taken for the rest of its run and lies back on every new
+  run: BEGIN, RESUME from a stored save, a typed code and Continue. Pause,
+  title and resume of the open run keep its jars taken.
 
 Every tomb entry holds a flame. No stretch of any entry's way on takes more
 than 150 s to walk between flames, so a full torch covers the longest stretch
@@ -502,6 +516,12 @@ its solved set, so the run keeps one way on; resuming a save or typing a code
 starts a new run with its own start tomb. The HUD's `TOMB n`, the pause
 header's `TOMB n`, the title's `BEST TOMB` and the end screen's `TOMBS
 CLIMBED` show that count.
+
+**Oil jars.** A jar is a sprite at most 7×8 px in umber and ochre with a dark
+mouth. It rests on the floor at the same point as a coin: 12 px from its
+cell's standing point, away from the cell's one link, or east of a ladder. The
+scene draws untaken jars after the boards and before the light map, as it draws
+coins, and never bakes one into the board art.
 
 **Coins.** A coin is a gold sprite at most 6×6 px. It rests on the floor 12 px
 from its cell's standing point, on the side away from the cell's one link, or

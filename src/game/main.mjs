@@ -6,7 +6,7 @@ import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
 import { floorItems, itemSpot } from '../world/floor.mjs';
 import {
-  createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
+  createSim, step, runCarry, TICK, BURN_S, JAR_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
 } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
@@ -445,6 +445,7 @@ function driveTouch(copied) {
   difficultyLeg(g, { need, click, press, offEntry });
   coinLeg(g, { need, click });
   splashLeg(g, { need, click, press });
+  oilLeg(g, { need, click });
 
   // Leave the self-test script's run paused on screen for the screenshot.
   setDifficulty(g, 'hard');
@@ -627,17 +628,63 @@ function firstCoin(world) {
 }
 
 /**
- * Walks the run to the dead-end cell of `coin`, then toward its spot until the
- * feet come within 12 px of it, as the sim tests contact. Throws `touch ...`
- * when the walk runs out of ticks.
+ * Walks the run to the dead-end cell of `item`, then toward its spot until the
+ * feet come within 12 px of it, as the sim tests contact. `seen` runs after
+ * each tick. Throws `touch ...` when the walk runs out of ticks.
  */
-function walkToCoin(g, { bd, cell }) {
+function walkToCoin(g, { bd, cell }, seen = () => {}, what = 'coin') {
   const [sx, sy] = itemSpot(bd, cell);
   const side = Math.sign(sx - nodeXY(bd, cell)[0]);
   const auto = createAutopilot(g.world, [{ x: bd.x, y: bd.y, cell }]);
   const here = (s) => s.bd.x === bd.x && s.bd.y === bd.y && s.cell === cell && s.mode === 'floor';
   const near = () => { const [fx, fy] = feet(g.sim); return Math.abs(fx - sx) <= 12 && Math.abs(fy - sy) <= 12; };
-  runTicks(g, (s) => (here(s) ? [side, 0, false] : auto(s)), near, 20000, 'the walk reaches the coin');
+  runTicks(g, (s) => (here(s) ? [side, 0, false] : auto(s)), near, 20000, `the walk reaches the ${what}`, seen);
+}
+
+/** The oil jars of tomb (0, 0), board by board in index order, as { bd, cell }. */
+function tombJars(world) {
+  const out = [];
+  for (let i = 0; i < world.size.w * world.size.h; i++) {
+    const { x, y } = boardCoords(0, 0, i, world.size);
+    const bd = world.board(x, y);
+    for (const it of floorItems(world, bd)) if (it.kind === 'oil') out.push({ bd, cell: it.cell });
+  }
+  return out;
+}
+
+/** The oil steps of the touch leg, from the title with no run open. */
+function oilLeg(g, { need, click }) {
+  setDifficulty(g, 'medium');
+  useCode(g, SELFTEST_CODE);
+  const jars = tombJars(g.world);
+  need(jars.length >= 2, 'tomb (0, 0) holds two oil jars at MEDIUM');
+  // Each step walks a new run to one jar and sets the burn on the first tick
+  // the explorer stands on the jar's cell. The contact tick then burns one TICK
+  // and adds the jar.
+  const take = (jar, burn) => {
+    g.screen = 'title';
+    draw(g, 0);
+    click('title', 'begin');
+    const id = coinId(jar.bd, jar.cell);
+    let before = null, set = false, delta = null;
+    walkToCoin(g, jar, () => {
+      const s = g.sim;
+      if (before !== null && delta === null && s.jars.has(id)) delta = s.burn - before;
+      if (!set && s.bd === jar.bd && s.cell === jar.cell) { s.burn = burn; set = true; }
+      before = s.burn;
+    }, 'oil jar');
+    return { delta, after: g.sim.burn };
+  };
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+  // Step 1: burn 100 s takes the jar's 60 s.
+  const one = take(jars[0], 100);
+  need(one.delta !== null && near(one.delta, JAR_S - TICK), 'touching the first oil jar at 100 s adds 60 s');
+
+  // Step 2: burn 280 s caps at full.
+  const two = take(jars[1], 280);
+  need(two.delta !== null && near(two.after, BURN_S - TICK), 'touching the second oil jar at 280 s caps the burn at full');
+  draw(g, 0);
 }
 
 /** The coin steps of the touch leg, from the title with no run open. */

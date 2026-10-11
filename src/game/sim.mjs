@@ -16,6 +16,8 @@ export const GALLERY_SPEED = 72;
 export const LADDER_SPEED = 48;
 export const BURN_S = 300;
 export const EMBER_S = 10;
+// Burn an oil jar adds, capped at BURN_S.
+export const JAR_S = 60;
 export const R_FULL = 96;
 export const R_LOW = 24;
 export const R_EMBER = 8;
@@ -154,6 +156,8 @@ export function createSim(world, start, carry = null, { collected = new Set() } 
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
     },
     collected,
+    // The oil jars taken this run, keyed as coins are; a new sim starts empty.
+    jars: new Set(),
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
@@ -476,6 +480,29 @@ function coinTouch(s) {
   }
 }
 
+/**
+ * Takes each untaken oil jar the feet touch, once per run: burn rises by JAR_S
+ * to at most BURN_S, an ember ends, and the event is a brazier's. It runs ahead
+ * of the tick's own burn.
+ */
+function jarTouch(s) {
+  const [fx, fy] = feet(s);
+  for (const bd of touchBoards(s)) {
+    for (const { cell, kind } of floorItems(s.world, bd)) {
+      if (kind !== 'oil') continue;
+      const id = coinId(bd, cell);
+      if (s.jars.has(id)) continue;
+      const [x, y] = itemSpot(bd, cell);
+      if (Math.abs(fx - x) <= TOUCH && Math.abs(fy - y) <= TOUCH) {
+        s.jars.add(id);
+        s.events.push(s.burn < BURN_S * 0.98 || s.ember > 0 ? 'relight' : 'touch');
+        s.burn = Math.min(BURN_S, s.burn + JAR_S);
+        s.ember = 0;
+      }
+    }
+  }
+}
+
 /** Records the one link or door that joins the cell the tick began on to the current cell. */
 function recordMove(s, bd, cell) {
   for (let d = 0; d < 8; d++) {
@@ -506,6 +533,7 @@ export function step(s, h, v, jump = false, edges = NO_EDGES) {
   else linkMove(s, h, v, dt);
   // Every path that changes the cell runs above; the trail follows the cell.
   if (s.bd !== fromBd || s.cell !== fromCell) recordMove(s, fromBd, fromCell);
+  jarTouch(s);
   // Contact with a flame holds the torch at full; events fire once per contact.
   const touch = flameTouch(s);
   if (touch) {

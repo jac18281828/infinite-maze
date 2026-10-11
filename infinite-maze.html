@@ -1554,6 +1554,7 @@ const { BW, NCELL, DX } = __m2;
 // so two items never share a cell.
 const FLOOR_ITEMS = [
   { kind: 'coin', tag: 'coin', percent: 5 },
+  { kind: 'oil', tag: 'oil', percent: 10 },
 ];
 
 // Board geometry in world pixels, as the game's nodeXY lays it out: a cell is
@@ -1747,6 +1748,8 @@ const GALLERY_SPEED = 72;
 const LADDER_SPEED = 48;
 const BURN_S = 300;
 const EMBER_S = 10;
+// Burn an oil jar adds, capped at BURN_S.
+const JAR_S = 60;
 const R_FULL = 96;
 const R_LOW = 24;
 const R_EMBER = 8;
@@ -1885,6 +1888,8 @@ function createSim(world, start, carry = null, { collected = new Set() } = {}) {
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
     },
     collected,
+    // The oil jars taken this run, keyed as coins are; a new sim starts empty.
+    jars: new Set(),
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
@@ -2207,6 +2212,29 @@ function coinTouch(s) {
   }
 }
 
+/**
+ * Takes each untaken oil jar the feet touch, once per run: burn rises by JAR_S
+ * to at most BURN_S, an ember ends, and the event is a brazier's. It runs ahead
+ * of the tick's own burn.
+ */
+function jarTouch(s) {
+  const [fx, fy] = feet(s);
+  for (const bd of touchBoards(s)) {
+    for (const { cell, kind } of floorItems(s.world, bd)) {
+      if (kind !== 'oil') continue;
+      const id = coinId(bd, cell);
+      if (s.jars.has(id)) continue;
+      const [x, y] = itemSpot(bd, cell);
+      if (Math.abs(fx - x) <= TOUCH && Math.abs(fy - y) <= TOUCH) {
+        s.jars.add(id);
+        s.events.push(s.burn < BURN_S * 0.98 || s.ember > 0 ? 'relight' : 'touch');
+        s.burn = Math.min(BURN_S, s.burn + JAR_S);
+        s.ember = 0;
+      }
+    }
+  }
+}
+
 /** Records the one link or door that joins the cell the tick began on to the current cell. */
 function recordMove(s, bd, cell) {
   for (let d = 0; d < 8; d++) {
@@ -2237,6 +2265,7 @@ function step(s, h, v, jump = false, edges = NO_EDGES) {
   else linkMove(s, h, v, dt);
   // Every path that changes the cell runs above; the trail follows the cell.
   if (s.bd !== fromBd || s.cell !== fromCell) recordMove(s, fromBd, fromCell);
+  jarTouch(s);
   // Contact with a flame holds the torch at full; events fire once per contact.
   const touch = flameTouch(s);
   if (touch) {
@@ -2269,7 +2298,7 @@ function pose(s) {
   if (s.burn <= 0) return { anim: 'gasp', frame: Math.floor(s.time * 3) % 2 };
   return { anim: 'idle', frame: Math.floor(s.time * 4) % 4 };
 }
-return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, runCarry, tombCount, createSim, canGo, feet, step, pose };
+return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, JAR_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, runCarry, tombCount, createSim, canGo, feet, step, pose };
 })();
 
 // src/game/art.mjs
@@ -2948,6 +2977,18 @@ const COIN = [
   '..kk..',
 ];
 
+// Floor oil jar, 7x8 in umber and ochre with a dark mouth.
+const JAR = [
+  '..666..',
+  '.60006.',
+  '..767..',
+  '.78887.',
+  '7888887',
+  '7888887',
+  '6788876',
+  '.66666.',
+];
+
 const FLAME = [
   [
     '......j.....',
@@ -3071,11 +3112,11 @@ function artSets() {
   return {
     explorer: Object.values(EXPLORER).flat(),
     rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
-    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], coin: [COIN], flame: FLAME, torch: TORCH,
+    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], coin: [COIN], jar: [JAR], flame: FLAME, torch: TORCH,
     font: Object.values(FONT_ROWS),
   };
 }
-return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, SIGNS, BRAZIER, COIN, FLAME, TORCH, FONT, FONT_W, FONT_H, artSets };
+return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, SIGNS, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, artSets };
 })();
 
 // src/world/signs.mjs
@@ -3489,7 +3530,7 @@ return { mapCells, frameOf, panFrame, sameFrame, mapModel };
 
 // src/game/render.mjs
 const __m16 = (() => {
-const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS } = __m11;
+const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS } = __m11;
 const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m10;
 const { BW, BH, DX, DY } = __m2;
 const { signs, signSide } = __m12;
@@ -3578,6 +3619,7 @@ function createRenderer(canvas, world) {
   const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
   const brazier = spriteCanvas(BRAZIER);
   const coin = spriteCanvas(COIN);
+  const jar = spriteCanvas(JAR);
   const flames = FLAME.map((f) => spriteCanvas(f));
   const torches = TORCH.map((f) => spriteCanvas(f));
   const ember = spriteCanvas(['.n.', 'nop', '.n.']);
@@ -3795,14 +3837,20 @@ function createRenderer(canvas, world) {
     return lit;
   }
 
-  /** Draws the coins of the lit boards that `collected` (a set of coin keys) lacks, resting on the floor. */
-  function drawItems(lit, sx, sy, collected) {
+  /**
+   * Draws the items of the lit boards resting on the floor: the coins that
+   * `collected` (a set of coin keys) lacks and the jars that `jars` (the run's
+   * taken set) lacks.
+   */
+  function drawItems(lit, sx, sy, collected, jars) {
     for (const [bx, by] of lit) {
       const bd = world.board(bx, by);
       for (const { cell, kind } of floorItems(world, bd)) {
-        if (kind !== 'coin' || (collected && collected.has(coinId(bd, cell)))) continue;
+        const taken = kind === 'coin' ? collected : jars;
+        if (taken && taken.has(coinId(bd, cell))) continue;
         const [x, y] = itemSpot(bd, cell);
-        ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
+        if (kind === 'coin') ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
+        else ctx.drawImage(jar, Math.round(sx(x)) - 3, Math.round(sy(y)) - 8);
       }
     }
   }
@@ -3876,7 +3924,7 @@ function createRenderer(canvas, world) {
     acc.fill(0);
     drawBackground(cx, cy);
     const lit = drawBoards(cx, cy, sx, sy);
-    drawItems(lit, sx, sy, sim ? sim.collected : null);
+    drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
@@ -4961,7 +5009,7 @@ const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m6;
 const { floorItems, itemSpot } = __m7;
-const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
+const { createSim, step, runCarry, TICK, BURN_S, JAR_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
 const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m16;
 const { createAudio } = __m17;
 const { runScript, createAutopilot, SELFTEST_CODE } = __m18;
@@ -5414,6 +5462,7 @@ function driveTouch(copied) {
   difficultyLeg(g, { need, click, press, offEntry });
   coinLeg(g, { need, click });
   splashLeg(g, { need, click, press });
+  oilLeg(g, { need, click });
 
   // Leave the self-test script's run paused on screen for the screenshot.
   setDifficulty(g, 'hard');
@@ -5596,17 +5645,63 @@ function firstCoin(world) {
 }
 
 /**
- * Walks the run to the dead-end cell of `coin`, then toward its spot until the
- * feet come within 12 px of it, as the sim tests contact. Throws `touch ...`
- * when the walk runs out of ticks.
+ * Walks the run to the dead-end cell of `item`, then toward its spot until the
+ * feet come within 12 px of it, as the sim tests contact. `seen` runs after
+ * each tick. Throws `touch ...` when the walk runs out of ticks.
  */
-function walkToCoin(g, { bd, cell }) {
+function walkToCoin(g, { bd, cell }, seen = () => {}, what = 'coin') {
   const [sx, sy] = itemSpot(bd, cell);
   const side = Math.sign(sx - nodeXY(bd, cell)[0]);
   const auto = createAutopilot(g.world, [{ x: bd.x, y: bd.y, cell }]);
   const here = (s) => s.bd.x === bd.x && s.bd.y === bd.y && s.cell === cell && s.mode === 'floor';
   const near = () => { const [fx, fy] = feet(g.sim); return Math.abs(fx - sx) <= 12 && Math.abs(fy - sy) <= 12; };
-  runTicks(g, (s) => (here(s) ? [side, 0, false] : auto(s)), near, 20000, 'the walk reaches the coin');
+  runTicks(g, (s) => (here(s) ? [side, 0, false] : auto(s)), near, 20000, `the walk reaches the ${what}`, seen);
+}
+
+/** The oil jars of tomb (0, 0), board by board in index order, as { bd, cell }. */
+function tombJars(world) {
+  const out = [];
+  for (let i = 0; i < world.size.w * world.size.h; i++) {
+    const { x, y } = boardCoords(0, 0, i, world.size);
+    const bd = world.board(x, y);
+    for (const it of floorItems(world, bd)) if (it.kind === 'oil') out.push({ bd, cell: it.cell });
+  }
+  return out;
+}
+
+/** The oil steps of the touch leg, from the title with no run open. */
+function oilLeg(g, { need, click }) {
+  setDifficulty(g, 'medium');
+  useCode(g, SELFTEST_CODE);
+  const jars = tombJars(g.world);
+  need(jars.length >= 2, 'tomb (0, 0) holds two oil jars at MEDIUM');
+  // Each step walks a new run to one jar and sets the burn on the first tick
+  // the explorer stands on the jar's cell. The contact tick then burns one TICK
+  // and adds the jar.
+  const take = (jar, burn) => {
+    g.screen = 'title';
+    draw(g, 0);
+    click('title', 'begin');
+    const id = coinId(jar.bd, jar.cell);
+    let before = null, set = false, delta = null;
+    walkToCoin(g, jar, () => {
+      const s = g.sim;
+      if (before !== null && delta === null && s.jars.has(id)) delta = s.burn - before;
+      if (!set && s.bd === jar.bd && s.cell === jar.cell) { s.burn = burn; set = true; }
+      before = s.burn;
+    }, 'oil jar');
+    return { delta, after: g.sim.burn };
+  };
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+  // Step 1: burn 100 s takes the jar's 60 s.
+  const one = take(jars[0], 100);
+  need(one.delta !== null && near(one.delta, JAR_S - TICK), 'touching the first oil jar at 100 s adds 60 s');
+
+  // Step 2: burn 280 s caps at full.
+  const two = take(jars[1], 280);
+  need(two.delta !== null && near(two.after, BURN_S - TICK), 'touching the second oil jar at 280 s caps the burn at full');
+  draw(g, 0);
 }
 
 /** The coin steps of the touch leg, from the title with no run open. */

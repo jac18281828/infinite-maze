@@ -671,6 +671,18 @@ export const COIN = [
   '..kk..',
 ];
 
+// Floor oil jar, 7x8 in umber and ochre with a dark mouth.
+export const JAR = [
+  '..666..',
+  '.60006.',
+  '..767..',
+  '.78887.',
+  '7888887',
+  '7888887',
+  '6788876',
+  '.66666.',
+];
+
 export const FLAME = [
   [
     '......j.....',
@@ -794,7 +806,7 @@ export function artSets() {
   return {
     explorer: Object.values(EXPLORER).flat(),
     rock: ROCK, wall: WALL, glyphs: GLYPHS, ladder: [LADDER], sconce: [SCONCE],
-    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], coin: [COIN], flame: FLAME, torch: TORCH,
+    sconceFlame: SCONCE_FLAME, sign: SIGNS, brazier: [BRAZIER], coin: [COIN], jar: [JAR], flame: FLAME, torch: TORCH,
     font: Object.values(FONT_ROWS),
   };
 }

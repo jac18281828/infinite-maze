@@ -8,6 +8,7 @@ import { BW, NCELL, DX } from './board.mjs';
 // so two items never share a cell.
 export const FLOOR_ITEMS = [
   { kind: 'coin', tag: 'coin', percent: 5 },
+  { kind: 'oil', tag: 'oil', percent: 10 },
 ];
 
 // Board geometry in world pixels, as the game's nodeXY lays it out: a cell is

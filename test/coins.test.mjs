@@ -72,7 +72,8 @@ test('a sim climbing two tombs along the way on counts 2, and a sim built from i
 function coinsByLink(d, per) {
   const count = new Map(), out = [];
   for (const bd of sample(d, 3)) {
-    for (const { cell } of floorItems(worlds[d], bd)) {
+    for (const { cell, kind } of floorItems(worlds[d], bd)) {
+      if (kind !== 'coin') continue;
       const link = Math.log2(bd.links[cell]);
       if ((count.get(link) || 0) >= per) continue;
       count.set(link, (count.get(link) || 0) + 1);

@@ -35,7 +35,9 @@ and no assets.
   desktop. The pause map shows the explorer's tomb; panning needs a keyboard.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
-  reach a flame in that time or the run ends.
+  reach a flame in that time or the run ends. Oil jars lie on about one dead
+  end in ten; touch one to add 60 s of burn, up to a full torch, or to relight
+  an ember. They return on every new run.
 - Some junctions on a route carry a carved arrow in the upper corner of the
   room, pointing along the link toward the way on; they are always on and
   about 1 in 6 at EASY, 1 in 8 at MEDIUM and 1 in 12 at HARD.

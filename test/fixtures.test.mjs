@@ -4,7 +4,7 @@ import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import { createSim, nodeXY } from '../src/game/sim.mjs';
-import { RGB, idx, SIGNS, SCONCE_FLAME, COIN } from '../src/game/art.mjs';
+import { RGB, idx, SIGNS, SCONCE_FLAME, COIN, JAR } from '../src/game/art.mjs';
 import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import {
   fixtureSets, ladderPixels, sconcePixels, signPixels, signSpot, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
@@ -433,12 +433,13 @@ test('the renderer draws the motes of its world position, whatever the explorer 
 // Floor coins and the wallet.
 const coinSprite = spriteCanvas(COIN);
 const isCoin = ([src]) => src.width === 6 && src.height === 6 && Buffer.from(src.data).equals(Buffer.from(coinSprite.data));
-const coinBoard = boards.find(({ bd }) => floorItems(world, bd).length > 1);
+const coinsOf = (bd) => floorItems(world, bd).filter((it) => it.kind === 'coin');
+const coinBoard = boards.find(({ bd }) => coinsOf(bd).length > 1);
 
 test('a scene draws the coin sprite at each uncollected coin\'s floor point, and none for a collected one', () => {
   assert.ok(coinBoard, 'the sample holds a board with coins');
   const { bd } = coinBoard;
-  for (const { cell } of floorItems(world, bd)) {
+  for (const { cell } of coinsOf(bd)) {
     const [wx, wy] = itemSpot(bd, cell);
     const cam = { x: wx, y: wy + 18 };
     const cx = Math.round(cam.x), cy = Math.round(cam.y);
@@ -456,6 +457,37 @@ test('a scene draws the coin sprite at each uncollected coin\'s floor point, and
     assert.ok(coin >= 0 && lit > coin, `coin draw ${coin} precedes the light map draw ${lit}`);
     taken.add(`${bd.x},${bd.y},${cell}`);
     assert.ok(!drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `collected coin at cell ${cell} is gone`);
+  }
+});
+
+// Floor oil jars.
+const jarSprite = spriteCanvas(JAR);
+const isJar = ([src]) => src.width === 7 && src.height === 8 && Buffer.from(src.data).equals(Buffer.from(jarSprite.data));
+const jarsOf = (bd) => floorItems(world, bd).filter((it) => it.kind === 'oil');
+const jarBoard = boards.find(({ bd }) => jarsOf(bd).length > 1);
+
+test('a scene draws the jar sprite at each untaken jar\'s floor point, before the light map, and none for a taken one', () => {
+  assert.ok(jarBoard, 'the sample holds a board with jars');
+  const { bd } = jarBoard;
+  for (const { cell } of jarsOf(bd)) {
+    const [wx, wy] = itemSpot(bd, cell);
+    const cam = { x: wx, y: wy + 18 };
+    const cx = Math.round(cam.x), cy = Math.round(cam.y);
+    // The 7x8 sprite rests on the floor point: bottom row at the point's pixel row.
+    const want = [Math.round(wx) - cx + 160 - 3, cy - Math.round(wy) + 90 - 8];
+    const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isJar).map(([, x, y]) => [x, y]); };
+    const sim = createSim(world, { board: bd, cell: bd.a });
+    assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `jar at cell ${cell} drawn at ${want}`);
+    assert.ok(drawn(null).some(([x, y]) => x === want[0] && y === want[1]), 'a scene with no explorer draws it too');
+    renderBoard(bd, sim, cam, 0);
+    const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
+    const jar = view.draws.findIndex(isJar);
+    assert.ok(jar >= 0 && lit > jar, `jar draw ${jar} precedes the light map draw ${lit}`);
+    sim.jars.add(`${bd.x},${bd.y},${cell}`);
+    assert.ok(!drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `taken jar at cell ${cell} is gone`);
+    // A collected coin key never hides a jar: the two sets are separate.
+    const other = createSim(world, { board: bd, cell: bd.a }, null, { collected: new Set([`${bd.x},${bd.y},${cell}`]) });
+    assert.ok(drawn(other).some(([x, y]) => x === want[0] && y === want[1]), 'the coin set does not take the jar');
   }
 });
 

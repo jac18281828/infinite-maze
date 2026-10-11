@@ -284,7 +284,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin or splash rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, splash or oil rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -297,7 +297,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     const zoomable = html.replace('stopDoubleTapZoom();', '');
     assert.equal(html.split('stopDoubleTapZoom();').length, 2);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
-    // Each difficulty, pause-key, coin and splash rule broken in turn: [from, to, the leg's first miss].
+    // Each difficulty, pause-key, coin, splash and oil rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
@@ -325,6 +325,8 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["if (e.key === 'Enter') {\n    g.splash = null;", "if (e.key === 'Enter' || e.code === 'KeyP') {\n    g.splash = null;", /^fail: touch P leaves the splash showing/],
       ['const first = Math.floor(record / MILESTONE) + 1;', 'const first = last;', /^fail: touch a second crossing of tomb 100 pays nothing/],
       ['g.splash = null;\n    leaveOpen(g);', "g.splash = null;\n    g.screen = 'title';\n    titleCam(g);", /^fail: touch Q reaches the title with the run open/],
+      ["if (kind !== 'oil') continue;", 'continue;', /^fail: touch touching the first oil jar at 100 s adds 60 s/],
+      ['s.burn = Math.min(BURN_S, s.burn + JAR_S);', 's.burn += JAR_S;', /^fail: touch touching the second oil jar at 280 s caps the burn at full/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

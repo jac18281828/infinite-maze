@@ -2,7 +2,7 @@
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
-  BRAZIER, COIN, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS,
+  BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, SIGNS,
 } from './art.mjs';
 import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
 import { BW, BH, DX, DY } from '../world/board.mjs';
@@ -80,6 +80,7 @@ export function createRenderer(canvas, world) {
   const sconceFlames = SCONCE_FLAME.map((f) => spriteCanvas(f));
   const brazier = spriteCanvas(BRAZIER);
   const coin = spriteCanvas(COIN);
+  const jar = spriteCanvas(JAR);
   const flames = FLAME.map((f) => spriteCanvas(f));
   const torches = TORCH.map((f) => spriteCanvas(f));
   const ember = spriteCanvas(['.n.', 'nop', '.n.']);
@@ -297,14 +298,20 @@ export function createRenderer(canvas, world) {
     return lit;
   }
 
-  /** Draws the coins of the lit boards that `collected` (a set of coin keys) lacks, resting on the floor. */
-  function drawItems(lit, sx, sy, collected) {
+  /**
+   * Draws the items of the lit boards resting on the floor: the coins that
+   * `collected` (a set of coin keys) lacks and the jars that `jars` (the run's
+   * taken set) lacks.
+   */
+  function drawItems(lit, sx, sy, collected, jars) {
     for (const [bx, by] of lit) {
       const bd = world.board(bx, by);
       for (const { cell, kind } of floorItems(world, bd)) {
-        if (kind !== 'coin' || (collected && collected.has(coinId(bd, cell)))) continue;
+        const taken = kind === 'coin' ? collected : jars;
+        if (taken && taken.has(coinId(bd, cell))) continue;
         const [x, y] = itemSpot(bd, cell);
-        ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
+        if (kind === 'coin') ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
+        else ctx.drawImage(jar, Math.round(sx(x)) - 3, Math.round(sy(y)) - 8);
       }
     }
   }
@@ -378,7 +385,7 @@ export function createRenderer(canvas, world) {
     acc.fill(0);
     drawBackground(cx, cy);
     const lit = drawBoards(cx, cy, sx, sy);
-    drawItems(lit, sx, sy, sim ? sim.collected : null);
+    drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
