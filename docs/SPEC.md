@@ -733,11 +733,11 @@ east of a ladder, which keeps it off the corridor mouth, the ladder shaft and
 the stair. The scene draws it after the boards and before the light map, so
 the torch, sconces and flames light it and it is dark where they are. It is
 never baked into the board art, and a collected coin is not drawn. The HUD
-shows the wallet under `TOMB n` at the top right: the coin sprite, then the
-count right-aligned at x 315 with its top row at y 14, growing leftward. The
-end screen has a row `COINS n` inside its panel: every coin this run earned in
-this tab, from the floor and from tombs; coins another tab merges raise the
-wallet but not this row. The count carries through
+shows the wallet under `TOMB n` at the top right: the coin sprite, one space
+after it, then the count right-aligned at x 315 with its top row at y 14,
+growing leftward. The end screen has a row `COINS n` inside its panel: every
+coin this run earned in this tab, from the floor and from tombs; coins another
+tab merges raise the wallet but not this row. The count carries through
 Continue and through pause, title and resume of the open run, and restarts on
 BEGIN, on RESUME from a stored save and on a typed code.
 

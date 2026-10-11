@@ -500,7 +500,7 @@ export function createRenderer(canvas, world) {
     text(`TOMB ${sim.solved.size}`, VIEW_W - 5, 5, 'm', { align: 'right' });
     const count = String(wallet);
     text(count, VIEW_W - 5, 14, 'm', { align: 'right' });
-    ctx.drawImage(coin, VIEW_W - 5 - (count.length * (FONT_W + 1) - 1) - 2 - 6, 14);
+    ctx.drawImage(coin, VIEW_W - 5 - (count.length * (FONT_W + 1) - 1) - 2 * (FONT_W + 1), 14);
   }
 
   /** Draws board outline `o` in the current fill, open at each crossed door. */

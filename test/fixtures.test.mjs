@@ -1056,9 +1056,15 @@ test('hud draws the wallet under TOMB n: the coin sprite, then the count right-a
     const coins = view.draws.filter(isCoin);
     const width = String(wallet).length * 6 - 1;
     assert.equal(coins.length, 1);
-    assert.deepEqual(coins[0].slice(1), [315 - width - 2 - 6, 14]);
+    assert.deepEqual(coins[0].slice(1), [315 - width - 12, 14]);
     // One glyph per digit, 6 px apart, the last ending at x 315.
     const glyphs = view.draws.filter((d) => d.length === 5 && d[2] === 14).map((d) => d[1]);
     assert.deepEqual(glyphs, Array.from(String(wallet), (_, i) => 315 - width + 6 * i));
   }
+  // Under TOMB 0 the coin's left edge is B's: the fourth glyph of the row at y 5.
+  view.draws.length = 0;
+  renderer.hud(sim, 7);
+  const tomb = view.draws.filter((d) => d.length === 5 && d[2] === 5 && d[1] > 200);
+  assert.equal(tomb.length, 6, 'TOMB 0 draws six glyphs');
+  assert.equal(view.draws.find(isCoin)[1], tomb[3][1]);
 });
