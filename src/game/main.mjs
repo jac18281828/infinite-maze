@@ -12,8 +12,8 @@ import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
-  COIN_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
-  serializeCollected, serializePaid, serializeTombs,
+  COIN_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitCoins, parseWallet, parseIdSets, parsePaid,
+  serializeIdSets, serializePaid, COIN_ID, TOMB_ID,
 } from './wallet.mjs';
 import { createGamepad } from './gamepad.mjs';
 import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
@@ -112,8 +112,6 @@ function writeSave(g, text) {
   store(KEY_SAVE_DIFFICULTY, g.world.difficulty);
   store(KEY_SAVE_RUN, JSON.stringify({ save: text, start: `${start.u},${start.v}`, solved: [...solved] }));
 }
-
-const TOMB_ID = /^-?\d+,-?\d+$/;
 
 /** The run stored with the stored save, as { start: { u, v }, solved: Set }, or null when absent, malformed or another save's. */
 function storedRun() {
@@ -512,6 +510,7 @@ function driveTouch(copied, fake) {
 
   difficultyLeg(g, { need, click, press, offEntry });
   coinLeg(g, { need, click });
+  twoGamesLeg(g, { need, click });
   splashLeg(g, { need, click, press });
   resumeLeg(g, { need, click });
   oilLeg(g, { need, click });
@@ -702,9 +701,18 @@ function walkOut(g, n, doomAt = 0) {
 /** Stores the wallet, the collected set, the solved tombs and the payout record, as the game does on each change. */
 function keepCoins(g) {
   store(KEY_WALLET, String(g.wallet));
-  store(KEY_COINS, serializeCollected(g.coins));
-  store(KEY_TOMBS, serializeTombs(g.tombs));
+  store(KEY_COINS, serializeIdSets(g.coins));
+  store(KEY_TOMBS, serializeIdSets(g.tombs));
   store(KEY_PAID, serializePaid(g.paid));
+}
+
+/** Empties the wallet, the collected set, the solved tombs and the record, in memory and in storage. */
+function clearCoins(g) {
+  g.wallet = 0;
+  g.coins = new Map();
+  g.tombs = new Map();
+  g.paid = new Map();
+  keepCoins(g);
 }
 
 /**
@@ -854,16 +862,9 @@ function coinLeg(g, { need, click }) {
     setDifficulty(g, d);
     useCode(g, SELFTEST_CODE);
   };
-  const clearCoins = () => {
-    g.wallet = 0;
-    g.coins = new Map();
-    g.tombs = new Map();
-    g.paid = new Map();
-    keepCoins(g);
-  };
 
   // Step 1: the first coin of tomb (0, 0) at MEDIUM.
-  clearCoins();
+  clearCoins(g);
   onLevel('medium');
   g.screen = 'title';
   draw(g, 0);
@@ -916,7 +917,7 @@ function coinLeg(g, { need, click }) {
   }
 
   // Step 5: the coins earned this run equal the wallet's gain since BEGIN.
-  clearCoins();
+  clearCoins(g);
   onLevel('medium');
   g.screen = 'title';
   draw(g, 0);
@@ -934,15 +935,21 @@ function coinLeg(g, { need, click }) {
   oneTombOn(g, 1);
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
   draw(g, 0);
+}
 
-  // Step 6: a second game, made before the first one's write, earns after it; the merge keeps both.
-  clearCoins();
-  onLevel('medium');
+/** The two-games step of the touch leg, from the title with no run open. */
+function twoGamesLeg(g, { need, click }) {
+  const key = coinKey(SELFTEST_CODE, 'medium');
+  // A second game, made before the first one's write, earns after it; the merge keeps both.
+  clearCoins(g);
+  setDifficulty(g, 'medium');
+  useCode(g, SELFTEST_CODE);
   g.screen = 'title';
   draw(g, 0);
   click('title', 'begin');
+  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell);
   const other = createGame();
-  walkToItem(g, firstCoin(g.world));
+  walkToItem(g, coin);
   const second = '9,9,9';
   useCode(other, SELFTEST_CODE);
   collectedSet(other).add(second);
@@ -1135,8 +1142,8 @@ function writeBest(code, difficulty, solved) {
 /** The wallet, the collected set, the solved tombs and the payout record as stored; absent or malformed reads as empty. */
 function readCoinState() {
   return {
-    wallet: parseWallet(load(KEY_WALLET)), coins: parseCollected(load(KEY_COINS)),
-    tombs: parseTombs(load(KEY_TOMBS)), paid: parsePaid(load(KEY_PAID)),
+    wallet: parseWallet(load(KEY_WALLET)), coins: parseIdSets(load(KEY_COINS), COIN_ID),
+    tombs: parseIdSets(load(KEY_TOMBS), TOMB_ID), paid: parsePaid(load(KEY_PAID)),
   };
 }
 
@@ -1151,7 +1158,7 @@ function collectedSet(g) {
   return set;
 }
 
-/** Every coin write goes through the merge, which adds only what storage lacks. */
+/** The storage pair every coin write goes through, in `commitCoins`. */
 const coinIo = { load, store };
 
 /** The entries a set gained after it held `before`; a Set iterates in insertion order. */
@@ -1471,7 +1478,7 @@ function tick(g) {
   const s = g.sim;
   const was = tombCount(s), took = s.collected.size;
   stepSim(g);
-  // Read before any commit, which merges stored ids into these sets.
+  // Read before any commit, which merges stored ids into s.collected.
   const taken = appended(s.collected, took), solvedNow = appended(s.solved, was);
   handleEvents(g);
   if (taken.length) collectCoin(g, taken);
@@ -1678,5 +1685,5 @@ function boot() {
   return g;
 }
 
-if (location.hash === '#selftest') selftest();
+if (SELFTEST) selftest();
 else boot();

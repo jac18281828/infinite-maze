@@ -127,7 +127,7 @@ function onWayOn(s, u, v) {
 
 /**
  * The run's tomb count: the tombs solved on its way on, which the HUD shows as
- * TOMB n. Coin code reads the count here and nowhere else.
+ * TOMB n. main.mjs reads `s.solved` for the tomb pay.
  */
 export function tombCount(s) {
   return s.solved.size;

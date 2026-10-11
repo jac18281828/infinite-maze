@@ -1,15 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DIFFICULTIES } from '../src/world/band.mjs';
 import { worlds, sample } from './sample.mjs';
 import { DX, DY } from '../src/world/board.mjs';
 import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
-  COIN_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitCoins, parseWallet, parseCollected, parsePaid, parseTombs,
-  serializeCollected, serializePaid, serializeTombs,
+  COIN_KEYS, COIN_RATE, COIN_ID, TOMB_ID, coinKey, coinId, coinPay, tombPay, commitCoins, parseWallet, parseIdSets, parsePaid,
+  serializeIdSets, serializePaid,
 } from '../src/game/wallet.mjs';
 
 test('the level rates are 1, 2, 5 and 10', () => {
@@ -19,14 +18,14 @@ test('the level rates are 1, 2, 5 and 10', () => {
 test('the wallet, the collected set and the payout record read absent or malformed storage as empty', () => {
   assert.equal(parseWallet('12'), 12);
   for (const bad of [null, '', 'x', '-3', '1.5', '1e3', '9007199254740993']) assert.equal(parseWallet(bad), 0, String(bad));
-  const set = parseCollected('{"K7Q2M9XA:MEDIUM":["0,0,21","-1,2,5","junk",7],"A:EASY":"no"}');
+  const set = parseIdSets('{"K7Q2M9XA:MEDIUM":["0,0,21","-1,2,5","junk",7],"A:EASY":"no"}', COIN_ID);
   assert.deepEqual([...set.get('K7Q2M9XA:MEDIUM')], ['0,0,21', '-1,2,5']);
   assert.deepEqual([...set.get('A:EASY') ?? []], []);
-  for (const bad of [null, '', '{', '[]', '3', 'null']) assert.equal(parseCollected(bad).size, 0, String(bad));
+  for (const bad of [null, '', '{', '[]', '3', 'null']) assert.equal(parseIdSets(bad, COIN_ID).size, 0, String(bad));
   const paid = parsePaid('{"K7Q2M9XA:HARD":4,"B:EASY":-1,"C:EASY":"2","D:EASY":1.5}');
   assert.deepEqual([...paid], [['K7Q2M9XA:HARD', 4]]);
   for (const bad of [null, '', '{not json', '[1]']) assert.equal(parsePaid(bad).size, 0, String(bad));
-  assert.deepEqual(parseCollected(serializeCollected(set)).get('K7Q2M9XA:MEDIUM'), set.get('K7Q2M9XA:MEDIUM'));
+  assert.deepEqual(parseIdSets(serializeIdSets(set), COIN_ID).get('K7Q2M9XA:MEDIUM'), set.get('K7Q2M9XA:MEDIUM'));
   assert.deepEqual([...parsePaid(serializePaid(paid))], [...paid]);
   assert.equal(coinKey('K7Q2M9XA', 'medium'), 'K7Q2M9XA:MEDIUM');
 });
@@ -38,12 +37,12 @@ test('the coin keys, and the solved tombs read absent or malformed storage as em
     paid: 'infinite-maze.plane.coins.paid',
     tombs: 'infinite-maze.plane.coins.tombs',
   });
-  const tombs = parseTombs('{"K7Q2M9XA:MEDIUM":["0,0","-2,19","1,2,3","x","0,0,",7,"3,-4"],"A:EASY":"no"}');
+  const tombs = parseIdSets('{"K7Q2M9XA:MEDIUM":["0,0","-2,19","1,2,3","x","0,0,",7,"3,-4"],"A:EASY":"no"}', TOMB_ID);
   assert.deepEqual([...tombs.get('K7Q2M9XA:MEDIUM')], ['0,0', '-2,19', '3,-4']);
   assert.deepEqual([...tombs.get('A:EASY') ?? []], []);
-  for (const bad of [null, '', '{', '[]', '3', 'null']) assert.equal(parseTombs(bad).size, 0, String(bad));
-  assert.deepEqual(parseTombs(serializeTombs(tombs)).get('K7Q2M9XA:MEDIUM'), tombs.get('K7Q2M9XA:MEDIUM'));
-  assert.equal(serializeTombs(new Map([['K:EASY', new Set()], ['K:HARD', new Set(['1,1'])]])), '{"K:HARD":["1,1"]}');
+  for (const bad of [null, '', '{', '[]', '3', 'null']) assert.equal(parseIdSets(bad, TOMB_ID).size, 0, String(bad));
+  assert.deepEqual(parseIdSets(serializeIdSets(tombs), TOMB_ID).get('K7Q2M9XA:MEDIUM'), tombs.get('K7Q2M9XA:MEDIUM'));
+  assert.equal(serializeIdSets(new Map([['K:EASY', new Set()], ['K:HARD', new Set(['1,1'])]])), '{"K:HARD":["1,1"]}');
 });
 
 /** A Map-backed storage, and the coin state a game would read from it. */
@@ -52,8 +51,8 @@ const memoryIo = () => {
   return { m, load: (k) => (m.has(k) ? m.get(k) : null), store: (k, v) => { m.set(k, v); } };
 };
 const readState = (io) => ({
-  wallet: parseWallet(io.load(COIN_KEYS.wallet)), coins: parseCollected(io.load(COIN_KEYS.coins)),
-  tombs: parseTombs(io.load(COIN_KEYS.tombs)), paid: parsePaid(io.load(COIN_KEYS.paid)),
+  wallet: parseWallet(io.load(COIN_KEYS.wallet)), coins: parseIdSets(io.load(COIN_KEYS.coins), COIN_ID),
+  tombs: parseIdSets(io.load(COIN_KEYS.tombs), TOMB_ID), paid: parsePaid(io.load(COIN_KEYS.paid)),
 });
 /** The tick of a game taking coin `id`: the sim adds it to the run's Set, then the game commits. */
 function takeCoin(io, state, key, id) {
@@ -157,7 +156,7 @@ test('10,000 solved tombs under one key serialize to at most 130,100 characters'
   const ids = new Set();
   for (let i = 0; ids.size < 10000; i++) ids.add(`${(i % 1999) - 999},${99999 - Math.floor(i / 1999)}`);
   assert.equal(ids.size, 10000);
-  const text = serializeTombs(new Map([['K7Q2M9XA:MEDIUM', ids]]));
+  const text = serializeIdSets(new Map([['K7Q2M9XA:MEDIUM', ids]]));
   assert.ok(text.length <= 130100, `${text.length} characters`);
 });
 

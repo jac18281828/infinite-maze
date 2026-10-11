@@ -83,9 +83,9 @@ first entry. **R** rolls a new world. **T** takes a typed seed or save code.
 left by pause, or the last save at its own difficulty. Esc is its alias
 outside full screen. **K** copies the save code shown, or the seed code. The
 end screen's **C** copies its save code. The game keeps that save with its
-difficulty, the run's solved tombs, so RESUME continues `TOMB n`, the setting
-and the most tombs solved per seed and difficulty in `localStorage`, and runs
-without them where storage is blocked.
+difficulty, the run's solved tombs, the setting and the most tombs solved per
+seed and difficulty in `localStorage`, and runs without them where storage is
+blocked. The solved tombs let RESUME continue `TOMB n`.
 
 ## Save codes
 

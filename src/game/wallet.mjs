@@ -52,19 +52,24 @@ export function parseWallet(text) {
   return isCount(n) ? n : 0;
 }
 
-/** The collected set as Map(key -> Set("x,y,cell")); malformed input reads as empty. */
-export function parseCollected(text) {
+/** The pattern of a coin id in a collected set: "x,y,cell". */
+export const COIN_ID = /^-?\d+,-?\d+,\d+$/;
+/** The pattern of a tomb id in a solved set or a run: "u,v". */
+export const TOMB_ID = /^-?\d+,-?\d+$/;
+
+/** An id-set store as Map(key -> Set(id)), keeping the ids that match `pattern`; malformed input reads as empty. */
+export function parseIdSets(text, pattern) {
   const out = new Map();
   for (const [key, list] of parseObject(text)) {
     if (!Array.isArray(list)) continue;
-    out.set(key, new Set(list.filter((id) => typeof id === 'string' && /^-?\d+,-?\d+,\d+$/.test(id))));
+    out.set(key, new Set(list.filter((id) => typeof id === 'string' && pattern.test(id))));
   }
   return out;
 }
 
-export function serializeCollected(collected) {
+export function serializeIdSets(sets) {
   const out = {};
-  for (const [key, set] of collected) if (set.size) out[key] = [...set];
+  for (const [key, set] of sets) if (set.size) out[key] = [...set];
   return JSON.stringify(out);
 }
 
@@ -77,22 +82,6 @@ export function parsePaid(text) {
 
 export function serializePaid(paid) {
   return JSON.stringify(Object.fromEntries(paid));
-}
-
-/** The tombs paid as Map(key -> Set("u,v")); malformed input reads as empty. */
-export function parseTombs(text) {
-  const out = new Map();
-  for (const [key, list] of parseObject(text)) {
-    if (!Array.isArray(list)) continue;
-    out.set(key, new Set(list.filter((id) => typeof id === 'string' && /^-?\d+,-?\d+$/.test(id))));
-  }
-  return out;
-}
-
-export function serializeTombs(tombs) {
-  const out = {};
-  for (const [key, set] of tombs) if (set.size) out[key] = [...set];
-  return JSON.stringify(out);
 }
 
 /**
@@ -116,13 +105,13 @@ export function coinPay(key, ids) {
  */
 export function tombPay(key, level, solvedNow, count) {
   const pay = (state) => {
-    let paid = state.tombs.get(key);
-    if (!paid) state.tombs.set(key, (paid = new Set()));
+    let tombs = state.tombs.get(key);
+    if (!tombs) state.tombs.set(key, (tombs = new Set()));
     const record = state.paid.get(key) || 0;
     let due = 0;
     for (const id of solvedNow) {
-      if (!paid.has(id)) {
-        paid.add(id);
+      if (!tombs.has(id)) {
+        tombs.add(id);
         due += COIN_RATE[level];
       }
     }
@@ -155,8 +144,8 @@ function unionInto(into, from) {
 export function commitCoins(io, state, pay) {
   const stored = {
     wallet: parseWallet(io.load(COIN_KEYS.wallet)),
-    coins: parseCollected(io.load(COIN_KEYS.coins)),
-    tombs: parseTombs(io.load(COIN_KEYS.tombs)),
+    coins: parseIdSets(io.load(COIN_KEYS.coins), COIN_ID),
+    tombs: parseIdSets(io.load(COIN_KEYS.tombs), TOMB_ID),
     paid: parsePaid(io.load(COIN_KEYS.paid)),
   };
   state.wallet = Math.max(state.wallet, stored.wallet);
@@ -166,8 +155,8 @@ export function commitCoins(io, state, pay) {
   const earned = pay(state, stored);
   state.wallet += earned;
   io.store(COIN_KEYS.wallet, String(state.wallet));
-  io.store(COIN_KEYS.coins, serializeCollected(state.coins));
-  io.store(COIN_KEYS.tombs, serializeTombs(state.tombs));
+  io.store(COIN_KEYS.coins, serializeIdSets(state.coins));
+  io.store(COIN_KEYS.tombs, serializeIdSets(state.tombs));
   io.store(COIN_KEYS.paid, serializePaid(state.paid));
   return earned;
 }
