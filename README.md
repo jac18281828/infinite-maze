@@ -112,11 +112,17 @@ draws as maze rather than rock. The self-test then sets `data-selftest` on
 
 Every push to main deploys. `.github/workflows/ci-cd.yml` runs the gates,
 then, for `main` only, deploys `StackMaze2adCom`, uploads `infinite-maze.html`
-as `index.html` and invalidates CloudFront. Pull requests run the gates alone,
+as `index.html`, removes every play-test build under `beta/` and invalidates
+CloudFront. Pull requests run the gates alone,
 with no AWS credentials. The game is served at https://maze.2ad.com from a
 private S3 bucket behind CloudFront. `cdk/` defines the bucket, certificate,
 distribution and DNS records in the shared `2ad.com` zone, which the stack
 imports read-only.
+
+A trial build for a phone play-test goes to `beta/<name>.html` in the bucket,
+copied by hand, and is served at `https://maze.2ad.com/beta/<name>.html` until
+the next deploy removes it. It shares the live game's origin, and with it the
+wallet, saves and records in local storage.
 
 The workflow signs in through OIDC as `GithubDeployCI`. One-time setup outside
 this repo: the role must trust
