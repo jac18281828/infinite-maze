@@ -3,12 +3,13 @@
 import { createWorld, boardOfPos } from '../world/world.mjs';
 import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
-import { createSim, step, TICK, BURN_S, KEY, feet, pose } from './sim.mjs';
+import { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, SELFTEST_CODE } from './autopilot.mjs';
 import { createTouch, layout, viewport } from './touch.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
+import { frameOf, panFrame, mapModel } from './map.mjs';
 
 const KEY_SAVE = 'infinite-maze.save';
 const KEY_BEST = 'infinite-maze.best';
@@ -90,6 +91,8 @@ function selftest() {
     snapCam(cam, sim);
     r.scene(sim, cam, 0);
     r.hud(sim);
+    // Draws the pause screen over the scene, so a draw-time error fails the gate.
+    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd), pauseMap: null });
     present();
     const px = view.getContext('2d').getImageData(0, 0, VIEW_W, VIEW_H).data;
     const colours = new Set();
@@ -265,6 +268,15 @@ function driveTouch(copied) {
   offEntry();
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
+  need(g.frame === g.sim.bd.band, 'PAUSE frames the explorer\'s band');
+  const arrow = (code, repeat = false) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key: code, repeat, bubbles: true, cancelable: true }));
+  arrow('ArrowUp');
+  need(g.frame === g.sim.bd.band + 1, 'Up pans one band up');
+  arrow('ArrowUp', true);
+  arrow('ArrowLeft');
+  need(g.frame === g.sim.bd.band + 1, 'a held Up and a Left pan nothing');
+  arrow('KeyS');
+  need(g.frame === g.sim.bd.band, 'S pans one band down');
   toggles('pause');
   copies('pause', hereCode(g));
   click('pause', 'resume');
@@ -282,17 +294,23 @@ function driveTouch(copied) {
   endRun(g);
   draw(g, 0);
   copies('over', entryCode(g));
+  const trail = g.sim.trail;
   click('over', 'continue');
   need(g.screen === 'play', 'the end screen CONTINUE reaches play');
+  need(g.sim.trail === trail, 'CONTINUE keeps the trail');
   endRun(g);
   draw(g, 0);
   click('over', 'title');
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
 
-  // Leave a run on screen for the screenshot.
-  click('title', 'begin');
-  need(g.screen === 'play', 'BEGIN reaches play again');
+  // Leave the self-test script's run paused on screen for the screenshot.
+  useCode(g, SELFTEST_CODE);
+  g.sim = runScript(g.world).sim;
+  snapCam(g.cam, g.sim);
+  g.screen = 'play';
   g.keys.clear();
+  press('Escape', 'Escape');
+  need(g.screen === 'pause' && g.frame === frameOf(g.sim.bd), 'Esc pauses on the explorer\'s band');
   draw(g, 0);
 }
 
@@ -321,6 +339,8 @@ function createGame() {
     code: parseCode((decodeSave(load(KEY_SAVE) || '') || {}).code || '') || rollCode(),
     world: null, renderer: null, sim: null, preview: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
+    // The band the pause map frames, and its model.
+    frame: 0, pauseMap: null,
   };
 }
 
@@ -398,7 +418,13 @@ function titleKey(g, e) {
 }
 
 function playKey(g, e) {
-  if (e.key === 'Escape') { g.screen = 'pause'; store(KEY_SAVE, hereCode(g)); return; }
+  if (e.key === 'Escape') {
+    g.screen = 'pause';
+    g.frame = frameOf(g.sim.bd);
+    g.pauseMap = null;
+    store(KEY_SAVE, hereCode(g));
+    return;
+  }
   if (DIRS[e.code]) {
     g.keys.add(DIRS[e.code]);
     if (!e.repeat) g.press |= DIR_BITS[DIRS[e.code]];
@@ -414,14 +440,14 @@ function pauseKey(g, e) {
     copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => {
       if (g.screen === 'pause') g.copied = status;
     });
-  }
+  } else if (DIRS[e.code] && !e.repeat) g.frame = panFrame(g.frame, DIRS[e.code]);
 }
 
 function overKey(g, e) {
   const s = g.sim;
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) {
     g.copied = '';
-    begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
+    begin(g, s.lastEntry, runCarry(s));
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => {
@@ -517,14 +543,27 @@ function drawTitle(g, t) {
   r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
-function drawPause(g) {
+/** The pause map's model for the frame, rebuilt when the frame changes. */
+function pauseModel(g) {
+  if (!g.pauseMap || g.pauseMap.b !== g.frame) {
+    const at = { bd: g.sim.bd, cell: g.sim.cell };
+    g.pauseMap = { b: g.frame, model: mapModel(g.world, g.sim.trail, g.frame, at) };
+  }
+  return g.pauseMap.model;
+}
+
+// The panel spans y 2..177; its rules leave y 5..174 for rows at least 4 px apart.
+function drawPause(g, t = 0) {
   const r = g.renderer;
-  r.panel(50, 44, 220, 92);
-  r.text('PAUSED', VIEW_W / 2, 54, 'm', { align: 'center', scale: 2 });
-  r.text(saveLabel(g.copied), VIEW_W / 2, 78, 'a', { align: 'center' });
-  r.text(hereCode(g), VIEW_W / 2, 90, 'i', { align: 'center' });
-  r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 104, '9', { align: 'center' });
-  r.text('ESC RESUME  M MUTE  Q TITLE  C COPY', VIEW_W / 2, 120, 'b', { align: 'center' });
+  r.panel(50, 2, 220, 176);
+  r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
+  r.text(`TOMB ${g.frame}`, 267, 16, 'a', { align: 'right' });
+  r.drawMap(pauseModel(g), 52, 28, t);
+  r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
+  r.text(hereCode(g), VIEW_W / 2, 129, 'i', { align: 'center' });
+  r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });
+  r.text('ESC RESUME  UP/DOWN PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
+  r.text('M MUTE  C COPY', VIEW_W / 2, 164, 'b', { align: 'center' });
 }
 
 function drawOver(g) {
@@ -544,7 +583,7 @@ function draw(g, t) {
   } else {
     g.renderer.scene(g.sim, g.cam, t);
     g.renderer.hud(g.sim);
-    if (g.screen === 'pause') drawPause(g);
+    if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
   }
   present();

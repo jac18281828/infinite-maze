@@ -19,12 +19,15 @@ and no assets.
 - **Space or Z** jumps. In the air, Up grabs the ladder overhead or the stair
   below, and a jump onto a stair lands on it. On a ladder, a jump lets go and
   drops to the floor below; a held Up grabs again once pressed anew.
-- **Esc** pauses and shows the save code; **C** there copies it. **M** mutes.
+- **Esc** pauses and shows the map of the passages walked and the save code.
+  Up and Down (or W and S) pan the map one band per press. **C** there copies
+  the save code. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:
   BEGIN, NEW ROLL, TYPE CODE (a prompt that takes a pasted save code),
   CONTINUE, COPY, SOUND, PAUSE, RESUME and TITLE. Pressing a key switches back to
-  the keyboard layout; `#touch` on the URL forces touch on a desktop.
+  the keyboard layout; `#touch` on the URL forces touch on a desktop. The pause
+  map shows the explorer's band; panning needs a keyboard.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends.
@@ -68,8 +71,8 @@ node tools/acceptance.mjs
 `AGENTS.md` defines `WT` and `CHROME`. The acceptance harness checks bands
 -1000 to 1000 and prints the fallback-board count, the largest and 99th
 percentile flame gaps and its run time. `infinite-maze.html#selftest` boots
-seed `0000-0000` and drives 3600 ticks of scripted input. It then sets
-`data-selftest` on `<body>`.
+seed `0000-0000`, drives 3600 ticks of scripted input and draws the pause map.
+It then sets `data-selftest` on `<body>`.
 
 ## Deploy
 

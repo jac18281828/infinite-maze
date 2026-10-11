@@ -1249,7 +1249,7 @@ return { encodeSave, decodeSave };
 
 // src/game/sim.mjs
 const __m6 = (() => {
-const { DX, DY, BW } = __m2;
+const { DX, DY, BW, NCELL } = __m2;
 // Simulation: the explorer moves along the cell graph, so motion admits
 // exactly the tree's links. A jump is an air state of the current cell: on
 // the ground or in the air, the explorer leaves a cell only along a link or
@@ -1312,6 +1312,47 @@ function inputEdges(h0, v0, h1, v1) {
   return { press: b & ~a, release: a & ~b };
 }
 
+/**
+ * What the explorer has done: per board, keyed by board coordinates because
+ * `world.retain` rebuilds board objects, the cells stood on and, per cell, the
+ * directions of the links and doors it walked, each recorded at both ends.
+ */
+function createTrail() {
+  return new Map();
+}
+
+/** The trail's record of board (x, y): `stood` and `walked` per cell, or undefined. */
+function trailAt(trail, x, y) {
+  return trail.get(`${x},${y}`);
+}
+
+function trailBoard(trail, bd) {
+  let t = trailAt(trail, bd.x, bd.y);
+  if (!t) {
+    t = { x: bd.x, y: bd.y, stood: new Uint8Array(NCELL), walked: new Uint8Array(NCELL) };
+    trail.set(`${bd.x},${bd.y}`, t);
+  }
+  return t;
+}
+
+function recordStood(trail, bd, cell) {
+  trailBoard(trail, bd).stood[cell] = 1;
+}
+
+/** Records link or door d from (bd, cell) to (to.board, to.cell), standing on both ends. */
+function recordWalk(trail, bd, cell, d, to) {
+  const a = trailBoard(trail, bd), b = trailBoard(trail, to.board);
+  a.stood[cell] = 1;
+  b.stood[to.cell] = 1;
+  a.walked[cell] |= 1 << d;
+  b.walked[to.cell] |= 1 << (d ^ 2);
+}
+
+/** Everything a Continue carries into the next run. */
+function runCarry(s) {
+  return { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry, trail: s.trail };
+}
+
 /** A run from `start` = { board, cell }, standing on the door's cell. */
 function createSim(world, start, carry = null) {
   const s = {
@@ -1328,7 +1369,9 @@ function createSim(world, start, carry = null) {
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
     },
     events: [],
+    trail: carry && carry.trail ? carry.trail : createTrail(),
   };
+  recordStood(s.trail, s.bd, s.cell);
   return s;
 }
 
@@ -1612,6 +1655,15 @@ function flameTouch(s) {
   return false;
 }
 
+/** Records the one link or door that joins the cell the tick began on to the current cell. */
+function walkTrail(s, bd, cell) {
+  for (let d = 0; d < 8; d++) {
+    const to = s.world.step(bd, cell, d);
+    if (to && to.board.x === s.bd.x && to.board.y === s.bd.y && to.cell === s.cell) { recordWalk(s.trail, bd, cell, d, to); return; }
+  }
+  recordStood(s.trail, s.bd, s.cell);
+}
+
 /**
  * Advances one tick with input h, v in {-1, 0, 1} (v > 0 is up). `jump` is
  * true when a jump key was pressed since the last tick; `edges` holds the
@@ -1620,6 +1672,7 @@ function flameTouch(s) {
 function step(s, h, v, jump = false, edges = NO_EDGES) {
   s.events.length = 0;
   if (s.state !== 'play') return s;
+  const fromBd = s.bd, fromCell = s.cell;
   s.time += TICK;
   const dt = TICK + s.carry;
   s.carry = 0;
@@ -1630,6 +1683,8 @@ function step(s, h, v, jump = false, edges = NO_EDGES) {
   if (s.mode === 'floor') floorMove(s, h, v, dt);
   else if (s.mode === 'air') airMove(s, h, v, dt);
   else linkMove(s, h, v, dt);
+  // Every path that changes the cell runs above; the trail follows the cell.
+  if (s.bd !== fromBd || s.cell !== fromCell) walkTrail(s, fromBd, fromCell);
   // Contact with a flame holds the torch at full; events fire once per contact.
   const touch = flameTouch(s);
   if (touch) {
@@ -1661,7 +1716,7 @@ function pose(s) {
   if (s.burn <= 0) return { anim: 'gasp', frame: Math.floor(s.time * 3) % 2 };
   return { anim: 'idle', frame: Math.floor(s.time * 4) % 4 };
 }
-return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createSim, canGo, feet, step, pose };
+return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, recordWalk, runCarry, createSim, canGo, feet, step, pose };
 })();
 
 // src/game/art.mjs
@@ -2448,15 +2503,85 @@ function rockAt(mask, x, y) {
 return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 })();
 
-// src/game/render.mjs
+// src/game/map.mjs
 const __m9 = (() => {
+const { BW, BH, NCELL } = __m2;
+const { BANDW, BANDH } = __m3;
+const { bandOf } = __m4;
+// The pause-screen map: what the explorer's trail shows of one tower band.
+// DOM-free. The model holds the walked links, the openings of stood cells,
+// the entered boards, the flames at stood cells and the explorer; it never
+// names a cell the explorer did not stand on or a passage beyond a stub.
+
+
+
+
+/** Frame size in cells: 6x4 boards of 12x7 cells. */
+const MAP_COLS = BANDW * BW;
+const MAP_ROWS = BANDH * BH;
+
+// Each link is listed once, from the end whose direction is one of these.
+const LINE_DIRS = [0, 1, 4, 5];
+
+/** The band that holds board `bd`. */
+function frameOf(bd) {
+  return bandOf(bd.y);
+}
+
+/** The frame after a pan key `dir` ('l', 'r', 'u' or 'd'); the tower is one band wide. */
+function panFrame(b, dir) {
+  return dir === 'u' ? b + 1 : dir === 'd' ? b - 1 : b;
+}
+
+/**
+ * Lines, stubs, outlines, flames and the explorer of band `b`, in frame
+ * cells: column x * 12 + cell % 12, row (y - 4b) * 7 + floor(cell / 12), row
+ * 0 at the bottom. `at` is the explorer's { bd, cell }.
+ */
+function mapModel(world, trail, b, at) {
+  const lines = [], stubs = [], outlines = [], flames = [];
+  const y0 = BANDH * b;
+  const inBand = (y) => y >= y0 && y < y0 + BANDH;
+  const cellAt = (bd, cell) => ({ col: bd.x * BW + (cell % BW), row: (bd.y - y0) * BH + ((cell / BW) | 0) });
+  const boards = [...trail.values()].filter((t) => inBand(t.y)).sort((p, q) => p.y - q.y || p.x - q.x);
+  for (const t of boards) {
+    const bd = world.board(t.x, t.y);
+    if (!bd.links) continue;
+    const lit = world.flamesAt(t.x, t.y);
+    const gaps = [];
+    let entered = false;
+    for (let cell = 0; cell < NCELL; cell++) {
+      if (!t.stood[cell]) continue;
+      entered = true;
+      const here = cellAt(bd, cell);
+      if (lit.includes(cell)) flames.push(here);
+      for (let d = 0; d < 8; d++) {
+        const to = world.step(bd, cell, d);
+        if (!to) continue;
+        if (!(t.walked[cell] & (1 << d))) { stubs.push({ ...here, d }); continue; }
+        if (d < 4 && !(bd.links[cell] & (1 << d))) gaps.push({ ...here, d });
+        if (LINE_DIRS.includes(d) && inBand(to.board.y)) lines.push({ ...here, d });
+      }
+    }
+    if (entered) outlines.push({ ...cellAt(bd, 0), gaps });
+  }
+  const explorer = at && inBand(at.bd.y) ? cellAt(at.bd, at.cell) : null;
+  return { lines, stubs, outlines, flames, explorer };
+}
+return { MAP_COLS, MAP_ROWS, frameOf, panFrame, mapModel };
+})();
+
+// src/game/render.mjs
+const __m10 = (() => {
 const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H } = __m7;
 const { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m6;
-const { BW, NCELL } = __m2;
+const { BW, BH, NCELL, DX, DY } = __m2;
 const { boardOfPos } = __m4;
 const { boardMask } = __m8;
+const { MAP_COLS, MAP_ROWS } = __m9;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
+
 
 
 
@@ -2469,6 +2594,7 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
+const MAP_SCALE = 3;
 
 /** CSS colour of palette character `ch`. */
 function pal(ch) {
@@ -2854,13 +2980,55 @@ function createRenderer(canvas, world) {
     text(`TOMB ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
   }
 
-  return { ctx, scene, hud, text, panel, prepare };
+  /**
+   * Draws a map model at 3 px per cell, top left at (x, y); `t` is wall
+   * seconds. A link joins the centre pixels of its two cells and a stub stays
+   * inside its own cell.
+   */
+  function drawMap(model, x, y, t) {
+    const S = MAP_SCALE;
+    const dot = (col, row, i, d, color) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(x + col * S + 1 + i * DX[d], y + (MAP_ROWS - 1 - row) * S + 1 - i * DY[d], 1, 1);
+    };
+    ctx.fillStyle = pal('0');
+    ctx.fillRect(x, y, MAP_COLS * S, MAP_ROWS * S);
+    ctx.fillStyle = pal('4');
+    for (const o of model.outlines) {
+      const left = x + o.col * S, top = y + (MAP_ROWS - o.row - BH) * S, w = BW * S, h = BH * S;
+      // A crossed door opens its cell's three pixels of the wall.
+      const gapX = (d, px) => o.gaps.some((g) => g.d === d && px >= x + g.col * S && px < x + (g.col + 1) * S);
+      const gapY = (d, py) => o.gaps.some((g) => g.d === d && py >= y + (MAP_ROWS - 1 - g.row) * S && py < y + (MAP_ROWS - g.row) * S);
+      for (let k = 0; k < w; k++) {
+        if (!gapX(1, left + k)) ctx.fillRect(left + k, top, 1, 1);
+        if (!gapX(3, left + k)) ctx.fillRect(left + k, top + h - 1, 1, 1);
+      }
+      for (let k = 0; k < h; k++) {
+        if (!gapY(2, top + k)) ctx.fillRect(left, top + k, 1, 1);
+        if (!gapY(0, top + k)) ctx.fillRect(left + w - 1, top + k, 1, 1);
+      }
+    }
+    for (const s of model.stubs) for (let i = 0; i < 2; i++) dot(s.col, s.row, i, s.d, pal('7'));
+    for (const l of model.lines) for (let i = 0; i <= 3; i++) dot(l.col, l.row, i, l.d, pal('b'));
+    for (const f of model.flames) {
+      ctx.fillStyle = pal('i');
+      ctx.fillRect(x + f.col * S, y + (MAP_ROWS - 1 - f.row) * S, S, S);
+      dot(f.col, f.row, 0, 0, pal('j'));
+    }
+    const e = model.explorer;
+    if (e && Math.floor(t * 3) % 2 === 0) {
+      ctx.fillStyle = pal('p');
+      ctx.fillRect(x + e.col * S, y + (MAP_ROWS - 1 - e.row) * S, S, S);
+    }
+  }
+
+  return { ctx, scene, hud, text, panel, prepare, drawMap };
 }
 return { VIEW_W, VIEW_H, shade, spriteCanvas, createRenderer };
 })();
 
 // src/game/audio.mjs
-const __m10 = (() => {
+const __m11 = (() => {
 
 // WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
@@ -3174,7 +3342,7 @@ return { createAudio };
 })();
 
 // src/game/autopilot.mjs
-const __m11 = (() => {
+const __m12 = (() => {
 const { DX, DY } = __m2;
 const { createSim, step, inputEdges } = __m6;
 // Scripted input for the self-test: walks the explorer up band 0's chain of
@@ -3275,9 +3443,9 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/touch.mjs
-const __m12 = (() => {
+const __m13 = (() => {
 const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m7;
-const { VIEW_W, VIEW_H } = __m9;
+const { VIEW_W, VIEW_H } = __m10;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
 // keydown and keyup KeyboardEvents on window, so the key handlers, the held
 // Up, the jump edge and the tap buffer serve touch unchanged.
@@ -3782,7 +3950,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, layout, nextTouchMode, touchAtBoot, padZone,
 })();
 
 // src/game/clipboard.mjs
-const __m13 = (() => {
+const __m14 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -3810,18 +3978,20 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m14 = (() => {
+const __m15 = (() => {
 const { createWorld, boardOfPos } = __m4;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m5;
-const { createSim, step, TICK, BURN_S, KEY, feet, pose } = __m6;
-const { createRenderer, VIEW_W, VIEW_H, shade } = __m9;
-const { createAudio } = __m10;
-const { runScript, SELFTEST_CODE } = __m11;
-const { createTouch, layout, viewport } = __m12;
-const { copyWithStatus, saveLabel } = __m13;
+const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose } = __m6;
+const { createRenderer, VIEW_W, VIEW_H, shade } = __m10;
+const { createAudio } = __m11;
+const { runScript, SELFTEST_CODE } = __m12;
+const { createTouch, layout, viewport } = __m13;
+const { copyWithStatus, saveLabel } = __m14;
+const { frameOf, panFrame, mapModel } = __m9;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause and end
 // screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -3912,6 +4082,8 @@ function selftest() {
     snapCam(cam, sim);
     r.scene(sim, cam, 0);
     r.hud(sim);
+    // Draws the pause screen over the scene, so a draw-time error fails the gate.
+    drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd), pauseMap: null });
     present();
     const px = view.getContext('2d').getImageData(0, 0, VIEW_W, VIEW_H).data;
     const colours = new Set();
@@ -4087,6 +4259,15 @@ function driveTouch(copied) {
   offEntry();
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
+  need(g.frame === g.sim.bd.band, 'PAUSE frames the explorer\'s band');
+  const arrow = (code, repeat = false) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key: code, repeat, bubbles: true, cancelable: true }));
+  arrow('ArrowUp');
+  need(g.frame === g.sim.bd.band + 1, 'Up pans one band up');
+  arrow('ArrowUp', true);
+  arrow('ArrowLeft');
+  need(g.frame === g.sim.bd.band + 1, 'a held Up and a Left pan nothing');
+  arrow('KeyS');
+  need(g.frame === g.sim.bd.band, 'S pans one band down');
   toggles('pause');
   copies('pause', hereCode(g));
   click('pause', 'resume');
@@ -4104,17 +4285,23 @@ function driveTouch(copied) {
   endRun(g);
   draw(g, 0);
   copies('over', entryCode(g));
+  const trail = g.sim.trail;
   click('over', 'continue');
   need(g.screen === 'play', 'the end screen CONTINUE reaches play');
+  need(g.sim.trail === trail, 'CONTINUE keeps the trail');
   endRun(g);
   draw(g, 0);
   click('over', 'title');
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
 
-  // Leave a run on screen for the screenshot.
-  click('title', 'begin');
-  need(g.screen === 'play', 'BEGIN reaches play again');
+  // Leave the self-test script's run paused on screen for the screenshot.
+  useCode(g, SELFTEST_CODE);
+  g.sim = runScript(g.world).sim;
+  snapCam(g.cam, g.sim);
+  g.screen = 'play';
   g.keys.clear();
+  press('Escape', 'Escape');
+  need(g.screen === 'pause' && g.frame === frameOf(g.sim.bd), 'Esc pauses on the explorer\'s band');
   draw(g, 0);
 }
 
@@ -4143,6 +4330,8 @@ function createGame() {
     code: parseCode((decodeSave(load(KEY_SAVE) || '') || {}).code || '') || rollCode(),
     world: null, renderer: null, sim: null, preview: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
+    // The band the pause map frames, and its model.
+    frame: 0, pauseMap: null,
   };
 }
 
@@ -4220,7 +4409,13 @@ function titleKey(g, e) {
 }
 
 function playKey(g, e) {
-  if (e.key === 'Escape') { g.screen = 'pause'; store(KEY_SAVE, hereCode(g)); return; }
+  if (e.key === 'Escape') {
+    g.screen = 'pause';
+    g.frame = frameOf(g.sim.bd);
+    g.pauseMap = null;
+    store(KEY_SAVE, hereCode(g));
+    return;
+  }
   if (DIRS[e.code]) {
     g.keys.add(DIRS[e.code]);
     if (!e.repeat) g.press |= DIR_BITS[DIRS[e.code]];
@@ -4236,14 +4431,14 @@ function pauseKey(g, e) {
     copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => {
       if (g.screen === 'pause') g.copied = status;
     });
-  }
+  } else if (DIRS[e.code] && !e.repeat) g.frame = panFrame(g.frame, DIRS[e.code]);
 }
 
 function overKey(g, e) {
   const s = g.sim;
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) {
     g.copied = '';
-    begin(g, s.lastEntry, { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry });
+    begin(g, s.lastEntry, runCarry(s));
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => {
@@ -4339,14 +4534,27 @@ function drawTitle(g, t) {
   r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  ESC PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
-function drawPause(g) {
+/** The pause map's model for the frame, rebuilt when the frame changes. */
+function pauseModel(g) {
+  if (!g.pauseMap || g.pauseMap.b !== g.frame) {
+    const at = { bd: g.sim.bd, cell: g.sim.cell };
+    g.pauseMap = { b: g.frame, model: mapModel(g.world, g.sim.trail, g.frame, at) };
+  }
+  return g.pauseMap.model;
+}
+
+// The panel spans y 2..177; its rules leave y 5..174 for rows at least 4 px apart.
+function drawPause(g, t = 0) {
   const r = g.renderer;
-  r.panel(50, 44, 220, 92);
-  r.text('PAUSED', VIEW_W / 2, 54, 'm', { align: 'center', scale: 2 });
-  r.text(saveLabel(g.copied), VIEW_W / 2, 78, 'a', { align: 'center' });
-  r.text(hereCode(g), VIEW_W / 2, 90, 'i', { align: 'center' });
-  r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 104, '9', { align: 'center' });
-  r.text('ESC RESUME  M MUTE  Q TITLE  C COPY', VIEW_W / 2, 120, 'b', { align: 'center' });
+  r.panel(50, 2, 220, 176);
+  r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
+  r.text(`TOMB ${g.frame}`, 267, 16, 'a', { align: 'right' });
+  r.drawMap(pauseModel(g), 52, 28, t);
+  r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
+  r.text(hereCode(g), VIEW_W / 2, 129, 'i', { align: 'center' });
+  r.text(g.audio.muted ? 'SOUND OFF' : 'SOUND ON', VIEW_W / 2, 141, '9', { align: 'center' });
+  r.text('ESC RESUME  UP/DOWN PAN  Q TITLE', VIEW_W / 2, 153, 'b', { align: 'center' });
+  r.text('M MUTE  C COPY', VIEW_W / 2, 164, 'b', { align: 'center' });
 }
 
 function drawOver(g) {
@@ -4366,7 +4574,7 @@ function draw(g, t) {
   } else {
     g.renderer.scene(g.sim, g.cam, t);
     g.renderer.hud(g.sim);
-    if (g.screen === 'pause') drawPause(g);
+    if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
   }
   present();

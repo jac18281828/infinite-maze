@@ -3,7 +3,7 @@
 // the ground or in the air, the explorer leaves a cell only along a link or
 // door. A let-go drops from a ladder over its lower cell. Runs on a fixed
 // 60 Hz tick; no DOM.
-import { DX, DY, BW } from '../world/board.mjs';
+import { DX, DY, BW, NCELL } from '../world/board.mjs';
 
 export const TICK = 1 / 60;
 export const CELL = 48;
@@ -60,6 +60,47 @@ export function inputEdges(h0, v0, h1, v1) {
   return { press: b & ~a, release: a & ~b };
 }
 
+/**
+ * What the explorer has done: per board, keyed by board coordinates because
+ * `world.retain` rebuilds board objects, the cells stood on and, per cell, the
+ * directions of the links and doors it walked, each recorded at both ends.
+ */
+export function createTrail() {
+  return new Map();
+}
+
+/** The trail's record of board (x, y): `stood` and `walked` per cell, or undefined. */
+export function trailAt(trail, x, y) {
+  return trail.get(`${x},${y}`);
+}
+
+function trailBoard(trail, bd) {
+  let t = trailAt(trail, bd.x, bd.y);
+  if (!t) {
+    t = { x: bd.x, y: bd.y, stood: new Uint8Array(NCELL), walked: new Uint8Array(NCELL) };
+    trail.set(`${bd.x},${bd.y}`, t);
+  }
+  return t;
+}
+
+export function recordStood(trail, bd, cell) {
+  trailBoard(trail, bd).stood[cell] = 1;
+}
+
+/** Records link or door d from (bd, cell) to (to.board, to.cell), standing on both ends. */
+export function recordWalk(trail, bd, cell, d, to) {
+  const a = trailBoard(trail, bd), b = trailBoard(trail, to.board);
+  a.stood[cell] = 1;
+  b.stood[to.cell] = 1;
+  a.walked[cell] |= 1 << d;
+  b.walked[to.cell] |= 1 << (d ^ 2);
+}
+
+/** Everything a Continue carries into the next run. */
+export function runCarry(s) {
+  return { time: s.time, startBand: s.startBand, maxBand: s.maxBand, lastEntry: s.lastEntry, trail: s.trail };
+}
+
 /** A run from `start` = { board, cell }, standing on the door's cell. */
 export function createSim(world, start, carry = null) {
   const s = {
@@ -76,7 +117,9 @@ export function createSim(world, start, carry = null) {
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
     },
     events: [],
+    trail: carry && carry.trail ? carry.trail : createTrail(),
   };
+  recordStood(s.trail, s.bd, s.cell);
   return s;
 }
 
@@ -360,6 +403,15 @@ function flameTouch(s) {
   return false;
 }
 
+/** Records the one link or door that joins the cell the tick began on to the current cell. */
+function walkTrail(s, bd, cell) {
+  for (let d = 0; d < 8; d++) {
+    const to = s.world.step(bd, cell, d);
+    if (to && to.board.x === s.bd.x && to.board.y === s.bd.y && to.cell === s.cell) { recordWalk(s.trail, bd, cell, d, to); return; }
+  }
+  recordStood(s.trail, s.bd, s.cell);
+}
+
 /**
  * Advances one tick with input h, v in {-1, 0, 1} (v > 0 is up). `jump` is
  * true when a jump key was pressed since the last tick; `edges` holds the
@@ -368,6 +420,7 @@ function flameTouch(s) {
 export function step(s, h, v, jump = false, edges = NO_EDGES) {
   s.events.length = 0;
   if (s.state !== 'play') return s;
+  const fromBd = s.bd, fromCell = s.cell;
   s.time += TICK;
   const dt = TICK + s.carry;
   s.carry = 0;
@@ -378,6 +431,8 @@ export function step(s, h, v, jump = false, edges = NO_EDGES) {
   if (s.mode === 'floor') floorMove(s, h, v, dt);
   else if (s.mode === 'air') airMove(s, h, v, dt);
   else linkMove(s, h, v, dt);
+  // Every path that changes the cell runs above; the trail follows the cell.
+  if (s.bd !== fromBd || s.cell !== fromCell) walkTrail(s, fromBd, fromCell);
   // Contact with a flame holds the torch at full; events fire once per contact.
   const touch = flameTouch(s);
   if (touch) {

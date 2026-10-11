@@ -5,8 +5,9 @@ import { BW, NCELL, cellNeighbor, DX, DY } from '../src/world/board.mjs';
 import { boardMask, rockAt, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import {
   createSim, step, feet, torchRadius, nodeXY, inputEdges, BURN_S, EMBER_S, TICK, KEY, ROOM_CLEAR, SHAFT_REACH,
-  STAIR_REACH, RUN_SPEED, GALLERY_SPEED, GRAVITY, BOARD_W, BOARD_H, pose,
+  STAIR_REACH, RUN_SPEED, GALLERY_SPEED, GRAVITY, BOARD_W, BOARD_H, pose, runCarry, trailAt,
 } from '../src/game/sim.mjs';
+import { mapModel } from '../src/game/map.mjs';
 import { runScript, SELFTEST_TICKS } from '../src/game/autopilot.mjs';
 import { artSets, EXPLORER, torchTip } from '../src/game/art.mjs';
 
@@ -928,3 +929,130 @@ test('art strings keep one width per sprite and use palette characters', () => {
   }
 });
 
+
+/** The link and door directions the trail holds walked at (bd, cell), as a bit mask. */
+const walkedAt = (s, bd, cell) => { const t = trailAt(s.trail, bd.x, bd.y); return t ? t.walked[cell] : 0; };
+const stoodCells = (s) => [...s.trail.values()].reduce((n, t) => n + t.stood.reduce((a, v) => a + v, 0), 0);
+const walkedEnds = (s) => [...s.trail.values()].reduce((n, t) => n + t.walked.filter((v) => v).length, 0);
+
+/** Drives (h, v) until pred(s) holds, at most `max` ticks. */
+function until(go, s, h, v, pred, max = 600) {
+  for (let i = 0; i < max && !pred(s); i++) go(h, v);
+  assert.ok(pred(s), 'the condition holds');
+}
+
+test('a corridor walked to the next cell records both ends', () => {
+  const { bd, cell } = findCell((b, c) => has(b, c, 0) && !has(b, c, 1) && !has(b, c, 4) && !has(b, c, 5));
+  const s = simOn({ bd, cell });
+  const go = driver(s);
+  until(go, s, 1, 0, (q) => q.cell !== cell);
+  assert.equal(s.cell, cell + 1);
+  assert.equal(walkedAt(s, bd, cell), 1 << 0);
+  assert.equal(walkedAt(s, bd, cell + 1) & (1 << 2), 1 << 2);
+  assert.equal(stoodCells(s), 2);
+});
+
+test('a ladder or gallery abandoned back to its start records nothing', () => {
+  for (const d of [1, 4]) {
+    const { bd, cell } = findCell((b, c) => has(b, c, d) && (d === 1 || !has(b, c, 1)));
+    const s = simOn({ bd, cell });
+    const go = driver(s);
+    until(go, s, 0, 1, (q) => q.mode === 'link' && q.prog > 8);
+    until(go, s, 0, -1, (q) => q.mode === 'floor');
+    assert.equal(s.cell, cell, `link ${d} ends where it began`);
+    assert.equal(stoodCells(s), 1, `link ${d} stood nowhere new`);
+    assert.equal(walkedEnds(s), 0, `link ${d} walked nothing`);
+  }
+});
+
+test('a jump in place records nothing', () => {
+  const { bd, cell } = findCell((b, c) => !has(b, c, 1) && !has(b, c, 4) && !has(b, c, 5));
+  const s = simOn({ bd, cell });
+  const go = driver(s);
+  go(0, 0, true);
+  until(go, s, 0, 0, (q) => q.mode === 'floor');
+  assert.equal(s.stats.jumps, 1);
+  assert.equal(stoodCells(s), 1);
+  assert.equal(walkedEnds(s), 0);
+});
+
+test('a jump through a corridor records the corridor', () => {
+  const { bd, cell } = findCell((b, c) => has(b, c, 0) && !has(b, c, 1) && !has(b, c, 4) && !has(b, c, 5));
+  const s = simOn({ bd, cell });
+  const go = driver(s);
+  go(1, 0, true);
+  until(go, s, 1, 0, (q) => q.cell !== cell, 60);
+  assert.equal(s.mode, 'air');
+  assert.equal(walkedAt(s, bd, cell), 1 << 0);
+  assert.equal(walkedAt(s, bd, s.cell) & (1 << 2), 1 << 2);
+});
+
+test('a let-go from a down-ladder records the ladder and its lower cell; from an up-ladder, nothing', () => {
+  const down = findCell((b, c) => has(b, c, 3) && !has(b, c, 1) && !has(b, c, 4) && !has(b, c, 5) && !has(b, c, 6) && !has(b, c, 7));
+  const s = simOn(down);
+  const go = driver(s);
+  until(go, s, 0, -1, (q) => q.mode === 'link' && q.prog > 8);
+  go(0, -1, true);
+  assert.equal(s.mode, 'air');
+  const lower = world.step(down.bd, down.cell, 3);
+  assert.ok(s.bd === lower.board && s.cell === lower.cell, 'the let-go drops over the ladder\'s lower cell');
+  assert.equal(walkedAt(s, down.bd, down.cell), 1 << 3);
+  assert.equal(walkedAt(s, lower.board, lower.cell), 1 << 1);
+  const up = findCell((b, c) => has(b, c, 1));
+  const u = simOn(up);
+  const gu = driver(u);
+  until(gu, u, 0, 1, (q) => q.mode === 'link' && q.prog > 8);
+  gu(0, 1, true);
+  assert.equal(u.mode, 'air');
+  assert.equal(u.cell, up.cell);
+  assert.equal(stoodCells(u), 1);
+  assert.equal(walkedEnds(u), 0);
+});
+
+test('crossing a door records it on both boards and the model shows a gap in each outline', () => {
+  let found = null;
+  for (let b = -1; b <= 1 && !found; b++) {
+    for (let i = 0; i < 24 && !found; i++) {
+      const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+      const dr = bd.doors.find((q) => q.dir === 0);
+      if (dr && !(bd.links[dr.cell] & 1) && world.step(bd, dr.cell, 0)) found = { bd, cell: dr.cell, b };
+    }
+  }
+  assert.ok(found, 'an east door exists');
+  const s = simOn(found);
+  const go = driver(s);
+  until(go, s, 1, 0, (q) => q.bd !== found.bd);
+  const to = { bd: s.bd, cell: s.cell };
+  assert.equal(walkedAt(s, found.bd, found.cell), 1 << 0);
+  assert.equal(walkedAt(s, to.bd, to.cell), 1 << 2);
+  const m = mapModel(world, s.trail, found.b, to);
+  const gap = (x, y, cell, d) => m.outlines.some((o) => o.col === x * 12 && o.row === (y - 4 * found.b) * 7
+    && o.gaps.some((g) => g.d === d && g.col === x * 12 + (cell % BW) && g.row === (y - 4 * found.b) * 7 + Math.floor(cell / BW)));
+  assert.ok(gap(found.bd.x, found.bd.y, found.cell, 0), 'the near board opens its door');
+  assert.ok(gap(to.bd.x, to.bd.y, to.cell, 2), 'the far board opens its door');
+});
+
+test('createSim carries the trail and every field runCarry returns; a fresh run holds only its start', () => {
+  const start = findCell((b, c) => b.routeIndex > 0 && has(b, c, 0) && !has(b, c, 1));
+  const s = simOn(start);
+  const go = driver(s);
+  until(go, s, 1, 0, (q) => q.cell !== start.cell);
+  s.time = 42;
+  s.maxBand = 5;
+  const c = runCarry(s);
+  assert.deepEqual(Object.keys(c).sort(), ['lastEntry', 'maxBand', 'startBand', 'time', 'trail']);
+  const before = stoodCells(s);
+  const next = world.resumePoint(start.bd.x, start.bd.y);
+  const n = createSim(world, next, c);
+  assert.equal(n.trail, s.trail);
+  assert.equal(walkedAt(n, start.bd, start.cell), 1 << 0);
+  assert.ok(stoodCells(n) >= before);
+  assert.equal(n.time, 42);
+  assert.equal(n.startBand, s.startBand);
+  assert.equal(n.maxBand, 5);
+  assert.equal(n.lastEntry, s.lastEntry);
+  const fresh = createSim(world, next);
+  assert.equal(stoodCells(fresh), 1);
+  assert.equal(walkedEnds(fresh), 0);
+  assert.notEqual(fresh.trail, s.trail);
+});

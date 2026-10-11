@@ -5,9 +5,10 @@ import {
   BRAZIER, FLAME, TORCH, FONT, FONT_W, FONT_H,
 } from './art.mjs';
 import { BOARD_W, BOARD_H, CELL, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
-import { BW, NCELL } from '../world/board.mjs';
+import { BW, BH, NCELL, DX, DY } from '../world/board.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { boardMask } from './mask.mjs';
+import { MAP_COLS, MAP_ROWS } from './map.mjs';
 
 export const VIEW_W = 320;
 export const VIEW_H = 180;
@@ -15,6 +16,7 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
+const MAP_SCALE = 3;
 
 /** CSS colour of palette character `ch`. */
 function pal(ch) {
@@ -400,5 +402,47 @@ export function createRenderer(canvas, world) {
     text(`TOMB ${sim.bd.band}`, VIEW_W - 5, 5, 'm', { align: 'right' });
   }
 
-  return { ctx, scene, hud, text, panel, prepare };
+  /**
+   * Draws a map model at 3 px per cell, top left at (x, y); `t` is wall
+   * seconds. A link joins the centre pixels of its two cells and a stub stays
+   * inside its own cell.
+   */
+  function drawMap(model, x, y, t) {
+    const S = MAP_SCALE;
+    const dot = (col, row, i, d, color) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(x + col * S + 1 + i * DX[d], y + (MAP_ROWS - 1 - row) * S + 1 - i * DY[d], 1, 1);
+    };
+    ctx.fillStyle = pal('0');
+    ctx.fillRect(x, y, MAP_COLS * S, MAP_ROWS * S);
+    ctx.fillStyle = pal('4');
+    for (const o of model.outlines) {
+      const left = x + o.col * S, top = y + (MAP_ROWS - o.row - BH) * S, w = BW * S, h = BH * S;
+      // A crossed door opens its cell's three pixels of the wall.
+      const gapX = (d, px) => o.gaps.some((g) => g.d === d && px >= x + g.col * S && px < x + (g.col + 1) * S);
+      const gapY = (d, py) => o.gaps.some((g) => g.d === d && py >= y + (MAP_ROWS - 1 - g.row) * S && py < y + (MAP_ROWS - g.row) * S);
+      for (let k = 0; k < w; k++) {
+        if (!gapX(1, left + k)) ctx.fillRect(left + k, top, 1, 1);
+        if (!gapX(3, left + k)) ctx.fillRect(left + k, top + h - 1, 1, 1);
+      }
+      for (let k = 0; k < h; k++) {
+        if (!gapY(2, top + k)) ctx.fillRect(left, top + k, 1, 1);
+        if (!gapY(0, top + k)) ctx.fillRect(left + w - 1, top + k, 1, 1);
+      }
+    }
+    for (const s of model.stubs) for (let i = 0; i < 2; i++) dot(s.col, s.row, i, s.d, pal('7'));
+    for (const l of model.lines) for (let i = 0; i <= 3; i++) dot(l.col, l.row, i, l.d, pal('b'));
+    for (const f of model.flames) {
+      ctx.fillStyle = pal('i');
+      ctx.fillRect(x + f.col * S, y + (MAP_ROWS - 1 - f.row) * S, S, S);
+      dot(f.col, f.row, 0, 0, pal('j'));
+    }
+    const e = model.explorer;
+    if (e && Math.floor(t * 3) % 2 === 0) {
+      ctx.fillStyle = pal('p');
+      ctx.fillRect(x + e.col * S, y + (MAP_ROWS - 1 - e.row) * S, S, S);
+    }
+  }
+
+  return { ctx, scene, hud, text, panel, prepare, drawMap };
 }
