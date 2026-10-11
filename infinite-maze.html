@@ -1393,16 +1393,18 @@ function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LIMIT_MS,
     const candidates = [];
     for (const route of t.routes) {
       route.forEach((i, j) => {
-        if (j % 3 === 0 && !t.entries.includes(i)) candidates.push({ bd: boardAt(t, i), kind: 'route' });
+        if (j % 3 === 0 && !t.entries.includes(i)) {
+          const bd = boardAt(t, i);
+          candidates.push({ bd, cell: flameCell(H, bd.x, bd.y), kind: 'route' });
+        }
       });
     }
     for (let i = 0; i < t.depth.length; i++) {
       if (t.depth[i] <= 0) continue;
       const bd = boardAt(t, i);
-      if (H('flame', bd.x, bd.y)[0] < 128) candidates.push({ bd, kind: 'dead' });
+      if (H('flame', bd.x, bd.y)[0] < 128) candidates.push({ bd, cell: bd.b, kind: 'dead' });
     }
-    for (const { bd, kind } of candidates) {
-      const cell = kind === 'route' ? flameCell(H, bd.x, bd.y) : bd.b;
+    for (const { bd, cell, kind } of candidates) {
       if (!flameNear(bd, cell, kept)) keep(bd, cell, kind);
     }
     const chains = [], gaps = [], added = [];

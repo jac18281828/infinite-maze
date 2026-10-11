@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { boardCoords } from '../src/world/world.mjs';
-import { NCELL } from '../src/world/board.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
 import { u32 } from '../src/world/hash.mjs';
 import { worlds } from './sample.mjs';
@@ -11,7 +10,7 @@ import { worlds } from './sample.mjs';
 const COST = [500, 1000, 500, 1000, 943, 943, 943, 943];
 const LIMIT_MS = 20000;
 const key = (x, y, cell) => `${x},${y},${cell}`;
-const flameCell = (world, x, y) => u32(world.H('flame', x, y), 4) % NCELL;
+const flameCell = (world, x, y) => u32(world.H('flame', x, y), 4) % 84;
 
 /** Cells within LIMIT_MS of walking from (bd, cell), keyed to their board, cell and time. */
 function reach(world, bd, cell) {
