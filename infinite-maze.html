@@ -1550,11 +1550,14 @@ const { BW, NCELL, DX } = __m2;
 
 
 
-// In order: a dead-end cell takes the first kind whose hash passes `percent`,
-// so two items never share a cell.
+// Jars per hundred dead-end cells whose coin hash fails, by the world's difficulty.
+const OIL_PERCENT = { easy: 10, medium: 7, hard: 5, ultimate: 4 };
+
+// In order: a dead-end cell takes the first kind whose hash passes `percent`
+// (a number, or a table keyed by difficulty), so two items never share a cell.
 const FLOOR_ITEMS = [
   { kind: 'coin', tag: 'coin', percent: 5 },
-  { kind: 'oil', tag: 'oil', percent: 10 },
+  { kind: 'oil', tag: 'oil', percent: OIL_PERCENT },
 ];
 
 // Board geometry in world pixels, as the game's nodeXY lays it out: a cell is
@@ -1577,6 +1580,8 @@ function deadEnds(world, bd) {
   return cells;
 }
 
+const percentOf = (it, world) => (typeof it.percent === 'number' ? it.percent : it.percent[world.difficulty]);
+
 const cache = new WeakMap();
 
 /**
@@ -1588,7 +1593,7 @@ function floorItems(world, bd, items = FLOOR_ITEMS) {
   if (cached) return cached;
   const out = [];
   for (const cell of deadEnds(world, bd)) {
-    const item = items.find((it) => u32(world.H(it.tag, bd.x, bd.y, cell)) % 100 < it.percent);
+    const item = items.find((it) => u32(world.H(it.tag, bd.x, bd.y, cell)) % 100 < percentOf(it, world));
     if (item) out.push({ cell, kind: item.kind });
   }
   if (items === FLOOR_ITEMS) cache.set(bd, out);
@@ -1608,7 +1613,7 @@ function itemSpot(bd, cell) {
     bd.y * BOARD_PX_H + ((cell / BW) | 0) * CELL_PX + 8,
   ];
 }
-return { FLOOR_ITEMS, deadEnds, floorItems, itemSpot };
+return { OIL_PERCENT, FLOOR_ITEMS, deadEnds, floorItems, itemSpot };
 })();
 
 // src/game/ranks.mjs

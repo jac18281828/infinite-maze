@@ -5,12 +5,12 @@ import { DIFFICULTIES } from '../src/world/band.mjs';
 import { CODE, worlds, sample } from './sample.mjs';
 import { u32 } from '../src/world/hash.mjs';
 import { NCELL, DX } from '../src/world/board.mjs';
-import { FLOOR_ITEMS, deadEnds, floorItems, itemSpot } from '../src/world/floor.mjs';
+import { FLOOR_ITEMS, OIL_PERCENT, deadEnds, floorItems, itemSpot } from '../src/world/floor.mjs';
 import { nodeXY } from '../src/game/sim.mjs';
 
 const popcount1 = (m) => m !== 0 && (m & (m - 1)) === 0;
 
-test('floor items lie on dead-end cells only; a dead-end cell holds a coin when its hash passes 5, else a jar when its oil hash passes 10', () => {
+test('floor items lie on dead-end cells only; a dead-end cell holds a coin when its hash passes 5, else a jar when its oil hash passes its level\'s rate', () => {
   let rock = 0, flameKept = 0, coins = 0, jars = 0, both = 0;
   for (const d of DIFFICULTIES) {
     const world = worlds[d];
@@ -33,7 +33,7 @@ test('floor items lie on dead-end cells only; a dead-end cell holds a coin when 
       }
       assert.deepEqual(deadEnds(world, bd), want, `dead ends of board (${bd.x},${bd.y})`);
       const coin = (c) => u32(world.H('coin', bd.x, bd.y, c)) % 100 < 5;
-      const oil = (c) => u32(world.H('oil', bd.x, bd.y, c)) % 100 < 10;
+      const oil = (c) => u32(world.H('oil', bd.x, bd.y, c)) % 100 < OIL_PERCENT[d];
       const cells = want.filter((c) => coin(c) || oil(c));
       assert.deepEqual(items, cells.map((cell) => ({ cell, kind: coin(cell) ? 'coin' : 'oil' })), `items of board (${bd.x},${bd.y})`);
       assert.equal(new Set(items.map((it) => it.cell)).size, items.length, 'no cell holds two items');
@@ -56,28 +56,33 @@ test('a dead-end cell takes the first kind in the list whose hash passes, so two
     assert.deepEqual(items.map((it) => it.cell), deadEnds(world, bd), 'every dead end holds one item');
     for (const { cell, kind } of items) {
       const coin = u32(world.H('coin', bd.x, bd.y, cell)) % 100 < 5;
-      const oil = u32(world.H('oil', bd.x, bd.y, cell)) % 100 < 10;
+      const oil = u32(world.H('oil', bd.x, bd.y, cell)) % 100 < OIL_PERCENT.medium;
       assert.equal(kind, coin ? 'coin' : oil ? 'oil' : 'rest');
       if (coin) coinCells++; else restCells++;
     }
   }
   assert.ok(coinCells > 0 && restCells > coinCells);
-  assert.deepEqual(FLOOR_ITEMS, [{ kind: 'coin', tag: 'coin', percent: 5 }, { kind: 'oil', tag: 'oil', percent: 10 }]);
+  assert.deepEqual(FLOOR_ITEMS, [{ kind: 'coin', tag: 'coin', percent: 5 }, { kind: 'oil', tag: 'oil', percent: OIL_PERCENT }]);
 });
 
-test('over tombs u -2..2 by v 0..19 the share of dead-end cells holding a coin lies in [0.035, 0.065] and a jar in [0.07, 0.12] at each level', () => {
+test('the jar rate is 10 at EASY, 7 at MEDIUM, 5 at HARD and 4 at ULTIMATE, not one flat figure', () => {
+  assert.deepEqual(OIL_PERCENT, { easy: 10, medium: 7, hard: 5, ultimate: 4 });
+});
+
+test('over tombs u -2..2 by v 0..19 the share of dead-end cells holding a coin lies in [0.035, 0.065] and a jar within 1.5 points of 0.95 times its level\'s rate at each level', () => {
   for (const d of DIFFICULTIES) {
     const world = worlds[d];
     let dead = 0, coins = 0, jars = 0;
-    for (const bd of sample(d, 19)) {
+    for (const bd of sample(d, d === 'easy' ? 39 : 19)) {
       dead += deadEnds(world, bd).length;
       for (const { kind } of floorItems(world, bd)) { if (kind === 'coin') coins++; else jars++; }
     }
     assert.ok(dead > 3000);
     const share = coins / dead;
     assert.ok(share >= 0.035 && share <= 0.065, `${d}: ${share}`);
-    const jarShare = jars / dead;
-    assert.ok(jarShare >= 0.07 && jarShare <= 0.12, `${d} jars: ${jarShare}`);
+    // A jar needs a dead end whose coin hash fails: 95% of them.
+    const jarShare = jars / dead, want = 0.0095 * OIL_PERCENT[d];
+    assert.ok(Math.abs(jarShare - want) <= 0.015, `${d} jars: ${jarShare}, want ${want} within 0.015`);
   }
 });
 

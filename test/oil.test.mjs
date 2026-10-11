@@ -55,7 +55,7 @@ function walk(world, { bd, cell, link }, { burn = BURN_S, ember = 0, carry = nul
 function jarsByLink(d, per) {
   const world = worlds[d];
   const count = new Map(), out = [];
-  for (const bd of sample(d, 19)) {
+  for (const bd of sample(d, 39)) {
     for (const { cell, kind } of floorItems(world, bd)) {
       if (kind !== 'oil') continue;
       const link = Math.log2(bd.links[cell]);

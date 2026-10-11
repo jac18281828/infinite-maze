@@ -107,7 +107,7 @@ the same world on every engine.
 | Sign at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 48 | carved when under 8 (EASY), 6 (MEDIUM), 4 (HARD) or 3 (ULTIMATE) |
 | Corner of a sign | `H("sign", x, y, cell)` u32 bit 31 | left, right |
 | Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
-| Oil jar | `H("oil", x, y, cell)` u32 mod 100 < 10 | on a dead-end cell (§4) with no coin |
+| Oil jar | `H("oil", x, y, cell)` u32 mod 100 < 10, 7, 5 or 4 | on a dead-end cell (§4) with no coin; 10 at EASY, 7 at MEDIUM, 5 at HARD, 4 at ULTIMATE |
 
 Both boards on a shared wall read the same door key, and both tombs on a
 shared tomb wall read the same crossing key, so door positions match across
@@ -273,13 +273,15 @@ A rock board has none. An ordered item list names each kind, its hash tag and
 its percentage, and a dead-end cell takes the first kind whose
 `u32(H(tag, x, y, cell)) mod 100` falls below its percentage, so two items
 never share a cell. Two kinds ship, in this order: the coin, at 5 under the tag
-`coin`, then the oil jar, at 10 under the tag `oil`. The coin wins a tie, and
-placement reads hashes only, so a jar lies on a dead-end cell whose coin hash
-fails and whose oil hash passes: about 9.5% of them. Items are read off a built
-board and built into none, and the difficulty enters no tag and no percentage,
-so every pinned digest stands. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
-`v ∈ [0, 19]`, a tree board holds 6.5 to 6.6 dead-end cells; 4.4% to 5.2% of
-them hold a coin and 9.5% to 10.1% a jar, by level.
+`coin`, then the oil jar under the tag `oil`, at 10 at EASY, 7 at MEDIUM, 5 at
+HARD and 4 at ULTIMATE. The coin wins a tie, and placement reads hashes only, so
+a jar lies on a dead-end cell whose coin hash fails and whose oil hash passes:
+95% of the rate, 9.5%, 6.7%, 4.8% and 3.8% of dead-end cells. Items are read
+off a built board and built into none. The difficulty enters the jar's
+percentage and no tag, and no pinned digest depends on either. On seed
+`0000-0000`, tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`, a tree board holds 6.5 to
+6.6 dead-end cells; 4.4% to 5.2% of them hold a coin, by level, and 9.8% hold a
+jar at EASY, 7.1% at MEDIUM and 4.9% at HARD.
 
 ## 5. Save code
 
