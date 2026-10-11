@@ -4060,12 +4060,9 @@ function createRenderer(canvas, world) {
     }
   }
 
-  /**
-   * Draws the explorer with its feet at `at` and adds the torch light; returns
-   * the torch tip on screen. Pose and facing come from `sim`.
-   */
-  function drawExplorer(sim, at, sx, sy, t) {
-    const [fx, fy] = at;
+  /** Draws the explorer and adds the torch light; returns the torch tip on screen. */
+  function drawExplorer(sim, sx, sy, t) {
+    const [fx, fy] = feet(sim);
     const { anim, frame } = pose(sim);
     const flip = sim.facing < 0;
     const px = Math.round(sx(fx)) - 8, py = Math.round(sy(fy)) - 24;
@@ -4102,15 +4099,10 @@ function createRenderer(canvas, world) {
 
   /**
    * Draws the world around `cam` with the explorer `sim` (or none).
-   * `t` is seconds of wall time, used for flicker and animation. `at` places
-   * the explorer's feet in world pixels, the sim's own when omitted.
+   * `t` is seconds of wall time, used for flicker and animation.
    */
-  function scene(sim, cam, t, at = null) {
-    const feetAt = sim ? at || feet(sim) : null;
-    // With an explorer the offset rounds once: the sprite lands at round(feet - cam)
-    // from the centre on world pixel round(feet), so a steady lag draws it still.
-    const cx = feetAt ? Math.round(feetAt[0]) - Math.round(feetAt[0] - cam.x) : Math.round(cam.x);
-    const cy = feetAt ? Math.round(feetAt[1]) + Math.round(cam.y - feetAt[1]) : Math.round(cam.y);
+  function scene(sim, cam, t) {
+    const cx = Math.round(cam.x), cy = Math.round(cam.y);
     const sx = (wx) => wx - cx + VIEW_W / 2;
     const sy = (wy) => cy - wy + VIEW_H / 2;
     const unsx = (px) => px + cx - VIEW_W / 2;
@@ -4121,7 +4113,7 @@ function createRenderer(canvas, world) {
     const lit = drawBoards(cx, cy, sx, sy);
     drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
     drawFlames(lit, sx, sy, t);
-    const tip = sim ? drawExplorer(sim, feetAt, sx, sy, t) : null;
+    const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
     if (tip) drawDust(sim, tip, t, sx, sy, unsx, unsy);
     return tip;
@@ -4243,8 +4235,7 @@ return { VIEW_W, VIEW_H, MAP_SCALE, WIND_SPEED, shade, spriteCanvas, createRende
 // src/game/audio.mjs
 const __m18 = (() => {
 
-// WebAudio music and sound, synthesized. The context is built at boot,
-// suspended; the first key press or touch resumes it and starts the music.
+// WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
 // drum at 110 BPM. As the torch dims, layers enter and the tempo rises to
 // 128 BPM; a relight drops both back. A low-pass, a light bit-crush and tape
@@ -4270,7 +4261,7 @@ const PHRASES = [
 const ARP = [0, 2, 4, 6, 7, 6, 4, 2];
 
 function createAudio() {
-  let ac = null, master, music, sfx, wobble, noise, timer = 0, started = false;
+  let ac = null, master, music, sfx, wobble, noise, timer = 0;
   let muted = false, intensity = 0, eased = 0, nextTime = 0, step = 0, phrase = 0;
 
   function crushCurve(levels) {
@@ -4282,21 +4273,11 @@ function createAudio() {
     return c;
   }
 
-  /** Builds the context and its graph; a missing or throwing context leaves audio off. */
-  function build() {
+  function start() {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
     const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
     if (!AC) return;
-    try {
-      ac = new AC();
-      graph();
-    } catch {
-      const dead = ac;
-      ac = master = music = sfx = wobble = noise = null;
-      try { Promise.resolve(dead && dead.close()).catch(() => {}); } catch { /* nothing to close */ }
-    }
-  }
-
-  function graph() {
+    ac = new AC();
     master = ac.createGain();
     master.gain.value = muted ? 0 : 0.9;
     master.connect(ac.destination);
@@ -4326,22 +4307,6 @@ function createAudio() {
     noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
     const d = noise.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  }
-
-  /**
-   * Resumes the context whenever it is not running, which covers iOS's
-   * `interrupted` as well as `suspended`, and on the first call starts the music.
-   */
-  function start() {
-    if (!ac) return;
-    if (ac.state !== 'running') {
-      try {
-        const resumed = ac.resume();
-        if (resumed && resumed.catch) resumed.catch(() => {});
-      } catch { /* a refused resume leaves the context as it was */ }
-    }
-    if (started) return;
-    started = true;
     nextTime = ac.currentTime + 0.08;
     timer = setInterval(schedule, 25);
   }
@@ -4559,11 +4524,9 @@ function createAudio() {
   };
 
   function play(name) {
-    if (!started || muted || !SOUNDS[name]) return;
+    if (!ac || muted || !SOUNDS[name]) return;
     SOUNDS[name](ac.currentTime + 0.005);
   }
-
-  build();
 
   return {
     start,
@@ -4583,87 +4546,8 @@ function createAudio() {
 return { createAudio };
 })();
 
-// src/game/perf.mjs
-const __m19 = (() => {
-
-// Frame-timing probe behind `#perf`: the rAF interval histogram, the ticks each
-// frame ran and the draw cost. DOM-free; main.mjs feeds it and shows it.
-
-const BINS = 21;
-const BIN_MS = 2;
-const TICK_BINS = 4;
-
-const hundredths = (ms) => Math.round(ms * 100) / 100;
-
-function createProbe() {
-  const bins = new Array(BINS).fill(0);
-  const ticks = new Array(TICK_BINS).fill(0);
-  let frames = 0, drawSum = 0, drawMax = 0;
-  return {
-    /** Records one animation frame: rAF interval, ticks run and draw time, in ms. */
-    frame(intervalMs, ran, drawMs) {
-      frames++;
-      bins[Math.min(BINS - 1, Math.max(0, Math.floor(intervalMs / BIN_MS)))]++;
-      ticks[Math.min(TICK_BINS - 1, ran)]++;
-      drawSum += drawMs;
-      if (drawMs > drawMax) drawMax = drawMs;
-    },
-    /**
-     * Bin i counts intervals in [2i, 2i + 2) ms and bin 20 those of 40 ms and
-     * over. `ticks` counts frames that ran 0, 1, 2 and 3 or more ticks.
-     */
-    summary() {
-      return {
-        frames,
-        bins: bins.slice(),
-        ticks: ticks.slice(),
-        drawMeanMs: frames ? hundredths(drawSum / frames) : 0,
-        drawMaxMs: hundredths(drawMax),
-      };
-    },
-  };
-}
-return { createProbe };
-})();
-
-// src/game/smooth.mjs
-const __m20 = (() => {
-const { TICK, feet } = __m10;
-// Frames between ticks: the loop's accumulator and the blend of the last two
-// tick states. DOM-free, so tests drive the loop's own arithmetic.
-
-
-// Legitimate motion moves the feet at most 9 px a tick (SPEC section 6); a
-// larger move is a placement, which draws without a blend.
-const SNAP_PX = 16;
-
-/** Adds `dt` seconds, capped at 0.25, to `acc` and spends whole ticks. */
-function advance(acc, dt) {
-  acc += Math.min(0.25, dt);
-  let ticks = 0;
-  while (acc >= TICK) { acc -= TICK; ticks++; }
-  return { acc, ticks };
-}
-
-/** The explorer's feet and the camera centre, copied: `cam` mutates in place. */
-function snapshot(sim, cam) {
-  const [x, y] = feet(sim);
-  return { x, y, cx: cam.x, cy: cam.y };
-}
-
-/** `prev` to `cur` at `alpha` in [0, 1]; `cur` when `prev` is null or the feet jumped. */
-function blend(prev, cur, alpha) {
-  if (!prev || Math.abs(cur.x - prev.x) > SNAP_PX || Math.abs(cur.y - prev.y) > SNAP_PX) return cur;
-  if (alpha <= 0) return { ...prev };
-  if (alpha >= 1) return { ...cur };
-  const mix = (a, b) => a + (b - a) * alpha;
-  return { x: mix(prev.x, cur.x), y: mix(prev.y, cur.y), cx: mix(prev.cx, cur.cx), cy: mix(prev.cy, cur.cy) };
-}
-return { SNAP_PX, advance, snapshot, blend };
-})();
-
 // src/game/autopilot.mjs
-const __m21 = (() => {
+const __m19 = (() => {
 const { DX, DY } = __m2;
 const { createSim, step, inputEdges } = __m10;
 // Scripted input for the self-test: walks the explorer along tomb (0, 0)'s
@@ -4770,7 +4654,7 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/gamepad.mjs
-const __m22 = (() => {
+const __m20 = (() => {
 
 // Controller layer. A standard-mapped gamepad's buttons and left stick become
 // the keyboard's own key events, so the key handlers serve a controller
@@ -4863,7 +4747,7 @@ return { STICK_ON, STICK_OFF, createGamepad };
 })();
 
 // src/game/touch.mjs
-const __m23 = (() => {
+const __m21 = (() => {
 const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m11;
 const { VIEW_W, VIEW_H } = __m17;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
@@ -5524,7 +5408,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, layout, padSide, titleF
 })();
 
 // src/game/clipboard.mjs
-const __m24 = (() => {
+const __m22 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -5552,7 +5436,7 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/main.mjs
-const __m25 = (() => {
+const __m23 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
@@ -5561,20 +5445,16 @@ const { floorItems, itemSpot } = __m7;
 const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
 const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m17;
 const { createAudio } = __m18;
-const { createProbe } = __m19;
-const { advance, snapshot, blend } = __m20;
-const { runScript, createAutopilot, SELFTEST_CODE } = __m21;
+const { runScript, createAutopilot, SELFTEST_CODE } = __m19;
 const { COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid } = __m9;
-const { createGamepad } = __m22;
-const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m23;
+const { createGamepad } = __m20;
+const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m21;
 const { MILESTONE, rankName } = __m8;
-const { copyWithStatus, saveLabel } = __m24;
+const { copyWithStatus, saveLabel } = __m22;
 const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m16;
-const { RGB, PALETTE, idx } = __m11;
+const { RGB, idx } = __m11;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
 // milestone splash screens. `#selftest` in the URL runs the self-test instead.
-
-
 
 
 
@@ -6452,17 +6332,7 @@ function coinLeg(g, { need, click }) {
   need(g.screen === 'play' && g.earned === g.wallet - start, 'CONTINUE keeps the coins earned this run');
   oneTombOn(g, 1);
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
-  const [fx, fy] = feet(g.sim);
-  need(g.prev && (g.prev.x !== fx || g.prev.y !== fy), 'a tick stores the snapshot before it steps');
-  // Halfway between ticks, the frame draws strictly between the two ticks' feet on the axis that moved.
-  const drawn = draw(g, 0, 0.5);
-  const axis = g.prev.x !== fx ? 'x' : 'y';
-  const latest = axis === 'x' ? fx : fy;
-  need(drawn && (drawn[axis] - g.prev[axis]) * (latest - drawn[axis]) > 0, 'a frame between ticks draws between the two ticks');
-  click('play', 'pause');
-  tick(g);
-  need(g.prev === null, 'a tick off the play screen clears the snapshot');
-  click('pause', 'resume');
+  draw(g, 0);
 }
 
 /**
@@ -6641,8 +6511,6 @@ function createGame() {
     // The milestone the splash shows: { k, paid }, where paid is whether this crossing paid.
     splash: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
-    // The explorer and camera as of the start of the latest tick, which a frame between ticks blends from.
-    prev: null,
     // The tomb { u, v } the pause map frames, and its model.
     frame: { u: 0, v: 0 }, pauseMap: null, pausedAt: null,
   };
@@ -6904,10 +6772,8 @@ function milestoneHit(g, was) {
 }
 
 function tick(g) {
-  // Any entry into play draws the latest state until its first tick.
-  if (g.screen !== 'play') { g.prev = null; return; }
+  if (g.screen !== 'play') return;
   const was = tombCount(g.sim);
-  g.prev = snapshot(g.sim, g.cam);
   stepSim(g);
   handleEvents(g);
   const hit = milestoneHit(g, was);
@@ -7042,60 +6908,18 @@ function drawSplash(g) {
   r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
 }
 
-// The #perf probe, null unless the page loaded with that hash, and the time of
-// its last publication to the page.
-let probe = null;
-let published = 0;
-
-/** Records one frame in the probe and, about once a second, publishes its summary. */
-function recordFrame(now, interval, ticks, drawMs) {
-  probe.frame(interval, ticks, drawMs);
-  // Once a second at most, so the DOM write stays out of the frames measured.
-  if (now - published < 1000) return;
-  published = now;
-  document.body.dataset.perf = JSON.stringify(probe.summary());
-}
-
-/** The probe's overlay: interval bars, tick counts and draw cost, below the torch bar. */
-function drawProbe(r, s) {
-  const lines = [`0:${s.ticks[0]} 1:${s.ticks[1]}`, `2:${s.ticks[2]} 3UP:${s.ticks[3]}`, `DRAW ${s.drawMeanMs.toFixed(2)} MAX ${s.drawMaxMs.toFixed(2)}`];
-  const w = Math.max(66, 2 + 6 * Math.max(...lines.map((l) => l.length)));
-  r.ctx.fillStyle = shade(0.8);
-  r.ctx.fillRect(4, 15, w, 46);
-  const peak = Math.max(1, ...s.bins);
-  s.bins.forEach((n, i) => {
-    const h = n ? Math.max(1, Math.round((16 * n) / peak)) : 0;
-    r.ctx.fillStyle = PALETTE[idx(i === s.bins.length - 1 ? 'o' : 'p')];
-    r.ctx.fillRect(5 + 3 * i, 33 - h, 2, h);
-  });
-  lines.forEach((l, i) => r.text(l, 5, 36 + 8 * i, 'c'));
-}
-
-/**
- * Draws one frame. In play, `alpha` in [0, 1] places the explorer and the
- * camera between the last two ticks; every other screen draws the latest state.
- * Returns the feet and camera it drew in play, else null.
- */
-function draw(g, t, alpha = 1) {
-  let drawn = null;
+function draw(g, t) {
   if (g.screen === 'title') {
     drawTitle(g, t);
   } else {
-    if (g.screen === 'play') {
-      drawn = blend(g.prev, snapshot(g.sim, g.cam), alpha);
-      g.renderer.scene(g.sim, { x: drawn.cx, y: drawn.cy }, t, [drawn.x, drawn.y]);
-    } else {
-      g.renderer.scene(g.sim, g.cam, t);
-    }
+    g.renderer.scene(g.sim, g.cam, t);
     g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
   }
-  if (probe) drawProbe(g.renderer, probe.summary());
   present();
   if (touch) touch.refresh();
-  return drawn;
 }
 
 // The standard-mapped gamepads, read through navigator at poll time.
@@ -7110,18 +6934,13 @@ function pollGamepads() {
 
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
-  if (location.hash === '#perf') probe = createProbe();
   let last = performance.now(), acc = 0;
   function frame(now) {
-    const interval = now - last;
+    acc += Math.min(0.25, (now - last) / 1000);
     last = now;
     pollGamepads();
-    const spent = advance(acc, interval / 1000);
-    acc = spent.acc;
-    for (let i = 0; i < spent.ticks; i++) tick(g);
-    const began = probe ? performance.now() : 0;
-    draw(g, now / 1000, acc / TICK);
-    if (probe) recordFrame(now, interval, spent.ticks, performance.now() - began);
+    while (acc >= TICK) { tick(g); acc -= TICK; }
+    draw(g, now / 1000);
     requestAnimationFrame(frame);
   }
   draw(g, 0);

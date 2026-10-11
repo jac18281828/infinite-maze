@@ -342,12 +342,9 @@ export function createRenderer(canvas, world) {
     }
   }
 
-  /**
-   * Draws the explorer with its feet at `at` and adds the torch light; returns
-   * the torch tip on screen. Pose and facing come from `sim`.
-   */
-  function drawExplorer(sim, at, sx, sy, t) {
-    const [fx, fy] = at;
+  /** Draws the explorer and adds the torch light; returns the torch tip on screen. */
+  function drawExplorer(sim, sx, sy, t) {
+    const [fx, fy] = feet(sim);
     const { anim, frame } = pose(sim);
     const flip = sim.facing < 0;
     const px = Math.round(sx(fx)) - 8, py = Math.round(sy(fy)) - 24;
@@ -384,15 +381,10 @@ export function createRenderer(canvas, world) {
 
   /**
    * Draws the world around `cam` with the explorer `sim` (or none).
-   * `t` is seconds of wall time, used for flicker and animation. `at` places
-   * the explorer's feet in world pixels, the sim's own when omitted.
+   * `t` is seconds of wall time, used for flicker and animation.
    */
-  function scene(sim, cam, t, at = null) {
-    const feetAt = sim ? at || feet(sim) : null;
-    // With an explorer the offset rounds once: the sprite lands at round(feet - cam)
-    // from the centre on world pixel round(feet), so a steady lag draws it still.
-    const cx = feetAt ? Math.round(feetAt[0]) - Math.round(feetAt[0] - cam.x) : Math.round(cam.x);
-    const cy = feetAt ? Math.round(feetAt[1]) + Math.round(cam.y - feetAt[1]) : Math.round(cam.y);
+  function scene(sim, cam, t) {
+    const cx = Math.round(cam.x), cy = Math.round(cam.y);
     const sx = (wx) => wx - cx + VIEW_W / 2;
     const sy = (wy) => cy - wy + VIEW_H / 2;
     const unsx = (px) => px + cx - VIEW_W / 2;
@@ -403,7 +395,7 @@ export function createRenderer(canvas, world) {
     const lit = drawBoards(cx, cy, sx, sy);
     drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
     drawFlames(lit, sx, sy, t);
-    const tip = sim ? drawExplorer(sim, feetAt, sx, sy, t) : null;
+    const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
     if (tip) drawDust(sim, tip, t, sx, sy, unsx, unsy);
     return tip;

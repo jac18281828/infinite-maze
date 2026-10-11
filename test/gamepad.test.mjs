@@ -155,6 +155,6 @@ test('runLoop\'s frame polls the gamepads before it ticks', () => {
   const frame = src.match(/function runLoop\([^)]*\) \{[\s\S]*?\n\}\n/);
   assert.ok(frame, 'runLoop found');
   const body = frame[0].slice(frame[0].indexOf('function frame(now) {'));
-  const poll = body.indexOf('pollGamepads()'), advance = body.indexOf('advance(');
-  assert.ok(poll >= 0 && advance >= 0 && poll < advance, 'frame calls pollGamepads() before advance(');
+  const poll = body.indexOf('pollGamepads()'), ticks = body.indexOf('tick(g)');
+  assert.ok(poll >= 0 && ticks >= 0 && poll < ticks, 'frame calls pollGamepads() before tick(g)');
 });

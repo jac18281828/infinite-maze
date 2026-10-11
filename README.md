@@ -130,9 +130,6 @@ tomb (1, 0), outside board columns 0-2, and fails unless the explorer's room
 draws as maze rather than rock. The self-test then sets `data-selftest` on
 `<body>`.
 
-`infinite-maze.html#perf` overlays the frame-interval histogram, the ticks per
-frame and the draw cost, and mirrors them as JSON in `data-perf` on `<body>`.
-
 ## Deploy
 
 Every push to main deploys. `.github/workflows/ci-cd.yml` runs the gates,

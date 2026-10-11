@@ -10,8 +10,6 @@ import {
 } from './sim.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
-import { createProbe } from './perf.mjs';
-import { advance, snapshot, blend } from './smooth.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
   COIN_RATE, tombPayout, coinKey, coinId, parseWallet, parseCollected, parsePaid, serializeCollected, serializePaid,
@@ -21,7 +19,7 @@ import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PAN
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
-import { RGB, PALETTE, idx } from './art.mjs';
+import { RGB, idx } from './art.mjs';
 
 // Saves and bests of the tomb plane keep keys of their own, so a stacked-world
 // value never reads as a position or a score.
@@ -883,17 +881,7 @@ function coinLeg(g, { need, click }) {
   need(g.screen === 'play' && g.earned === g.wallet - start, 'CONTINUE keeps the coins earned this run');
   oneTombOn(g, 1);
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
-  const [fx, fy] = feet(g.sim);
-  need(g.prev && (g.prev.x !== fx || g.prev.y !== fy), 'a tick stores the snapshot before it steps');
-  // Halfway between ticks, the frame draws strictly between the two ticks' feet on the axis that moved.
-  const drawn = draw(g, 0, 0.5);
-  const axis = g.prev.x !== fx ? 'x' : 'y';
-  const latest = axis === 'x' ? fx : fy;
-  need(drawn && (drawn[axis] - g.prev[axis]) * (latest - drawn[axis]) > 0, 'a frame between ticks draws between the two ticks');
-  click('play', 'pause');
-  tick(g);
-  need(g.prev === null, 'a tick off the play screen clears the snapshot');
-  click('pause', 'resume');
+  draw(g, 0);
 }
 
 /**
@@ -1072,8 +1060,6 @@ function createGame() {
     // The milestone the splash shows: { k, paid }, where paid is whether this crossing paid.
     splash: null,
     screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
-    // The explorer and camera as of the start of the latest tick, which a frame between ticks blends from.
-    prev: null,
     // The tomb { u, v } the pause map frames, and its model.
     frame: { u: 0, v: 0 }, pauseMap: null, pausedAt: null,
   };
@@ -1335,10 +1321,8 @@ function milestoneHit(g, was) {
 }
 
 function tick(g) {
-  // Any entry into play draws the latest state until its first tick.
-  if (g.screen !== 'play') { g.prev = null; return; }
+  if (g.screen !== 'play') return;
   const was = tombCount(g.sim);
-  g.prev = snapshot(g.sim, g.cam);
   stepSim(g);
   handleEvents(g);
   const hit = milestoneHit(g, was);
@@ -1473,60 +1457,18 @@ function drawSplash(g) {
   r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
 }
 
-// The #perf probe, null unless the page loaded with that hash, and the time of
-// its last publication to the page.
-let probe = null;
-let published = 0;
-
-/** Records one frame in the probe and, about once a second, publishes its summary. */
-function recordFrame(now, interval, ticks, drawMs) {
-  probe.frame(interval, ticks, drawMs);
-  // Once a second at most, so the DOM write stays out of the frames measured.
-  if (now - published < 1000) return;
-  published = now;
-  document.body.dataset.perf = JSON.stringify(probe.summary());
-}
-
-/** The probe's overlay: interval bars, tick counts and draw cost, below the torch bar. */
-function drawProbe(r, s) {
-  const lines = [`0:${s.ticks[0]} 1:${s.ticks[1]}`, `2:${s.ticks[2]} 3UP:${s.ticks[3]}`, `DRAW ${s.drawMeanMs.toFixed(2)} MAX ${s.drawMaxMs.toFixed(2)}`];
-  const w = Math.max(66, 2 + 6 * Math.max(...lines.map((l) => l.length)));
-  r.ctx.fillStyle = shade(0.8);
-  r.ctx.fillRect(4, 15, w, 46);
-  const peak = Math.max(1, ...s.bins);
-  s.bins.forEach((n, i) => {
-    const h = n ? Math.max(1, Math.round((16 * n) / peak)) : 0;
-    r.ctx.fillStyle = PALETTE[idx(i === s.bins.length - 1 ? 'o' : 'p')];
-    r.ctx.fillRect(5 + 3 * i, 33 - h, 2, h);
-  });
-  lines.forEach((l, i) => r.text(l, 5, 36 + 8 * i, 'c'));
-}
-
-/**
- * Draws one frame. In play, `alpha` in [0, 1] places the explorer and the
- * camera between the last two ticks; every other screen draws the latest state.
- * Returns the feet and camera it drew in play, else null.
- */
-function draw(g, t, alpha = 1) {
-  let drawn = null;
+function draw(g, t) {
   if (g.screen === 'title') {
     drawTitle(g, t);
   } else {
-    if (g.screen === 'play') {
-      drawn = blend(g.prev, snapshot(g.sim, g.cam), alpha);
-      g.renderer.scene(g.sim, { x: drawn.cx, y: drawn.cy }, t, [drawn.x, drawn.y]);
-    } else {
-      g.renderer.scene(g.sim, g.cam, t);
-    }
+    g.renderer.scene(g.sim, g.cam, t);
     g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
   }
-  if (probe) drawProbe(g.renderer, probe.summary());
   present();
   if (touch) touch.refresh();
-  return drawn;
 }
 
 // The standard-mapped gamepads, read through navigator at poll time.
@@ -1541,18 +1483,13 @@ function pollGamepads() {
 
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
-  if (location.hash === '#perf') probe = createProbe();
   let last = performance.now(), acc = 0;
   function frame(now) {
-    const interval = now - last;
+    acc += Math.min(0.25, (now - last) / 1000);
     last = now;
     pollGamepads();
-    const spent = advance(acc, interval / 1000);
-    acc = spent.acc;
-    for (let i = 0; i < spent.ticks; i++) tick(g);
-    const began = probe ? performance.now() : 0;
-    draw(g, now / 1000, acc / TICK);
-    if (probe) recordFrame(now, interval, spent.ticks, performance.now() - began);
+    while (acc >= TICK) { tick(g); acc -= TICK; }
+    draw(g, now / 1000);
     requestAnimationFrame(frame);
   }
   draw(g, 0);

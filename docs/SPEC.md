@@ -649,28 +649,8 @@ EASY, 108×63 at MEDIUM, 144×84 at HARD and 216×84 at ULTIMATE, centred in the
 largest.
 
 **Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
-pixels, rounded so the explorer's offset from the view centre rounds once: with
-the explorer drawn at feet `f`, the whole-pixel camera is `round(f.x) −
-round(f.x − cam.x)` across and `round(f.y) + round(cam.y − f.y)` up. At the
-28.4 px lag a run holds, the explorer then stands at one screen position
-instead of alternating between two, and it stays on the world pixel
-`round(f)`, so its feet stay on floors and treads, except where `f.y` falls
-exactly on a half pixel, where the sprite sits one pixel lower on screen. With
-no explorer the camera rounds as is. It scrolls freely across board seams, and
-rock fills every position outside the band trees.
-
-**Frames between ticks.** In play, the explorer's feet and the camera centre
-draw between the last two ticks, linearly at the fraction of a tick elapsed
-since the latest. The follow still runs once a tick and the simulation is
-untouched; a frame never extrapolates, so the picture trails the simulation by
-under one tick. Pose, facing, torch burn and the HUD show the latest tick. One
-camera serves every world-space draw of the frame, and the torch, its light and
-the dust follow the drawn explorer. A frame draws the latest state, with no
-blend:
-- on every screen but play;
-- after any entry into play, until the next tick;
-- when the latest tick moved the feet more than 16 px on either axis, which is
-  a placement, since legitimate motion moves them at most 9 px a tick (§6).
+pixels. It scrolls freely across board seams, and rock fills every position
+outside the band trees.
 
 **Explorer.** A khaki-clad figure in a fedora, carrying a torch, with these
 animations:
@@ -699,22 +679,11 @@ torch sputtering at low burn.
 ## 9. Runtime
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
-`requestAnimationFrame`, interpolated between ticks (§8). Building a board
-takes 0.7 ms on average and 17 ms at most, and a tomb's board tree 0.04 ms on
-average and under 1 ms at most, measured on node 26.7.0 and an Apple M3 Max.
-The audio context is built at boot, suspended, and the first key press or
-touch resumes it and starts the music, as browser autoplay policy requires;
-no sound plays before then, and a browser without WebAudio leaves the game
-silent.
-
-**Frame timing.** `infinite-maze.html#perf`, read once at boot, turns on a
-probe. Its overlay sits at the view's upper left, below the torch bar, and
-shows the animation-frame interval histogram in 2 ms bins with a last bin for
-40 ms and over, the count of frames that ran 0, 1, 2 and 3 or more ticks, and
-the draw cost, mean and maximum. `data-perf` on `<body>` holds the same
-figures as JSON, refreshed about once a second. Without the hash the page
-draws no overlay, sets no attribute and does no probe work per frame. The
-probe sends nothing anywhere.
+`requestAnimationFrame`. Building a board takes 0.7 ms on average and 17 ms
+at most, and a tomb's board tree 0.04 ms on average and under 1 ms at most,
+measured on node 26.7.0 and an Apple M3 Max.
+Audio starts on the first key press or touch, as browser autoplay policy
+requires.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
 mute and P to pause and show the save code. P returns the player to where

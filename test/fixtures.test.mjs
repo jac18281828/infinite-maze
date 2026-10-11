@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
-import { createSim, step, feet, inputEdges, nodeXY, torchRadius } from '../src/game/sim.mjs';
+import { createSim, nodeXY, torchRadius } from '../src/game/sim.mjs';
 import { RGB, idx, SIGNS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
 import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import {
@@ -243,11 +243,11 @@ view.height = 180;
 const renderer = createRenderer(view, world);
 
 /** Draws `bd` centred in the view; returns the board's art canvas and the view's draw log. */
-function renderBoard(bd, sim = null, cam = { x: bd.x * 576 + 288, y: bd.y * 336 + 168 }, t = 0, at = null) {
+function renderBoard(bd, sim = null, cam = { x: bd.x * 576 + 288, y: bd.y * 336 + 168 }, t = 0) {
   const ctx = view.getContext('2d');
   view.draws.length = 0;
   view.fills.length = 0;
-  renderer.scene(sim, cam, t, at);
+  renderer.scene(sim, cam, t);
   const art = view.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
   return { art, ctx };
 }
@@ -785,62 +785,4 @@ test('hud draws the wallet under TOMB n: the coin sprite, then the count right-a
     const glyphs = view.draws.filter((d) => d.length === 5 && d[2] === 14).map((d) => d[1]);
     assert.deepEqual(glyphs, Array.from(String(wallet), (_, i) => 315 - width + 6 * i));
   }
-});
-
-// The camera.
-/** The explorer sprites of the last scene: 16 x 24 draws at a point, which a board holds no other of. */
-const explorerDraws = () => view.draws.filter(([src, ...a]) => src.width === 16 && src.height === 24 && a.length === 2);
-
-test('the explorer holds one view x along a run at the 28.4 px lag, on the world pixel round(feet x)', () => {
-  const { bd } = boards[0];
-  const cell = bd.links.findIndex((m) => m);
-  const [nx, ny] = nodeXY(bd, cell);
-  // Centred on the board, the view holds its art alone.
-  const { art } = renderBoard(bd);
-  const seen = new Set();
-  for (let k = 0; k < 24; k++) {
-    const sim = createSim(world, { board: bd, cell });
-    sim.off = -19.2 + 1.6 * k;
-    const [fx, fy] = [nx + sim.off, ny];
-    renderBoard(bd, sim, { x: fx - 28.4, y: fy + 18 }, 0);
-    const sprites = explorerDraws();
-    assert.equal(sprites.length, 1, 'one explorer sprite');
-    const board = view.draws.find(([src]) => src === art);
-    assert.equal(sprites[0][1] - board[1], Math.round(fx) - 8 - bd.x * 576, `feet ${fx}: on the world pixel`);
-    seen.add(sprites[0][1]);
-  }
-  assert.equal(seen.size, 1, `the sprite stands at view x ${[...seen]}`);
-});
-
-test('the explorer holds one view y up a ladder at a steady lag, on the world pixel round(feet y)', () => {
-  const { bd } = boards[0];
-  const cell = bd.links.findIndex((m) => m & 2);
-  const sim = createSim(world, { board: bd, cell });
-  const { art } = renderBoard(bd);
-  const seen = new Set();
-  for (let k = 0; k < 24; k++) {
-    step(sim, 0, 1, false, inputEdges(0, k ? 1 : 0, 0, 1));
-    assert.equal(sim.mode, 'link', 'climbing');
-    const [fx, fy] = feet(sim);
-    renderBoard(bd, sim, { x: fx, y: fy + 30.4 }, 0);
-    const sprites = explorerDraws();
-    assert.equal(sprites.length, 1, 'one explorer sprite');
-    const board = view.draws.find(([src]) => src === art);
-    assert.equal(sprites[0][2] - board[2], (bd.y + 1) * 336 - Math.round(fy) - 24, `feet ${fy}: on the world pixel`);
-    seen.add(sprites[0][2]);
-  }
-  assert.equal(seen.size, 1, `the sprite stands at view y ${[...seen]}`);
-});
-
-test('a scene draws the explorer where `at` puts it, and at the sim\'s feet when `at` is omitted', () => {
-  const { bd } = boards[0];
-  const cell = bd.links.findIndex((m) => m);
-  const sim = createSim(world, { board: bd, cell });
-  const [fx, fy] = feet(sim);
-  const at = [fx + 37.3, fy + 11];
-  // The camera trails `at` by 28.4 px across and 18 up, so the sprite stands at view (180, 84).
-  renderBoard(bd, sim, { x: at[0] - 28.4, y: at[1] + 18 }, 0, at);
-  assert.deepEqual(explorerDraws().map(([, x, y]) => [x, y]), [[180, 84]]);
-  renderBoard(bd, sim, { x: fx - 28.4, y: fy + 18 }, 0);
-  assert.deepEqual(explorerDraws().map(([, x, y]) => [x, y]), [[180, 84]]);
 });
