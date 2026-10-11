@@ -721,13 +721,17 @@ any other save or typed code starts a new run with its own start tomb. The
 HUD's `TOMB n`, the pause header's `TOMB n`, the title's `BEST TOMB` and the
 end screen's `TOMBS CLIMBED` show that count.
 
-**Oil jars.** A jar is a sprite at most 7×8 px in umber and ochre with a dark
-mouth. It rests on the floor at the same point as a coin: 12 px from its
-cell's standing point, away from the cell's one link, or east of a ladder. The
+**Oil jars.** A jar is a sprite at most 9×12 px: a knobbed lid over an umber
+rim and a rounded body of dark violet oil, outlined in umber so it stands off
+the lapis back wall. It rests on the floor at the same point as a coin: 12 px
+from its cell's standing point, away from the cell's one link, or east of a
+ladder. It stands in the room's columns 8 to 16 at the west point and 31 to 39
+at the east, so it never covers rock or a shaft. The
 scene draws untaken jars after the boards and before the light map, as it draws
 coins, and never bakes one into the board art.
 
-**Coins.** A coin is a gold sprite at most 6×6 px. It rests on the floor 12 px
+**Coins.** A coin is a gold sprite at most 6×6 px, ringed in gold with a bone
+glint on its upper left. It rests on the floor 12 px
 from its cell's standing point, on the side away from the cell's one link, or
 east of a ladder, which keeps it off the corridor mouth, the ladder shaft and
 the stair. The scene draws it after the boards and before the light map, so

@@ -351,7 +351,11 @@ export function createRenderer(canvas, world) {
         if (taken && taken.has(coinId(bd, cell))) continue;
         const [x, y] = itemSpot(bd, cell);
         if (kind === 'coin') ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
-        else ctx.drawImage(jar, Math.round(sx(x)) - 3, Math.round(sy(y)) - 8);
+        else {
+          // The 9 px jar fills room columns 8..16 at the west spot and 31..39 at the east.
+          const east = x - bd.x * BOARD_W - (cell % BW) * 48 > 24;
+          ctx.drawImage(jar, Math.round(sx(x)) - (east ? 5 : 4), Math.round(sy(y)) - 12);
+        }
       }
     }
   }

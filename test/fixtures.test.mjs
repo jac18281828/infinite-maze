@@ -1016,9 +1016,31 @@ test('a scene draws the coin sprite at each uncollected coin\'s floor point, and
   }
 });
 
+// The coin before it was gilded: its outline was k, which the light map browns.
+const OLD_COIN = ['..kk..', '.kmmk.', 'kmmlmk', 'kmllmk', '.klmk.', '..kk..'];
+const opaque = (rows) => rows.flatMap((row, r) => [...row].flatMap((ch, c) => (ch === '.' ? [] : [{ r, c, ch }])));
+/** Mean Rec. 601 luma of the opaque pixels of `rows`. */
+const meanLuma = (rows) => {
+  const px = opaque(rows);
+  return px.reduce((sum, { ch }) => { const [r, g, b] = RGB[idx(ch)]; return sum + 0.299 * r + 0.587 * g + 0.114 * b; }, 0) / px.length;
+};
+/** Opaque pixels of `rows` that touch the sprite's edge or a transparent 4-neighbour. */
+const outlineOf = (rows) => opaque(rows).filter(({ r, c }) => [[0, -1], [0, 1], [-1, 0], [1, 0]].some(([dr, dc]) => (rows[r + dr] || '')[c + dc] === undefined || rows[r + dr][c + dc] === '.'));
+
+test('the coin is gold: 6x6, at least 30 luma brighter than before, no k in its outline and a bone glint', () => {
+  assert.ok(COIN.length === 6 && COIN.every((row) => row.length === 6), 'the coin stays 6x6');
+  const gain = meanLuma(COIN) - meanLuma(OLD_COIN);
+  assert.ok(gain >= 30, `mean luma rises by ${gain.toFixed(1)}`);
+  const outline = outlineOf(COIN);
+  assert.ok(outline.length > 0 && outline.every(({ ch }) => 'lm'.includes(ch)), `outline ${outline.map(({ ch }) => ch).join('')}`);
+  const glints = opaque(COIN).filter(({ ch }) => ch === 'c' || ch === 'q');
+  assert.ok(glints.length >= 1 && glints.length <= 2, `${glints.length} glint pixels`);
+  assert.ok(glints.every(({ r, c }) => r <= 2 && c <= 2), 'the glint sits on the upper left');
+});
+
 // Floor oil jars.
 const jarSprite = spriteCanvas(JAR);
-const isJar = ([src]) => src.width === 7 && src.height === 8 && Buffer.from(src.data).equals(Buffer.from(jarSprite.data));
+const isJar = ([src]) => src.width === 9 && src.height === 12 && Buffer.from(src.data).equals(Buffer.from(jarSprite.data));
 const jarsOf = (bd) => floorItems(world, bd).filter((it) => it.kind === 'oil');
 const jarBoard = boards.find(({ bd }) => jarsOf(bd).length > 1);
 
@@ -1029,8 +1051,10 @@ test('a scene draws the jar sprite at each untaken jar\'s floor point, before th
     const [wx, wy] = itemSpot(bd, cell);
     const cam = { x: wx, y: wy + 18 };
     const cx = Math.round(cam.x), cy = Math.round(cam.y);
-    // The 7x8 sprite rests on the floor point: bottom row at the point's pixel row.
-    const want = [Math.round(wx) - cx + 160 - 3, cy - Math.round(wy) + 90 - 8];
+    // The 9x12 sprite rests on the floor point, bottom row at the point's pixel row, and fills the
+    // room's columns 8..16 at the west spot and 31..39 at the east.
+    const east = wx - bd.x * 576 - (cell % BW) * 48 > 24;
+    const want = [Math.round(wx) - cx + 160 - (east ? 5 : 4), cy - Math.round(wy) + 90 - 12];
     const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isJar).map(([, x, y]) => [x, y]); };
     const sim = createSim(world, { board: bd, cell: bd.a });
     assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `jar at cell ${cell} drawn at ${want}`);
@@ -1045,6 +1069,47 @@ test('a scene draws the jar sprite at each untaken jar\'s floor point, before th
     const other = createSim(world, { board: bd, cell: bd.a }, null, { collected: new Set([`${bd.x},${bd.y},${cell}`]) });
     assert.ok(drawn(other).some(([x, y]) => x === want[0] && y === want[1]), 'the coin set does not take the jar');
   }
+});
+
+test('the jar is a 9x12 lidded vessel of dark violet oil: a centred knob over a lid wider than the rim, an umber outline', () => {
+  assert.ok(JAR.length === 12 && JAR.every((row) => row.length === 9), 'the jar is 9 wide by 12 tall');
+  const px = opaque(JAR);
+  const oil = px.filter(({ ch }) => '1234'.includes(ch)).length;
+  assert.ok(oil * 2 >= px.length, `${oil} of ${px.length} pixels are oil`);
+  const outline = outlineOf(JAR);
+  assert.ok(outline.every(({ ch }) => '678'.includes(ch)), `outline ${outline.map(({ ch }) => ch).join('')}`);
+  const span = (row) => { const cs = opaque([row]).map(({ c }) => c); return cs.length ? [cs[0], cs[cs.length - 1]] : null; };
+  const [k0, k1] = span(JAR[0]);
+  assert.ok(k1 - k0 + 1 >= 1 && k1 - k0 + 1 <= 3 && k0 + k1 === 8, `the knob spans ${k0}..${k1}`);
+  const width = JAR.map((row) => { const s = span(row); return s ? s[1] - s[0] + 1 : 0; });
+  assert.ok(width[1] > width[0] && width[2] > width[3], `lid rows ${width[1]} and ${width[2]} over a rim of ${width[3]}`);
+  assert.ok(Math.max(...width) > width[3], 'the body is wider than the rim');
+  assert.equal(JAR[11][0], '.', 'the base is rounded, clear of the down shaft at column 31');
+});
+
+test('every drawn jar of the sample covers only room air of its cell, 9 px across', () => {
+  let n = 0;
+  for (const { bd, mask } of boards) {
+    for (const { cell } of jarsOf(bd)) {
+      const [wx, wy] = itemSpot(bd, cell);
+      const cam = { x: wx, y: wy + 18 };
+      renderBoard(bd, createSim(world, { board: bd, cell: bd.a }), cam, 0);
+      const cx = Math.round(cam.x), cy = Math.round(cam.y);
+      const at = view.draws.filter(isJar);
+      assert.equal(at.filter(([, x, y]) => Math.abs(x - 160) < 12 && Math.abs(y - (cy - Math.round(wy) + 90 - 12)) < 1).length, 1, 'one jar at the spot');
+      const [, dx, dy] = at.find(([, x, y]) => Math.abs(x - 160) < 12 && Math.abs(y - (cy - Math.round(wy) + 90 - 12)) < 1);
+      // Screen pixel (dx + c, dy + r) is the board pixel of column x and row y above the board's floor.
+      const X0 = (dx - 160 + cx) - bd.x * 576, Ytop = (cy + 90 - dy - 1) - bd.y * 336;
+      const [cX, cY] = [(cell % BW) * 48, ((cell / BW) | 0) * 48];
+      for (const { r, c } of opaque(JAR)) {
+        const x = X0 + c, y = Ytop - r;
+        assert.equal(mask[px(x, y)], 0, `board ${bd.p} cell ${cell}: jar pixel (${c}, ${r}) is rock`);
+        assert.ok(x >= cX + 8 && x < cX + 40 && y >= cY + 8 && y < cY + 40, `board ${bd.p} cell ${cell}: jar pixel (${c}, ${r}) is outside the room`);
+      }
+      n++;
+    }
+  }
+  assert.ok(n >= 50, `${n} jars walked`);
 });
 
 test('hud draws the wallet under TOMB n: the coin sprite, then the count right-aligned at x 315 with its top row at y 14', () => {

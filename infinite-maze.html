@@ -3178,26 +3178,31 @@ const BRAZIER = [
   '...kkkkkkkkkk...',
 ];
 
-// Floor coin and wallet icon, 6x6 in gold.
+// Floor coin and wallet icon, 6x6: a gold disc ringed in l, with a bone glint.
 const COIN = [
-  '..kk..',
-  '.kmmk.',
-  'kmmlmk',
-  'kmllmk',
-  '.klmk.',
-  '..kk..',
+  '..ll..',
+  '.lcml.',
+  'lcmmml',
+  'lmmmll',
+  '.lmll.',
+  '..ll..',
 ];
 
-// Floor oil jar, 7x8 in umber and ochre with a dark mouth.
+// Floor oil jar, 9x12: a knobbed lid over an umber rim and a body of dark
+// violet oil, umber outlined so it stands off the lapis back wall.
 const JAR = [
-  '..666..',
-  '.60006.',
-  '..767..',
-  '.78887.',
-  '7888887',
-  '7888887',
-  '6788876',
-  '.66666.',
+  '...676...',
+  '.7888887.',
+  '.6777776.',
+  '..67776..',
+  '.6333326.',
+  '63b333226',
+  '633333226',
+  '633333216',
+  '623332216',
+  '.6233216.',
+  '..62116..',
+  '...666...',
 ];
 
 const FLAME = [
@@ -4366,7 +4371,11 @@ function createRenderer(canvas, world) {
         if (taken && taken.has(coinId(bd, cell))) continue;
         const [x, y] = itemSpot(bd, cell);
         if (kind === 'coin') ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
-        else ctx.drawImage(jar, Math.round(sx(x)) - 3, Math.round(sy(y)) - 8);
+        else {
+          // The 9 px jar fills room columns 8..16 at the west spot and 31..39 at the east.
+          const east = x - bd.x * BOARD_W - (cell % BW) * 48 > 24;
+          ctx.drawImage(jar, Math.round(sx(x)) - (east ? 5 : 4), Math.round(sy(y)) - 12);
+        }
       }
     }
   }

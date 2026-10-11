@@ -716,26 +716,31 @@ export const BRAZIER = [
   '...kkkkkkkkkk...',
 ];
 
-// Floor coin and wallet icon, 6x6 in gold.
+// Floor coin and wallet icon, 6x6: a gold disc ringed in l, with a bone glint.
 export const COIN = [
-  '..kk..',
-  '.kmmk.',
-  'kmmlmk',
-  'kmllmk',
-  '.klmk.',
-  '..kk..',
+  '..ll..',
+  '.lcml.',
+  'lcmmml',
+  'lmmmll',
+  '.lmll.',
+  '..ll..',
 ];
 
-// Floor oil jar, 7x8 in umber and ochre with a dark mouth.
+// Floor oil jar, 9x12: a knobbed lid over an umber rim and a body of dark
+// violet oil, umber outlined so it stands off the lapis back wall.
 export const JAR = [
-  '..666..',
-  '.60006.',
-  '..767..',
-  '.78887.',
-  '7888887',
-  '7888887',
-  '6788876',
-  '.66666.',
+  '...676...',
+  '.7888887.',
+  '.6777776.',
+  '..67776..',
+  '.6333326.',
+  '63b333226',
+  '633333226',
+  '633333216',
+  '623332216',
+  '.6233216.',
+  '..62116..',
+  '...666...',
 ];
 
 export const FLAME = [
