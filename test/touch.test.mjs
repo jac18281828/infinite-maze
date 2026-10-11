@@ -185,8 +185,11 @@ test('soft keys follow the game state', () => {
 
 const inside = (r, o) => r.x >= o.x - 1e-9 && r.y >= o.y - 1e-9 && r.x + r.w <= o.x + o.w + 1e-9 && r.y + r.h <= o.y + o.h + 1e-9;
 
+// A 360 px tall landscape phone: seven 44 px keys fit one column only at 6 px gaps.
+const SHORT = { w: 640, h: 360, dpr: 2, insets: {}, touch: true };
+
 test('soft keys are at least 44 px, in the safe area, and clear of the panel in overlay mode', () => {
-  for (const spec of [PORTRAIT, LANDSCAPE, { ...LANDSCAPE, w: 667, h: 375, insets: {} }, { w: 1024, h: 768, dpr: 2, insets: {}, touch: true }]) {
+  for (const spec of [PORTRAIT, LANDSCAPE, { ...LANDSCAPE, w: 667, h: 375, insets: {} }, { w: 1024, h: 768, dpr: 2, insets: {}, touch: true }, SHORT]) {
     const lay = layout(spec);
     for (const sid of ['title', 'typing', 'pause', 'over', 'play']) {
       const state = { screen: sid === 'typing' ? 'title' : sid, typing: sid === 'typing', resume: true, difficulty: 'medium' };
@@ -194,6 +197,10 @@ test('soft keys are at least 44 px, in the safe area, and clear of the panel in 
       const rects = keyRects(lay, sid, labels);
       assert.equal(rects.length, labels.length);
       if (sid === 'title') assert.equal(labels.length, 7, 'the title shows seven keys');
+      if (spec === SHORT && sid === 'title') {
+        assert.equal(lay.mode, 'overlay');
+        assert.equal(new Set(rects.map((r) => r.x)).size, 1, '640x360: the title keys stand in one column');
+      }
       assert.ok(new Set(rects.map((r) => r.scale)).size <= 1, `${lay.mode} ${sid}: one label scale`);
       rects.forEach((r, i) => assert.ok(textWidth(labels[i]) * r.scale + 8 <= r.w, `${lay.mode} ${sid}: ${labels[i]} fits its key`));
       for (const r of rects) {

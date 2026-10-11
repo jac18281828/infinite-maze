@@ -10,6 +10,8 @@ export const MARGIN = 16;
 export const PAD_MAX = 160;
 export const PAD_FRAC = 0.42;
 const GAP = 8;
+// A key column's row gap may close to this before the keys wrap.
+const MIN_GAP = 6;
 const KEY_H = 44;
 const KEY_MIN_W = 44;
 const DOUBLE_TAP_MS = 350;
@@ -234,23 +236,28 @@ function keyRegion(lay, sid) {
 /**
  * Rectangles for the soft keys of screen `sid`, one per label, in order.
  * Each carries one label scale (3, 2 or 1), the largest that fits every label.
+ * Rows sit GAP apart, closing to MIN_GAP before the keys wrap to another
+ * column; a layout that fits at GAP keeps it.
  */
 export function keyRects(lay, sid, labels) {
   const n = labels.length;
   if (n === 0 || lay.mode === 'keyboard') return [];
   const r = keyRegion(lay, sid);
-  const fits = (cols) => Math.ceil(n / cols) * KEY_H + (Math.ceil(n / cols) - 1) * GAP <= r.h;
+  const rowGap = (cols) => {
+    const rows = Math.ceil(n / cols);
+    return rows < 2 ? GAP : Math.min(GAP, Math.floor((r.h - rows * KEY_H) / (rows - 1)));
+  };
   let cols = 1;
-  while (cols < n && !fits(cols)) cols++;
-  const rows = Math.ceil(n / cols);
+  while (cols < n && rowGap(cols) < MIN_GAP) cols++;
+  const rows = Math.ceil(n / cols), gap = rowGap(cols);
   const w = Math.max(KEY_MIN_W, Math.min(r.cap, Math.floor((r.w - (cols - 1) * GAP) / cols)));
-  const gridW = cols * w + (cols - 1) * GAP, gridH = rows * KEY_H + (rows - 1) * GAP;
+  const gridW = cols * w + (cols - 1) * GAP, gridH = rows * KEY_H + (rows - 1) * gap;
   const x0 = mid(r.x, r.w, gridW);
   const y0 = r.align === 'start' ? r.y : r.align === 'end' ? r.y + r.h - gridH : mid(r.y, r.h, gridH);
   // Keys share a width, so they share the largest scale the longest label fits.
   const scale = [3, 2, 1].find((s) => labels.every((t) => textWidth(t) * s + 8 <= w)) || 1;
   return labels.map((text, i) => (
-    { x: x0 + (i % cols) * (w + GAP), y: y0 + Math.floor(i / cols) * (KEY_H + GAP), w, h: KEY_H, scale }
+    { x: x0 + (i % cols) * (w + GAP), y: y0 + Math.floor(i / cols) * (KEY_H + gap), w, h: KEY_H, scale }
   ));
 }
 
