@@ -111,11 +111,22 @@ test('a gamepad that vanishes releases its keys, and one that stays keeps its ow
   assert.deepEqual(poll(), ['keyup Space', 'keyup Enter']);
 });
 
-test('a gamepad is its index, so fresh snapshot objects read as one held gamepad', () => {
+test('a gamepad is its index, so fresh snapshot objects keep the stick\'s hysteresis', () => {
   const { state, poll } = rig();
-  state.pads = [{ pressed: [LEFT], axes: [-0.45, 0, 0, 0] }];
+  state.pads = [{ axes: [-0.6, 0, 0, 0] }];
   assert.deepEqual(poll(), ['keydown ArrowLeft']);
+  state.pads = [{ axes: [-0.45, 0, 0, 0] }];
   for (let i = 0; i < 3; i++) assert.deepEqual(poll(), []);
+});
+
+test('the stick keeps its arrow at exactly STICK_OFF and lets go just inside it', () => {
+  const { state, poll } = rig();
+  state.pads = [{ axes: [-0.6, 0, 0, 0] }];
+  assert.deepEqual(poll(), ['keydown ArrowLeft']);
+  state.pads = [{ axes: [-STICK_OFF, 0, 0, 0] }];
+  assert.deepEqual(poll(), []);
+  state.pads = [{ axes: [-0.39, 0, 0, 0] }];
+  assert.deepEqual(poll(), ['keyup ArrowLeft']);
 });
 
 test('other mappings, null entries, a missing reader and a throwing reader send nothing', () => {

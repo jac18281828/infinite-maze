@@ -5759,6 +5759,22 @@ function planeLeg(world) {
 }
 
 /**
+ * Stands a standard gamepad in for `navigator.getGamepads` as an own property;
+ * the caller deletes it. The leg sets `fake.held`, the pressed buttons. Each
+ * call returns fresh objects and throws unless called as a method of
+ * navigator, as a browser's does.
+ */
+function fakeGamepads(fake) {
+  Object.defineProperty(navigator, 'getGamepads', {
+    value() {
+      if (this !== navigator) throw new TypeError('Illegal invocation');
+      return [{ mapping: 'standard', buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: fake.held.has(i) })), axes: [0, 0, 0, 0] }];
+    },
+    configurable: true,
+  });
+}
+
+/**
  * Boots the game and drives the real controls with dispatched touch pointer
  * events and clicks. One synchronous task: an animation frame landing
  * mid-leg would tick play and clear the press edges the leg reads. Throws
@@ -5775,16 +5791,8 @@ function touchLeg() {
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
-  // A standard gamepad whose pressed buttons the leg sets. Each call returns fresh
-  // objects and throws unless called as a method of navigator, as a browser's does.
   const fake = { held: new Set() };
-  Object.defineProperty(navigator, 'getGamepads', {
-    value() {
-      if (this !== navigator) throw new TypeError('Illegal invocation');
-      return [{ mapping: 'standard', buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: fake.held.has(i) })), axes: [0, 0, 0, 0] }];
-    },
-    configurable: true,
-  });
+  fakeGamepads(fake);
   try {
     driveTouch(copied, fake);
   } finally {
