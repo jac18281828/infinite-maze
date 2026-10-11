@@ -3,7 +3,7 @@
 // the link toward the way on. They derive from a built board and the hash
 // alone; they enter no board, band or digest. The module keeps its name
 // because wind imports `wayOn`.
-import { NCELL, cellNeighbor } from './board.mjs';
+import { BW, NCELL, cellNeighbor } from './board.mjs';
 import { BDX, BDY } from './band.mjs';
 import { u32 } from './hash.mjs';
 
@@ -90,28 +90,48 @@ export function junctions(world, bd) {
 
 const signHash = (world, bd, cell) => u32(world.H('sign', bd.x, bd.y, cell));
 
-/** The junctions of `bd` whose hash mod SIGN_MOD lies in [lo, hi). */
-const hashBand = (world, bd, lo, hi) =>
-  junctions(world, bd).filter(({ cell }) => {
-    const h = signHash(world, bd, cell) % SIGN_MOD;
-    return h >= lo && h < hi;
+/** Whether cells p and q of one board lie within Chebyshev distance 1. */
+const adjacent = (p, q) =>
+  Math.max(Math.abs((p % BW) - (q % BW)), Math.abs(((p / BW) | 0) - ((q / BW) | 0))) <= 1;
+
+/**
+ * The pointers of `bd` left standing, as { skeletons, boostSkeletons, arrows }.
+ * Each is a band of the junctions by hash mod SIGN_MOD, ascending by cell. No
+ * two pointers of a board stand within one cell: tier 1 goes first, then the
+ * arrows, then tier 2, so a tier-2 skeleton, hidden above half the burn, never
+ * removes a pointer the player can see. A candidate stands unless a pointer
+ * already standing lies within distance 1.
+ */
+function standing(world, bd) {
+  const t = SKELETON_THRESHOLD[world.difficulty];
+  const bands = [[0, t], [2 * t, 2 * t + ARROW_THRESHOLD[world.difficulty]], [t, 2 * t]];
+  const cands = junctions(world, bd).map((j) => ({ ...j, h: signHash(world, bd, j.cell) % SIGN_MOD }));
+  const kept = [];
+  const [tier1, arrow, tier2] = bands.map(([lo, hi]) => {
+    const out = [];
+    for (const { cell, dir, h } of cands) {
+      if (h < lo || h >= hi || kept.some((c) => adjacent(c, cell))) continue;
+      kept.push(cell);
+      out.push({ cell, dir });
+    }
+    return out;
   });
+  return { skeletons: tier1, boostSkeletons: tier2, arrows: arrow };
+}
 
 /** Tier 1, shown at every burn: the junctions whose hash lies in [0, t). */
 export function skeletons(world, bd) {
-  return hashBand(world, bd, 0, SKELETON_THRESHOLD[world.difficulty]);
+  return standing(world, bd).skeletons;
 }
 
 /** Tier 2, shown under half the burn: the junctions whose hash lies in [t, 2t). */
 export function boostSkeletons(world, bd) {
-  const t = SKELETON_THRESHOLD[world.difficulty];
-  return hashBand(world, bd, t, 2 * t);
+  return standing(world, bd).boostSkeletons;
 }
 
 /** The junctions whose hash lies in [2t, 2t + a). */
 export function arrows(world, bd) {
-  const t = SKELETON_THRESHOLD[world.difficulty];
-  return hashBand(world, bd, 2 * t, 2 * t + ARROW_THRESHOLD[world.difficulty]);
+  return standing(world, bd).arrows;
 }
 
 /** The upper corner of the cell's room that carries its arrow: 0 left, 1 right. */

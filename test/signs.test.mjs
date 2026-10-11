@@ -98,35 +98,83 @@ test('each skeleton tier holds 0.8 to 1.2 per tomb at every level over tombs u -
   console.log(`# rate test: ${((performance.now() - started) / 1000).toFixed(1)} s`);
 });
 
-test('a junction is in skeletons exactly when its hash mod 1024 is under t, in boostSkeletons exactly when it lies in [t, 2t) and in arrows exactly when it lies in [2t, 2t + a), never in two lists', () => {
+/** Whether cells p and q of one board lie within Chebyshev distance 1 (12 cells to a row). */
+const within1 = (p, q) => Math.max(Math.abs((p % 12) - (q % 12)), Math.abs(Math.floor(p / 12) - Math.floor(q / 12))) <= 1;
+
+/** The oracle's band candidates of a board by list, ascending by cell, before spacing. */
+function candidates(w, bd, level) {
+  const t = THRESHOLD[level], a = ARROW_BAND[level], out = { first: [], second: [], third: [] };
+  if (bd.kind !== 'route') return out;
+  for (const [cell, dir] of [...expected(w, bd)].sort((p, q) => p[0] - q[0])) {
+    const h = hashOf(w, bd, cell);
+    if (h < t) out.first.push({ cell, dir });
+    else if (h < 2 * t) out.second.push({ cell, dir });
+    else if (h < 2 * t + a) out.third.push({ cell, dir });
+  }
+  return out;
+}
+
+/** The oracle's survivors: `order` names the lists in turn, each candidate standing unless a pointer already standing is within 1. */
+function survivors(cands, order) {
+  const stood = [], out = { first: [], second: [], third: [] };
+  for (const name of order) {
+    for (const c of cands[name]) {
+      if (stood.some((s) => within1(s.cell, c.cell))) continue;
+      stood.push(c);
+      out[name].push(c);
+    }
+  }
+  return out;
+}
+
+test('each list holds exactly the band candidates that stand under the spacing rule: tier 1, then arrows, then tier 2, each by cell, never in two lists', () => {
   assert.equal(SIGN_MOD, MOD);
   assert.deepEqual(SKELETON_THRESHOLD, THRESHOLD);
   assert.deepEqual(ARROW_THRESHOLD, ARROW_BAND);
   for (const level of DIFFICULTIES) {
-    const w = worlds[level], t = THRESHOLD[level], a = ARROW_BAND[level];
-    let one = 0, two = 0, arrow = 0, none = 0;
+    const w = worlds[level];
+    let crossPairs = 0, sensitive = 0, kept = 0;
     for (const bd of boardsOf(level, 0, 5)) {
       const lists = { first: skeletons(w, bd), second: boostSkeletons(w, bd), third: arrows(w, bd) };
-      const js = junctions(w, bd);
-      for (const { cell, dir } of js) {
-        const h = hashOf(w, bd, cell);
-        const want = { first: h < t, second: h >= t && h < 2 * t, third: h >= 2 * t && h < 2 * t + a };
-        for (const [name, list] of Object.entries(lists)) {
-          const hit = list.find((s) => s.cell === cell);
-          assert.equal(!!hit, want[name], `${level} board ${bd.p} cell ${cell}: ${name} list`);
-          if (hit) assert.equal(hit.dir, dir, `${level} board ${bd.p} cell ${cell}: the junction's direction`);
-        }
-        if (want.first) one++; else if (want.second) two++; else if (want.third) arrow++; else none++;
+      const cands = candidates(w, bd, level);
+      const want = survivors(cands, ['first', 'third', 'second']);
+      for (const name of Object.keys(lists)) assert.deepEqual(lists[name], want[name], `${level} board ${bd.p}: ${name} list`);
+      // A candidate pair within 1 drawn from two lists makes the order matter.
+      const all = Object.entries(cands).flatMap(([name, list]) => list.map((c) => ({ ...c, name })));
+      for (let i = 0; i < all.length; i++) {
+        for (let j = i + 1; j < all.length; j++) if (all[i].name !== all[j].name && within1(all[i].cell, all[j].cell)) crossPairs++;
       }
-      for (const [name, list] of Object.entries(lists)) {
-        assert.ok(list.every((s) => js.some((j) => j.cell === s.cell)), `${name} lists junctions only`);
+      // Tier 2 first would stand different pointers on a board with such a pair.
+      if (JSON.stringify(survivors(cands, ['second', 'first', 'third'])) !== JSON.stringify(want)) sensitive++;
+      for (const list of Object.values(lists)) {
         assert.deepEqual(list.map((s) => s.cell), list.map((s) => s.cell).sort((p, q) => p - q));
+        kept += list.length;
       }
-      const all = Object.values(lists).flat().map((s) => s.cell);
-      assert.equal(new Set(all).size, all.length, 'no junction holds two pointers');
+      const every = Object.values(lists).flat().map((s) => s.cell);
+      assert.equal(new Set(every).size, every.length, 'no junction holds two pointers');
       if (bd.kind === 'dead') for (const list of Object.values(lists)) assert.deepEqual(list, []);
     }
-    assert.ok(one >= 15 && two >= 15 && arrow >= 15 && none > 20, `${level}: ${one} tier 1, ${two} tier 2, ${arrow} arrows, ${none} bare`);
+    assert.ok(crossPairs >= 1, `${level}: ${crossPairs} candidate pairs within 1 from two lists`);
+    assert.ok(sensitive >= 1, `${level}: no board where the order matters`);
+    assert.ok(kept >= 40, `${level}: ${kept} pointers`);
+  }
+});
+
+test('no two pointers of a board, across all three lists, lie within one cell, and the candidates held such pairs at every level', () => {
+  for (const level of DIFFICULTIES) {
+    const w = worlds[level];
+    let pairs = 0, boards = 0;
+    for (const bd of boardsOf(level, 0, 19)) {
+      const c = candidates(w, bd, level);
+      const all = [...c.first, ...c.second, ...c.third];
+      for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (within1(all[i].cell, all[j].cell)) pairs++;
+      const got = [...skeletons(w, bd), ...boostSkeletons(w, bd), ...arrows(w, bd)];
+      for (let i = 0; i < got.length; i++) {
+        for (let j = i + 1; j < got.length; j++) assert.ok(!within1(got[i].cell, got[j].cell), `${level} board ${bd.p}: cells ${got[i].cell} and ${got[j].cell}`);
+      }
+      boards++;
+    }
+    assert.ok(pairs >= 1, `${level}: ${pairs} candidate pairs within 1 over ${boards} boards`);
   }
 });
 

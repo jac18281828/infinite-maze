@@ -105,7 +105,7 @@ the same world on every engine.
 | Board cell maze | sfc32 of `H("board", x, y, k)`, k = reroll | — |
 | Flame in a dead-end board | `H("flame", x, y)` byte 0 < 128 | 50% |
 | Flame cell | `H("flame", x, y)` u32 at bytes 4–7 mod 84 | any of the 84 cells |
-| Pointer at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 1024 | tier-1 skeleton when under `t`, tier-2 skeleton when in `[t, 2t)`, arrow when in `[2t, 2t + a)`, with `t` 94 (EASY), 30 (MEDIUM), 17 (HARD) or 11 (ULTIMATE) and `a` 85, 64, 43 or 32 |
+| Pointer at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 1024 | tier-1 skeleton when under `t`, tier-2 skeleton when in `[t, 2t)`, arrow when in `[2t, 2t + a)`, with `t` 94 (EASY), 30 (MEDIUM), 17 (HARD) or 11 (ULTIMATE) and `a` 85, 64, 43 or 32; a candidate within one cell of a pointer already standing gives way, tier 1 first, then arrows, then tier 2, each by cell |
 | Corner of an arrow | `H("sign", x, y, cell)` u32 bit 31 | upper left, upper right |
 | Corner of a skeleton | `H("sign", x, y, cell)` u32 bit 31 | lower left, lower right: the corner of an up or down way; a way to the right prefers the left corner and a way to the left the right, and a gallery's side gives way (§8) |
 | Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
@@ -287,20 +287,34 @@ level's skeleton threshold `t` and its arrow width `a`, a junction holds:
 The thresholds `t` are 94 at EASY, 30 at MEDIUM, 17 at HARD and 11 at ULTIMATE,
 so each skeleton tier averages about one per tomb. The widths `a` are 85, 64, 43
 and 32, `round(1024 / N)` for an arrow at 1 junction in `N` = 12, 16, 24 and 32.
-The bands are disjoint, so no junction holds two pointers, and the arrow share
-stays at `a / 1024` of junctions whatever the skeletons do.
+The bands are disjoint, so no junction holds two pointers.
+
+**Spacing.** No two pointers of a board, of any kind or tier, stand within
+Chebyshev distance 1 of each other: `max(|col p − col q|, |row p − row q|)` is 2
+or more, with `col = cell mod 12` and `row = floor(cell / 12)`. The band
+members are the candidates. Tier 1 goes first, then the arrows, then tier 2,
+each ascending by cell, and a candidate stands unless a pointer already standing
+lies within distance 1. Tier 2 goes last because it hides above half the burn,
+so a hidden skeleton never removes a pointer the player can see; tier 1 goes
+before the arrows because it is the chosen hint at about one per tomb. The rule
+spans one board and reads its board and hash alone, so placement stays
+deterministic and lazy; a pair across a board edge is not checked and stays
+rare. The 440 tombs below held 74, 70, 26 and 29 candidate pairs within one
+cell at EASY to ULTIMATE before the rule.
 
 | Level | Sign junctions per tomb | Tier 1 per tomb | Tier 2 per tomb | Arrows per tomb | Arrow share |
 |---|---|---|---|---|---|
-| EASY | 10.84 | 1.000 | 0.927 | 0.900 | 0.0830 |
-| MEDIUM | 34.10 | 1.086 | 1.030 | 2.100 | 0.0616 |
-| HARD | 60.08 | 0.939 | 1.020 | 2.620 | 0.0436 |
-| ULTIMATE | 90.64 | 1.064 | 0.893 | 2.816 | 0.0311 |
+| EASY | 10.84 | 0.975 | 0.834 | 0.855 | 0.0789 |
+| MEDIUM | 34.10 | 1.080 | 0.970 | 2.009 | 0.0589 |
+| HARD | 60.08 | 0.939 | 0.991 | 2.591 | 0.0431 |
+| ULTIMATE | 90.64 | 1.059 | 0.873 | 2.775 | 0.0306 |
 
-Measured over the 440 tombs `u` −5..5 by `v` 0..39 of seed `0000-0000`. Each
-junction draws independently, so 36% to 42% of tombs hold no tier-1 skeleton
-and the most in one tomb is 4 to 6. The level selects the bands and enters no
-hash; tier 1 is the same set with or without tier 2 or the arrows. A pointer
+Measured over the 440 tombs `u` −5..5 by `v` 0..39 of seed `0000-0000`. Before
+spacing the tiers held 1.000, 0.927 and 0.900 per tomb at EASY, 1.086, 1.030 and
+2.100 at MEDIUM, 0.939, 1.020 and 2.620 at HARD and 1.064, 0.893 and 2.816 at
+ULTIMATE. 36% to 42% of tombs hold no tier-1 skeleton and the most in one tomb
+is 4 to 5. The level selects the bands and enters no hash; tier 1 is the same
+set with or without tier 2 or the arrows, because it goes first. A pointer
 points along the tree link from its junction to the next cell of its path
 toward `o`: one of the eight link directions, galleries included. It names the
 link to take, not the distant door, and so points the way on. Dead-end boards
