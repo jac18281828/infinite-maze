@@ -48,6 +48,6 @@ and does not search it.
 - No npm dependencies and no network access, at build or run time. The one
   exception is `cdk/`, the infrastructure for maze.2ad.com: its dependencies
   are in `package.json` and never reach the game build or `infinite-maze.html`.
-- Changing generation changes the pinned digest of tombs `u ∈ [−2, 2]`,
-  `v ∈ [0, 19]` in `test/world.test.mjs` and `tools/acceptance.mjs`; update
-  both on purpose.
+- Changing generation changes the three pinned digests, one per difficulty,
+  of tombs `u ∈ [−2, 2]`, `v ∈ [0, 19]` in `test/world.test.mjs` and
+  `tools/acceptance.mjs`; update both on purpose.

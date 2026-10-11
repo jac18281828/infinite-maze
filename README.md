@@ -5,7 +5,9 @@ tombs without end in any direction. The difficulty picked on the title sets a
 tomb's size: EASY 3x2 boards, MEDIUM 4x3 and HARD 6x4. Every board is a 12x7
 grid of cells, of which a board carves about 60% and leaves the rest rock.
 Each tomb leaves up, left or right, never down, so the way on wanders sideways
-as it climbs, and the maze has no loops at any scale.
+as it climbs, and the maze has no loops at any scale. Every difficulty is the
+same open plane: the tombs and their doors are the same at every level, and
+only the boards inside a tomb differ.
 `docs/SPEC.md` is the full specification.
 
 ## Play
@@ -21,10 +23,10 @@ and no assets.
 - **Space or Z** jumps. In the air, Up grabs the ladder overhead or the stair
   below, and a jump onto a stair lands on it. On a ladder, a jump lets go and
   drops to the floor below; a held Up grabs again once pressed anew.
-- **P** pauses and shows the map of the passages walked and the save code;
-  P resumes. Esc does the same outside full screen, where a browser keeps Esc
-  for itself. The arrows (or WASD) pan the map one tomb per press. **C** there
-  copies the save code. **M** mutes.
+- **P** pauses and shows the tombs solved, the map of the passages walked
+  and the save code; P resumes. Esc does the same outside full screen, where
+  a browser keeps Esc for itself. The arrows (or WASD) pan the map one tomb
+  per press. **C** there copies the save code. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and its centre jumps. Soft keys cover every screen:
   RESUME, BEGIN, RESET, TYPE CODE (a prompt that takes a pasted save code),
@@ -37,7 +39,10 @@ and no assets.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
 - The score counts tombs solved: a tomb is solved when the explorer leaves it
-  through its exit door. Each tomb counts once, and Continue keeps the count.
+  through its exit door, having entered it through one of its in-doors or
+  started the run there without leaving. Stepping back in at its exit and
+  out again solves nothing. Each tomb counts once, and Continue keeps the
+  count.
 
 The title screen shows the seed code. **Enter** begins at tomb (0, 0)'s
 first entry. **R** rolls a new world. **T** takes a typed seed or save code.
@@ -81,14 +86,17 @@ node tools/acceptance.mjs
 ```
 
 `AGENTS.md` defines `WT` and `CHROME`. The acceptance harness checks tombs
-`u` -10 to 10 by `v` -50 to 50 (`--cols` and `--rows` set the half-widths)
-and prints the fallback-board count, the largest and 99th percentile flame
-gaps, the shares of up, left and right exits with the mean sideways run, and
-its run time. `infinite-maze.html#selftest` boots seed `0000-0000`, drives
-3600 ticks of scripted input and draws the pause map. A second leg resumes
-in tomb (1, 0), outside board columns 0-5, and fails unless the explorer's
-room draws as maze rather than rock. The self-test then sets
-`data-selftest` on `<body>`.
+`u` -10 to 10 by `v` -50 to 50 (`--cols` and `--rows` set the half-widths) at
+each difficulty and prints, per difficulty, the fallback-board count, the
+largest and 99th percentile flame gaps and the shares of up, left and right
+exits with the mean sideways run. Way up, run once at HARD, checks that every
+tomb's way on climbs out of the window within 100,000 steps and reports how
+many ways on meet tomb (0, 0)'s. The harness ends with its run time.
+`infinite-maze.html#selftest` boots seed `0000-0000`, drives 3600 ticks of
+scripted input and draws the pause map. A second leg resumes at MEDIUM in
+tomb (1, 0), outside board columns 0-3, and fails unless the explorer's room
+draws as maze rather than rock. The self-test then sets `data-selftest` on
+`<body>`.
 
 ## Deploy
 

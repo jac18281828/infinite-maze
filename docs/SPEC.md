@@ -43,21 +43,32 @@ right tomb exits left. The exit wall and the in-walls are distinct by
 construction, so a tomb has one exit and 0–3 in-doors, and a tomb wall holds
 at most one door.
 
-The flow cannot loop. No exit goes down, so height never falls along a way
-on, and a loop could lie only within one row. A loop within a row needs two
-side neighbours whose exits point at each other, and the wall between them
-points one way, so it forbids that pair. The tombs, joined by their doors,
-form a forest, and every way on climbs without end.
+The flow cannot loop, because no exit goes down. A cycle of three or more
+tombs would need a directed cycle within one row, which a line cannot hold. A
+two-tomb cycle would need two doors on one wall, which holds at most one. The
+wall's one direction forbids a facing pair: two side neighbours that exit into
+each other would close a two-tomb basin with no way up. So a tomb's exit
+walk, the tombs its exits lead through, climbs without end.
+
+Two tombs are joined exactly when their exit walks meet. The column gap
+between two walks moves like a recurrent random walk on a line, so they meet
+with probability 1, and the tombs, joined by their doors, form one tree with
+probability 1. They can meet far up: on seed `0000-0000`, the walks from
+tombs `(0, 0)` and `(10, −50)` are 15 columns apart at row 0 and first meet
+at row 773,851. The Way up check of §10 tests the part a finite run can:
+every exit walk from a window tomb climbs out of the window.
 
 Within a tomb, the boards form a tree that joins all of its doors: a trunk
 from an entry to the exit, tributaries from the other entries, dead-end
 branches, and rock on board positions in none of them. Every board's cells
 form a tree that connects all of that board's doors. Trees of cells, joined
-by single doors into tomb trees along a flow without loops, give two
+by single doors into tomb trees along a flow without loops, give these
 properties, at every depth:
 
 - No loops, so a path between two cells is unique.
 - An unbroken route upward from every cell.
+- With probability 1, a path between any two cells, through the tomb where
+  their exit walks meet.
 
 ## 2. Seed and hashing
 
@@ -101,6 +112,7 @@ one board never share a cell.
 
 ## 3. Band maze
 
+A tomb is W×H boards: 3×2 at EASY, 4×3 at MEDIUM and 6×4 at HARD (§1).
 Tomb `(u, v)` spans board columns `Wu … Wu+W−1` and rows `Hv … Hv+H−1`, and
 its board index is `i = W · row + column` within the tomb. A door on the tomb
 wall between `(u, v)` and `(u, v + 1)` crosses at board column
@@ -147,8 +159,10 @@ wall it carries. A board has 1–4 doors, at most one per wall. On a trunk or
 tributary board, the primary pair of §4 is the door toward its own route's
 predecessor (the in-door on `E_j`, the flame cell on `S`) and the door toward
 its successor (the exit door on `X`, the joined tree board on a tributary's
-last board). §4 exempts branches that hold a door, so a confluence board's
-extra door needs no rule of its own.
+last board). When the two meet in one cell, on an `S` whose flame cell is the
+door toward its successor, the second cell is the deepest cell from the
+first, as on a dead-end board. §4 exempts branches that hold a door, so a
+confluence board's extra door needs no rule of its own.
 
 ## 4. Board maze
 
@@ -252,7 +266,18 @@ title, and the code reads at the difficulty in force:
 
 Resuming lights the torch to full. Flames never run out, so the save carries
 no pickup state. The game separately keeps the most tombs solved, as the
-score, per seed and difficulty.
+score, per seed and difficulty; HARD keeps the bare seed code as its key.
+
+Browser storage holds the plane's values under keys of their own, so a
+value from the stacked world that came before never reads as a position or
+a score:
+
+| Key | Holds |
+|---|---|
+| `infinite-maze.plane.save` | the save code |
+| `infinite-maze.plane.save.difficulty` | the save's difficulty |
+| `infinite-maze.plane.best` | the best per seed and difficulty |
+| `infinite-maze.difficulty` | the title setting |
 
 ## 6. Movement
 
@@ -392,10 +417,14 @@ the upper floor, in air the mask already cuts. Where a gallery starts in a
 cell, a ladder in that cell ends at the floor, and a bottom door's sconce
 stands clear of the flight.
 
-**Score.** A tomb is solved when the explorer crosses its exit door outward.
-A run counts the distinct tombs it solves and carries the set through
-Continue. The HUD's `TOMB n`, the title's `BEST TOMB` and the end screen's
-`TOMBS CLIMBED` show that count.
+**Score.** A tomb is solved when the explorer leaves it through its exit
+door, and either the explorer's most recent entry into it was through one of
+its in-doors, or the run started there and the explorer has not left since.
+Stepping back in at a tomb's exit and out again solves nothing, so an
+upstream basin cannot be farmed. A run counts the distinct tombs it solves and
+carries the set through Continue. The HUD's `TOMB n`, the pause header's
+`TOMB n`, the title's `BEST TOMB` and the end screen's `TOMBS CLIMBED` show
+that count.
 
 **Labels.** The title's panel holds a difficulty row naming EASY, MEDIUM and
 HARD with the setting lit, and its save line names the save's difficulty. Its
@@ -504,10 +533,11 @@ scrolls, zooms or selects.
 A headless test harness, run with `node`, checks the generator against the
 same source the game uses, at every difficulty. It checks the window of tombs
 `u ∈ [−10, 10]`, `v ∈ [−50, 50]`, 2,121 tombs, unless told otherwise. Each
-check reads the tomb size from its world. Continuity, Tree, Acyclic, Flames
-and Solvability follow doors held on both sides, never the generator's tomb
-graph, so a generator fault cannot vouch for itself. Flow alone reads the
-generator's exits, and checks them against the doors.
+check reads the tomb size from its world. Flow, Way up and Solvability's
+tomb walk read the generator's exits, and every check reads a source tomb's
+`S` from the generator. Everything else follows doors held on both sides,
+never the generator's tomb graph, so a generator fault cannot vouch for
+itself.
 
 - **Keccak:** SHA3-256 matches the FIPS 202 test vectors.
 - **Continuity:** every door in the window matches in position on both
@@ -521,13 +551,19 @@ generator's exits, and checks them against the doors.
   each other. The harness reports the shares of up, left and right exits and
   the mean sideways run.
 - **Acyclic:** the window's tombs, joined by their wall doors, form a forest:
-  union-find over tomb doors finds no cycle.
-- **Bounds:** every tomb's trunk covers at least half its boards, no board
-  at `x = −1` or `x = W` holds a link, every dead-end branch is at most 2
-  boards deep, and every board
-  meets the targets in §4 or records its best-attempt fallback. A run of at
-  least 2,000 boards fails when more than 2% of them fall back; a shorter run
-  reports the rate.
+  union-find over tomb doors finds no cycle, so a second door on one tomb
+  wall fails.
+- **Way up:** from every window tomb, the walk along the generator's exits
+  climbs past the window's top row within 100,000 steps, leaving the window
+  sideways if it does. It reads the flow alone, which no difficulty changes,
+  so it runs once, at HARD. The harness reports, without judging them, the
+  share of window tombs whose walk meets tomb `(0, 0)`'s within the cap and
+  the largest and mean steps to meet.
+- **Bounds:** every tomb's trunk covers at least half its boards, a
+  one-board trunk aside, every dead-end branch is at most 2 boards deep, and
+  every board meets the targets in §4 or records its best-attempt fallback.
+  A run of at least 2,000 boards fails when more than 2% of them fall back; a
+  shorter run reports the rate.
 - **Galleries:** every gallery owns its 2×2 block, no two blocks share a
   cell, and galleries average 4–10 per board. The harness reports the mean
   and the block conflicts.
@@ -545,4 +581,5 @@ generator's exits, and checks them against the doors.
   both signs, and a board resumed at the world's difficulty is
   byte-identical to one generated in sequence.
 - **Determinism:** a fixed seed code produces a fixed digest of tombs
-  `u ∈ [−2, 2]`, `v ∈ [0, 19]`, v outer and u inner, at each difficulty.
+  `u ∈ [−2, 2]`, `v ∈ [0, 19]`, v outer and u inner, at each difficulty: three
+  pinned digests, each distinct.
