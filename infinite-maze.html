@@ -1654,6 +1654,10 @@ function createSim(world, start, carry = null) {
     state: 'play', time: carry ? carry.time : 0,
     // The score: the tombs solved, each counted once, keyed "u,v".
     solved: carry && carry.solved ? carry.solved : new Set(),
+    // How the explorer last entered its tomb: 'start' in the run's start
+    // tomb until it first leaves, then 'in' through an in-door or 'exit'
+    // through the tomb's exit door.
+    entered: 'start',
     lastEntry: start.board.entry ? start.board.p : (carry ? carry.lastEntry : start.board.p),
     touching: false, walked: 0, climbed: 0, carry: 0,
     stats: {
@@ -1717,8 +1721,10 @@ function engage(s, d, prog = 0) {
 }
 
 /**
- * Crossing a seam: a tomb is solved when the explorer crosses its exit door
- * outward, the only door on its exit wall.
+ * Crossing a seam. A tomb is solved when the explorer leaves it through its
+ * exit door having entered it through an in-door, or having started the run
+ * in it without leaving since; stepping back in at the exit and out again
+ * solves nothing.
  */
 function enterBoard(s, bd) {
   if (bd === s.bd) return;
@@ -1728,7 +1734,11 @@ function enterBoard(s, bd) {
   if (bd.u !== from.u || bd.v !== from.v) {
     const d = bd.u > from.u ? 0 : bd.v > from.v ? 1 : bd.u < from.u ? 2 : 3;
     const key = tombKey(from);
-    if (s.world.tomb(from.u, from.v).exit === d && !s.solved.has(key)) { s.solved.add(key); s.events.push('solved'); }
+    if (s.world.tomb(from.u, from.v).exit === d && s.entered !== 'exit' && !s.solved.has(key)) {
+      s.solved.add(key);
+      s.events.push('solved');
+    }
+    s.entered = s.world.tomb(bd.u, bd.v).exit === (d ^ 2) ? 'exit' : 'in';
   }
   if (bd.entry && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
 }
