@@ -649,8 +649,14 @@ EASY, 108×63 at MEDIUM, 144×84 at HARD and 216×84 at ULTIMATE, centred in the
 largest.
 
 **Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
-pixels. It scrolls freely across board seams, and rock fills every position
-outside the band trees.
+pixels, rounded so the explorer's offset from the view centre rounds once: with
+the explorer drawn at feet `f`, the whole-pixel camera is `round(f.x) −
+round(f.x − cam.x)` across and `round(f.y) + round(cam.y − f.y)` up. At the
+28.4 px lag a run holds, the explorer then stands at one screen position
+instead of alternating between two, and it stays on the world pixel
+`round(f)`, so its feet stay on floors and treads. With no explorer the camera
+rounds as is. It scrolls freely across board seams, and rock fills every
+position outside the band trees.
 
 **Frames between ticks.** In play, the explorer's feet and the camera centre
 draw between the last two ticks, linearly at the fraction of a tick elapsed

@@ -786,3 +786,25 @@ test('hud draws the wallet under TOMB n: the coin sprite, then the count right-a
     assert.deepEqual(glyphs, Array.from(String(wallet), (_, i) => 315 - width + 6 * i));
   }
 });
+
+// The camera.
+test('the explorer holds one view x along a run at the 28.4 px lag, on the world pixel round(feet x)', () => {
+  const { bd } = boards[0];
+  const cell = bd.links.findIndex((m) => m);
+  const [nx, ny] = nodeXY(bd, cell);
+  // Centred on the board, the view holds its art alone.
+  const { art } = renderBoard(bd);
+  const seen = new Set();
+  for (let k = 0; k < 24; k++) {
+    const sim = createSim(world, { board: bd, cell });
+    sim.off = -19.2 + 1.6 * k;
+    const [fx, fy] = [nx + sim.off, ny];
+    renderBoard(bd, sim, { x: fx - 28.4, y: fy + 18 }, 0);
+    const sprites = view.draws.filter(([src, ...a]) => src.width === 16 && src.height === 24 && a.length === 2);
+    assert.equal(sprites.length, 1, 'one explorer sprite');
+    const board = view.draws.find(([src]) => src === art);
+    assert.equal(sprites[0][1] - board[1], Math.round(fx) - 8 - bd.x * 576, `feet ${fx}: on the world pixel`);
+    seen.add(sprites[0][1]);
+  }
+  assert.equal(seen.size, 1, `the sprite stands at view x ${[...seen]}`);
+});
