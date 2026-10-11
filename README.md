@@ -143,8 +143,8 @@ export AWS_PROFILE=awsapproach
 bun install --frozen-lockfile
 bun run test
 bun run cdk:deploy -- StackMaze2adCom --require-approval never
-site="$(mktemp -d)" && cp infinite-maze.html "$site/index.html"
-aws s3 sync "$site/" s3://maze-us-east-1-504242000181/ --delete \
+site="$(mktemp -d)" && cp infinite-maze.html "$site/index.html" &&
+  aws s3 sync "$site/" s3://maze-us-east-1-504242000181/ --delete \
   --cache-control "no-cache, no-store, must-revalidate" \
   --content-type "text/html; charset=utf-8"
 aws cloudfront create-invalidation --paths "/*" \
