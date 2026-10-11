@@ -198,7 +198,7 @@ test('a board resumed from p equals the same board generated in sequence', () =>
   const seq = createWorld('00000000');
   for (let v = -2; v <= 2; v++) {
     for (let u = -2; u <= 2; u++) {
-      for (let i = 0; i < 24; i++) { const { x, y } = boardCoords(u, v, i, seq.size); seq.board(x, y); }
+      for (let i = 0; i < seq.size.w * seq.size.h; i++) { const { x, y } = boardCoords(u, v, i, seq.size); seq.board(x, y); }
       seq.tombFlames(u, v);
     }
   }
