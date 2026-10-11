@@ -1021,8 +1021,8 @@ const OLD_COIN = ['..kk..', '.kmmk.', 'kmmlmk', 'kmllmk', '.klmk.', '..kk..'];
 const opaque = (rows) => rows.flatMap((row, r) => [...row].flatMap((ch, c) => (ch === '.' ? [] : [{ r, c, ch }])));
 /** Mean Rec. 601 luma of the opaque pixels of `rows`. */
 const meanLuma = (rows) => {
-  const px = opaque(rows);
-  return px.reduce((sum, { ch }) => { const [r, g, b] = RGB[idx(ch)]; return sum + 0.299 * r + 0.587 * g + 0.114 * b; }, 0) / px.length;
+  const pixels = opaque(rows);
+  return pixels.reduce((sum, { ch }) => { const [r, g, b] = RGB[idx(ch)]; return sum + 0.299 * r + 0.587 * g + 0.114 * b; }, 0) / pixels.length;
 };
 /** Opaque pixels of `rows` that touch the sprite's edge or a transparent 4-neighbour. */
 const outlineOf = (rows) => opaque(rows).filter(({ r, c }) => [[0, -1], [0, 1], [-1, 0], [1, 0]].some(([dr, dc]) => (rows[r + dr] || '')[c + dc] === undefined || rows[r + dr][c + dc] === '.'));
@@ -1053,7 +1053,7 @@ test('a scene draws the jar sprite at each untaken jar\'s floor point, before th
     const cx = Math.round(cam.x), cy = Math.round(cam.y);
     // The 9x12 sprite rests on the floor point, bottom row at the point's pixel row, and fills the
     // room's columns 8..16 at the west spot and 31..39 at the east.
-    const east = wx - bd.x * 576 - (cell % BW) * 48 > 24;
+    const east = wx > nodeXY(bd, cell)[0];
     const want = [Math.round(wx) - cx + 160 - (east ? 5 : 4), cy - Math.round(wy) + 90 - 12];
     const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isJar).map(([, x, y]) => [x, y]); };
     const sim = createSim(world, { board: bd, cell: bd.a });
@@ -1073,9 +1073,9 @@ test('a scene draws the jar sprite at each untaken jar\'s floor point, before th
 
 test('the jar is a 9x12 lidded vessel of dark violet oil: a centred knob over a lid wider than the rim, an umber outline', () => {
   assert.ok(JAR.length === 12 && JAR.every((row) => row.length === 9), 'the jar is 9 wide by 12 tall');
-  const px = opaque(JAR);
-  const oil = px.filter(({ ch }) => '1234'.includes(ch)).length;
-  assert.ok(oil * 2 >= px.length, `${oil} of ${px.length} pixels are oil`);
+  const pixels = opaque(JAR);
+  const oil = pixels.filter(({ ch }) => '1234'.includes(ch)).length;
+  assert.ok(oil * 2 >= pixels.length, `${oil} of ${pixels.length} pixels are oil`);
   const outline = outlineOf(JAR);
   assert.ok(outline.every(({ ch }) => '678'.includes(ch)), `outline ${outline.map(({ ch }) => ch).join('')}`);
   const span = (row) => { const cs = opaque([row]).map(({ c }) => c); return cs.length ? [cs[0], cs[cs.length - 1]] : null; };
@@ -1095,9 +1095,11 @@ test('every drawn jar of the sample covers only room air of its cell, 9 px acros
       const cam = { x: wx, y: wy + 18 };
       renderBoard(bd, createSim(world, { board: bd, cell: bd.a }), cam, 0);
       const cx = Math.round(cam.x), cy = Math.round(cam.y);
-      const at = view.draws.filter(isJar);
-      assert.equal(at.filter(([, x, y]) => Math.abs(x - 160) < 12 && Math.abs(y - (cy - Math.round(wy) + 90 - 12)) < 1).length, 1, 'one jar at the spot');
-      const [, dx, dy] = at.find(([, x, y]) => Math.abs(x - 160) < 12 && Math.abs(y - (cy - Math.round(wy) + 90 - 12)) < 1);
+      const row = cy - Math.round(wy) + 90 - 12;
+      const here = ([, x, y]) => Math.abs(x - 160) < 12 && y === row;
+      const at = view.draws.filter(isJar).filter(here);
+      assert.equal(at.length, 1, 'one jar at the spot');
+      const [, dx, dy] = at[0];
       // Screen pixel (dx + c, dy + r) is the board pixel of column x and row y above the board's floor.
       const X0 = (dx - 160 + cx) - bd.x * 576, Ytop = (cy + 90 - dy - 1) - bd.y * 336;
       const [cX, cY] = [(cell % BW) * 48, ((cell / BW) | 0) * 48];

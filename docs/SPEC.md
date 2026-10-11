@@ -726,9 +726,9 @@ rim and a rounded body of dark violet oil, outlined in umber so it stands off
 the lapis back wall. It rests on the floor at the same point as a coin: 12 px
 from its cell's standing point, away from the cell's one link, or east of a
 ladder. It stands in the room's columns 8 to 16 at the west point and 31 to 39
-at the east, so it never covers rock or a shaft. The
-scene draws untaken jars after the boards and before the light map, as it draws
-coins, and never bakes one into the board art.
+at the east, so it never covers rock or a shaft. The scene draws untaken jars
+after the boards and before the light map, as it draws coins, and never bakes
+one into the board art.
 
 **Coins.** A coin is a gold sprite at most 6×6 px, ringed in gold with a bone
 glint on its upper left. It rests on the floor 12 px
