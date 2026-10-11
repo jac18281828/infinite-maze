@@ -10,7 +10,7 @@ import { MAX_DEPTH, DIFFICULTY, DIFFICULTIES, minRoute } from '../src/world/band
 import { createFlow, exitDir, wallRight, UP, LEFT, RIGHT } from '../src/world/flow.mjs';
 import {
   checkFlames, checkFlow, checkTree, checkBounds, checkDeterminism, tombShape, tombWindow, entrySpan, walkMs,
-  measureTargets, runChecks,
+  measureTargets, runChecks, checkWayUp, WAY_UP_CAP,
 } from '../tools/acceptance.mjs';
 
 // Pinned digests of tombs u in [-2, 2], v in [0, 19] for seed code 0000-0000.
@@ -307,6 +307,27 @@ test('over the default window, flow passes and at least 10% of exits go each way
   assert.equal(r.tombs, 2121);
   assert.ok(r.left >= 0.1, `left ${r.left}`);
   assert.ok(r.right >= 0.1, `right ${r.right}`);
+});
+
+test('over the default window, every way on climbs out within the cap, and the merge figures are reported', () => {
+  const r = checkWayUp(world, DEFAULT);
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.tombs, 2121);
+  assert.equal(r.cap, WAY_UP_CAP);
+  assert.ok(r.climbMax > 0 && r.climbMax <= WAY_UP_CAP, `climb ${r.climbMax}`);
+  assert.ok(r.meetShare > 0 && r.meetShare <= 1, `meet ${r.meetShare}`);
+  assert.ok(r.meetMean <= r.meetMax, `mean ${r.meetMean} max ${r.meetMax}`);
+});
+
+test('the ways on from tombs (0, 0) and (10, -50) are 15 columns apart at row 0', () => {
+  // SPEC section 1: they first meet at row 773,851.
+  let u = 10, v = -50;
+  while (v < 0) {
+    const d = world.exit(u, v);
+    u += [1, 0, -1, 0][d];
+    v += [0, 1, 0, -1][d];
+  }
+  assert.equal(u, 15);
 });
 
 /** First tomb from v 0 upward, u -10..10, whose tree passes `pred`. */

@@ -3,10 +3,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld, acrossDoor, posOf, cellPath, boardCoords } from '../src/world/world.mjs';
 import { DX, DY, NCELL } from '../src/world/board.mjs';
-import { sideRow } from '../src/world/flow.mjs';
 import {
   checkContinuity, checkTree, checkFlow, checkAcyclic, checkBounds, checkGalleries, checkCarve, checkFlames,
-  checkSolvability, checkSaves, tombShape, tombWindow,
+  checkSolvability, checkSaves, checkWayUp, tombShape, tombWindow, WAY_UP_CAP,
 } from '../tools/acceptance.mjs';
 
 const WIN = tombWindow(-1, 1, -2, 2);
@@ -108,6 +107,7 @@ test('every check passes the sound world', () => {
   assert.deepEqual(checkCarve(world, WIN).errors, []);
   assert.deepEqual(checkFlames(world, WIN).errors, []);
   assert.deepEqual(checkSolvability(world, WIN).errors, []);
+  assert.deepEqual(checkWayUp(world, WIN).errors, []);
 });
 
 test('continuity rejects a door moved on one side of its wall', () => {
@@ -152,24 +152,44 @@ test('flow rejects a tomb that exits down', () => {
   assert.ok(errors.includes('tomb (0,0): exits down'), errors.join('\n'));
 });
 
-test('flow and acyclic reject two side neighbours that exit into each other, wall direction ignored', () => {
-  const loose = createWorld('00000000', { faults: { ignoreWalls: true } });
-  // A pair whose two side doors cross at different rows, so they join twice.
-  let pair = null;
-  for (let v = -5; v <= 5 && !pair; v++) {
-    for (let u = -5; u <= 5 && !pair; u++) {
-      if (loose.tomb(u, v).exit === 0 && loose.tomb(u + 1, v).exit === 2 && sideRow(world.H, u, v, world.size) !== sideRow(world.H, u + 1, v, world.size)) pair = [u, v];
+/** The first pair (u, v), (u + 1, v) of the loose world that exits into each other, fed from below when `fed`. */
+function facingPair(loose, fed = false) {
+  for (let v = -5; v <= 5; v++) {
+    for (let u = -5; u <= 5; u++) {
+      if (loose.exit(u, v) !== 0 || loose.exit(u + 1, v) !== 2) continue;
+      if (!fed || loose.exit(u, v - 1) === 1 || loose.exit(u + 1, v - 1) === 1) return [u, v];
     }
   }
+  return null;
+}
+
+test('flow alone rejects two side neighbours that exit into each other, wall direction ignored', () => {
+  const loose = createWorld('00000000', { faults: { ignoreWalls: true } });
+  const pair = facingPair(loose);
   assert.ok(pair, 'no pair exits into each other');
   const [u, v] = pair;
   const win = tombWindow(u - 1, u + 2, v - 1, v + 1);
   assert.deepEqual(checkFlow(world, win).errors, []);
-  assert.deepEqual(checkAcyclic(world, win).errors, []);
   const flow = checkFlow(loose, win).errors;
   assert.ok(flow.includes(`tombs (${u},${v}) and (${u + 1},${v}) exit into each other`), flow.join('\n'));
-  const acyclic = checkAcyclic(loose, win).errors;
-  assert.ok(acyclic.includes(`tombs (${u},${v}) and (${u + 1},${v}): a door closes a cycle`), acyclic.join('\n'));
+  // The pair shares one door, so no other check sees a fault.
+  assert.deepEqual(checkContinuity(loose, win).errors, []);
+  assert.deepEqual(checkTree(loose, win).errors, []);
+  assert.deepEqual(checkAcyclic(loose, win).errors, []);
+});
+
+test('way up rejects a closed basin: a facing pair fed from below', () => {
+  const loose = createWorld('00000000', { faults: { ignoreWalls: true } });
+  const pair = facingPair(loose, true);
+  assert.ok(pair, 'no facing pair is fed from below');
+  const [u, v] = pair;
+  const win = tombWindow(u - 1, u + 2, v - 1, v);
+  assert.deepEqual(checkWayUp(world, win).errors, []);
+  const errors = checkWayUp(loose, win).errors;
+  const stuck = (a, b) => `tomb (${a},${b}): its way on stays at or below row ${v} for ${WAY_UP_CAP} steps`;
+  assert.ok(errors.includes(stuck(u, v)) && errors.includes(stuck(u + 1, v)), errors.join('\n'));
+  const feed = [u, u + 1].find((a) => loose.exit(a, v - 1) === 1);
+  assert.ok(errors.includes(stuck(feed, v - 1)), errors.join('\n'));
 });
 
 /** Copies of two tree boards that face each other across wall d of tomb (u, v), each holding a new door there. */

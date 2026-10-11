@@ -1,8 +1,11 @@
 // The tomb plane's flow: each tomb (u, v) leaves up, left or right, never
-// down. Every side wall points one way, so two side neighbours never exit
-// into each other, and with nothing leaving down no way on can loop.
-// Directions match board directions: 0 right, 1 up, 2 left, 3 down. Exits
-// never read the tomb size, so every difficulty shares one flow.
+// down, so no way on loops. A cycle of three or more tombs would need a
+// directed cycle within one row, which a line cannot hold, and a two-tomb
+// cycle would need two doors on one wall. Every side wall points one way,
+// which forbids a facing pair: two side neighbours exiting into each other
+// would close a basin with no way up. Directions match board directions:
+// 0 right, 1 up, 2 left, 3 down. Exits never read the tomb size, so every
+// difficulty shares one flow.
 import { u32 } from './hash.mjs';
 
 export const RIGHT = 0;
@@ -47,9 +50,9 @@ export function sideRow(H, u, v, size) {
  * The tomb plane's flow with memoized exits, for tombs of `size` boards.
  * `exit(u, v)` is the exit direction; `walls(u, v)` lists the tomb's wall
  * doors as { dir, i }, i the board index, the exit first, then the in-doors
- * in wall order floor, left, right. A broken world with `ignoreWalls` keys
- * each side door by the tomb that exits through it, so a pair exiting into
- * each other holds two doors.
+ * in wall order floor, left, right. Both tombs on a side wall read its one
+ * crossing, so a facing pair of a broken world with `ignoreWalls` shares a
+ * single door.
  */
 export function createFlow(H, size, { ignoreWalls = false } = {}) {
   const { w, h } = size;
@@ -65,7 +68,6 @@ export function createFlow(H, size, { ignoreWalls = false } = {}) {
 
   /** Board row of the side door tomb (u, v) exits through toward d. */
   function exitRow(u, v, d) {
-    if (ignoreWalls) return sideRow(H, u, v, size);
     return sideRow(H, d === RIGHT ? u : u - 1, v, size);
   }
 

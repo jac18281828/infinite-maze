@@ -410,7 +410,8 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
     flow.retain(u, v, 2);
   }
 
-  return { code, difficulty, size, H, tomb, board, tombFlames, flamesAt, step, resumePoint, startPoint, retain };
+  // `exit(u, v)` reads the flow alone: no tomb tree or board is built.
+  return { code, difficulty, size, H, exit: flow.exit, tomb, board, tombFlames, flamesAt, step, resumePoint, startPoint, retain };
 }
 
 class Bytes {

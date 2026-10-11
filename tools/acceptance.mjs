@@ -1,11 +1,12 @@
 // Spec section 10 acceptance harness. Each check is an exported function over
-// a world and a window of tombs and returns { errors, ... }. Continuity,
-// Tree, Acyclic, Flames and Solvability derive structure from boards, doors
-// and links alone; Flow reads the generator's exits and checks them against
-// the doors.
+// a world and a window of tombs and returns { errors, ... }. Flow, Way up and
+// Solvability's tomb walk read the generator's exits, and every check reads a
+// source tomb's S from the generator; everything else derives from boards,
+// doors and links alone.
 //
 // Every check reads the tomb size from its world, and the run checks each
-// difficulty over the same window of tombs.
+// difficulty over the same window of tombs. Way up reads the flow alone,
+// which every difficulty shares, so it runs once, at HARD.
 //
 //   node tools/acceptance.mjs [--code XXXX-XXXX] [--cols W] [--rows N]
 import { pathToFileURL } from 'node:url';
@@ -35,6 +36,8 @@ export const CARVE_MEAN_MAX = 56;
 // percent on fallback; shorter runs swing too far to enforce it.
 export const CEILING_PERCENT = 2;
 export const CEILING_MIN_BOARDS = 2000;
+// A way on that has not climbed out of the window after this many steps fails.
+export const WAY_UP_CAP = 100000;
 
 const BW = 12, BH = 7, NCELL = 84;
 const DX = [1, 0, -1, 0, 1, -1, -1, 1];
@@ -409,6 +412,75 @@ export function checkAcyclic(world, win) {
     }
   }
   return { errors, doors };
+}
+
+/**
+ * Steps from tomb (u, v) along `exitOf` to the first tomb where `done(u, v)`
+ * holds, or -1 when the walk takes more than `cap` steps. `memo` keeps, per
+ * tomb a walk passes, its exact count, or after a capped walk `{ u, v, k }`:
+ * k steps reach tomb (u, v) and no tomb on the way, (u, v) included, is done.
+ * Walks that merge share the work.
+ */
+function stepsTo(exitOf, done, cap, memo, u, v) {
+  const path = [];
+  let at = 0, total = -1, end = null, endAt = 0;
+  for (;;) {
+    if (done(u, v)) { total = at; break; }
+    const key = `${u},${v}`;
+    const known = memo.get(key);
+    if (typeof known === 'number') { total = at + known; break; }
+    if (known) {
+      if (at + known.k >= cap) { end = known; endAt = at; break; }
+      path.push([key, at]);
+      at += known.k;
+      ({ u, v } = known);
+      continue;
+    }
+    if (at >= cap) { end = { u, v, k: 0 }; endAt = at; break; }
+    path.push([key, at]);
+    const d = exitOf(u, v);
+    u += DX[d];
+    v += DY[d];
+    at++;
+  }
+  for (const [key, o] of path) {
+    memo.set(key, end ? { u: end.u, v: end.v, k: endAt - o + end.k } : total - o);
+  }
+  return end || total > cap ? -1 : total;
+}
+
+/**
+ * Way up: from every window tomb, the walk along the generator's exits climbs
+ * past the window's top row within `cap` steps, leaving the window sideways
+ * if it does. It reads the flow alone, never a board. Reported only: the
+ * share of window tombs whose walk meets tomb (0, 0)'s within the cap, and
+ * the largest and mean steps to meet.
+ */
+export function checkWayUp(world, win, cap = WAY_UP_CAP) {
+  const errors = [];
+  const exitOf = (u, v) => world.exit(u, v);
+  const climb = new Map(), meet = new Map(), zero = new Set();
+  let tombs = 0, climbMax = 0, met = 0, meetMax = 0, meetSum = 0;
+  for (const [u, v] of tombsOf(win)) {
+    tombs++;
+    const n = stepsTo(exitOf, (a, b) => b > win.v1, cap, climb, u, v);
+    if (n < 0) errors.push(`tomb (${u},${v}): its way on stays at or below row ${win.v1} for ${cap} steps`);
+    else climbMax = Math.max(climbMax, n);
+  }
+  for (let u = 0, v = 0, n = 0; n <= cap; n++) {
+    zero.add(`${u},${v}`);
+    const d = exitOf(u, v);
+    u += DX[d];
+    v += DY[d];
+  }
+  for (const [u, v] of tombsOf(win)) {
+    const n = stepsTo(exitOf, (a, b) => zero.has(`${a},${b}`), cap, meet, u, v);
+    if (n < 0) continue;
+    met++;
+    meetMax = Math.max(meetMax, n);
+    meetSum += n;
+  }
+  return { errors, tombs, cap, climbMax, meetShare: tombs ? met / tombs : 0, meetMax, meetMean: met ? meetSum / met : 0 };
 }
 
 const flameCellOf = (world, bd) => u32(world.H('flame', bd.x, bd.y), 4) % NCELL;
@@ -802,8 +874,14 @@ function printRows(rows, tag) {
   return failed;
 }
 
-/** One difficulty's figures: tomb size, window, trunks, rock, fallbacks, galleries, carve, gaps, flow and digest. */
-function printSummary({ difficulty, size, win, bounds, galleries, carve, gapText, flowText, digest }, code) {
+/** Way up's detail: the climb, and the merge figures it reports without judging them. */
+function wayUpText(r, win) {
+  const meet = `${(100 * r.meetShare).toFixed(1)}% meet tomb (0, 0)'s way on within ${r.cap} steps, max ${r.meetMax}, mean ${r.meetMean.toFixed(1)}`;
+  return `${r.tombs} tombs climb past row ${win.v1} in at most ${r.climbMax} steps; ${meet}`;
+}
+
+/** One difficulty's figures: tomb size, window, trunks, rock, fallbacks, galleries, carve, gaps, flow, way up and digest. */
+function printSummary({ difficulty, size, win, bounds, galleries, carve, gapText, flowText, wayUp, digest }, code) {
   const tombs = (win.u1 - win.u0 + 1) * (win.v1 - win.v0 + 1);
   console.log('');
   console.log(`${difficulty.toUpperCase()}: tombs of ${size.w}x${size.h} = ${size.w * size.h} rooms`);
@@ -816,6 +894,7 @@ function printSummary({ difficulty, size, win, bounds, galleries, carve, gapText
   console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
   console.log(`flame gap:      ${gapText}`);
   console.log(`flow:           ${flowText}`);
+  if (wayUp) console.log(`way up:         ${wayUpText(wayUp, win)}`);
   console.log(`digest:         ${digest}`);
 }
 
@@ -835,6 +914,10 @@ async function main(argv) {
   for (const difficulty of ['hard', 'easy', 'medium']) {
     const world = createWorld(code, { difficulty });
     const r = runChecks(world, code, win);
+    if (difficulty === 'hard') {
+      r.wayUp = checkWayUp(world, win);
+      r.rows.push(['way up', r.wayUp, wayUpText(r.wayUp, win)]);
+    }
     failed += printRows(r.rows, difficulty.toUpperCase());
     summaries.push({ difficulty, size: world.size, win, ...r });
   }
