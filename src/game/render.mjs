@@ -8,7 +8,7 @@ import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } f
 import { BW, BH, DX, DY } from '../world/board.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { boardMask } from './mask.mjs';
-import { fixtureSets, dustMotes, STEP_W } from './fixtures.mjs';
+import { fixtureSets, dustMotes, maskRow, ROLE } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
 
 export const VIEW_W = 320;
@@ -17,6 +17,8 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
+// Palette character of each stair role.
+const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 export const MAP_SCALE = 3;
 
 /** CSS colour of palette character `ch`. */
@@ -121,8 +123,8 @@ export function createRenderer(canvas, world) {
   }
 
   /**
-   * Rock and shadow pixels from the mask alone, so every opening drawn is a
-   * tree link or a door. `p` picks the rock tile variants. Rock shading also
+   * Rock and shadow pixels from the mask, so every opening drawn is a tree
+   * link or a door. `p` picks the rock tile variants. Rock shading also
    * counts the `stairs` pixels as solid, which leaves no highlight under a
    * flight; air shadows read the mask alone.
    */
@@ -167,15 +169,16 @@ export function createRenderer(canvas, world) {
         g.drawImage(ladder, 0, 0, 16, h, x, toY(y + h), 16, h);
       }
     }
-    // Each column is one solid run: a bright tread, then the step's face or body.
-    for (const { cols } of fx.flights) {
-      for (const { t, x, top, bot, tread } of cols) {
-        const body = tread ? top - 1 : top;
-        g.fillStyle = pal(t % STEP_W === 0 ? 'a' : '8');
-        g.fillRect(x, toY(body + 1), 1, body - bot + 1);
-        if (tread) {
-          g.fillStyle = pal('b');
-          g.fillRect(x, toY(top + 1), 1, 1);
+    // Each run paints by its pixels' ROLE labels: tread, riser face, body.
+    for (const { runs } of fx.flights) {
+      for (const { x, top, bot } of runs) {
+        for (let y = top; y >= bot;) {
+          const role = fx.stairs[maskRow(y) * BOARD_W + x];
+          let low = y;
+          while (low > bot && fx.stairs[maskRow(low - 1) * BOARD_W + x] === role) low--;
+          g.fillStyle = pal(STAIR_COLOUR[role]);
+          g.fillRect(x, toY(y + 1), 1, y - low + 1);
+          y = low - 1;
         }
       }
     }
@@ -351,6 +354,8 @@ export function createRenderer(canvas, world) {
     const cx = Math.round(cam.x), cy = Math.round(cam.y);
     const sx = (wx) => wx - cx + VIEW_W / 2;
     const sy = (wy) => cy - wy + VIEW_H / 2;
+    const unsx = (px) => px + cx - VIEW_W / 2;
+    const unsy = (py) => cy - py + VIEW_H / 2;
     prepare(cam);
     acc.fill(0);
     drawBackground(cx, cy);
@@ -358,17 +363,16 @@ export function createRenderer(canvas, world) {
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
-    if (tip) drawDust(sim, tip, t, cx, cy);
+    if (tip) drawDust(sim, tip, t, sx, sy, unsx, unsy);
     return tip;
   }
 
   // Motes hang in the world and show only inside the torch radius.
-  function drawDust(sim, tip, t, cx, cy) {
+  function drawDust(sim, tip, t, sx, sy, unsx, unsy) {
     const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
-    // World position of the torch tip: the inverse of scene's sx and sy.
-    const wx = tip[0] + cx - VIEW_W / 2, wy = cy - tip[1] + VIEW_H / 2;
-    for (const m of dustMotes(wx - r, wy - r, wx + r, wy + r, t, 0, 0)) {
-      const x = m.x - cx + VIEW_W / 2, y = cy - m.y + VIEW_H / 2;
+    const x0 = unsx(tip[0]), y0 = unsy(tip[1]);
+    for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, 0, 0)) {
+      const x = sx(m.x), y = sy(m.y);
       const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
       if (a <= 0) continue;
       ctx.fillStyle = `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;

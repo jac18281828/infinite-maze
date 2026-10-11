@@ -36,9 +36,9 @@ test('the sample holds the stairs the diagnosis counted', () => {
 });
 
 test('every stair pixel is mask air, at row Y+8 or above, inside its 48 columns and outside the side room', () => {
-  for (const { bd, mask, fx, X, Y, dir, cols } of flights) {
-    assert.equal(cols.length > 0, true);
-    for (const { t, x, top, bot } of cols) {
+  for (const { bd, mask, fx, X, Y, dir, runs } of flights) {
+    assert.equal(runs.length > 0, true);
+    for (const { t, x, top, bot } of runs) {
       assert.equal(x, colX(X, t, dir), 'inside its columns');
       assert.ok(bot >= Y + 8, 'no row under the room floor');
       // The side room lies under the gallery's rock from column 32 on.
@@ -48,7 +48,7 @@ test('every stair pixel is mask air, at row Y+8 or above, inside its 48 columns 
   }
   // The role map holds those pixels and no others.
   for (const { fx } of boards) {
-    const want = new Set(fx.flights.flatMap(({ cols }) => cols.flatMap(({ x, top, bot }) => Array.from({ length: top - bot + 1 }, (_, i) => px(x, bot + i)))));
+    const want = new Set(fx.flights.flatMap(({ runs }) => runs.flatMap(({ x, top, bot }) => Array.from({ length: top - bot + 1 }, (_, i) => px(x, bot + i)))));
     let n = 0;
     for (let k = 0; k < fx.stairs.length; k++) if (fx.stairs[k]) { n++; assert.ok(want.has(k)); }
     assert.equal(n, want.size);
@@ -228,12 +228,13 @@ const isStairColour = (d, i) => ['b', 'a', '8', '6'].some((ch) => {
   const c = RGB[idx(ch)];
   return d[i] === c[0] && d[i + 1] === c[1] && d[i + 2] === c[2];
 });
+const ROLE_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 const isColour = (d, i, ch) => {
   const c = RGB[idx(ch)];
   return d[i] === c[0] && d[i + 1] === c[1] && d[i + 2] === c[2];
 };
 
-test('the renderer paints the stair set a stair colour and every ladder and sconce pixel inside its box, nothing else', () => {
+test('the renderer paints each stair pixel its role colour (tread b, riser a, body 8) and every ladder and sconce pixel inside its box, nothing else', () => {
   for (const { bd, fx } of boards.filter((_, i) => i % 3 === 0)) {
     const { art } = renderBoard(bd);
     assert.ok(art, 'board art drawn');
@@ -241,7 +242,8 @@ test('the renderer paints the stair set a stair colour and every ladder and scon
     const bad = [];
     for (let k = 0; k < MASK_W * MASK_H && bad.length < 5; k++) {
       const drawn = art.touched[k] === 1;
-      const ok = fx.stairs[k] ? drawn && isStairColour(art.data, k * 4)
+      // Each stair pixel takes the colour of its ROLE label.
+      const ok = fx.stairs[k] ? drawn && isColour(art.data, k * 4, ROLE_COLOUR[fx.stairs[k]])
         : ladders.has(k) ? drawn
           : sconces.has(k) ? drawn && !isStairColour(art.data, k * 4)
             : !drawn;
@@ -309,7 +311,7 @@ test('a mote stays within its patch at every time, and the offset moves every mo
   assert.ok(matched > 40, 'the offset carries the motes');
 });
 
-test('a 200 x 120 window holds 40 to 56 motes, 48 on average', () => {
+test('sampled 200 x 120 windows hold 40 to 56 motes, 48 on average', () => {
   let sum = 0, n = 0;
   for (let i = 0; i < 400; i++) {
     const m = dustMotes(i * 37.3 - 5000, i * -19.1 + 800, i * 37.3 - 4800, i * -19.1 + 920, i * 1.7);

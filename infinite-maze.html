@@ -2582,7 +2582,7 @@ function flightRuns(X, Y, dir, mask) {
   const runs = [];
   for (let t = 0; t < STEPS * STEP_W; t++) {
     const x = stairX(X, t, dir);
-    const treadTop = treadRow(Y, (t / STEP_W) | 0), lo = Math.max(supportRow(Y, t) + 1, Y + 8);
+    const treadTop = treadRow(Y, (t / STEP_W) | 0), lo = supportRow(Y, t) + 1;
     const air = (y) => x >= 0 && x < MASK_W && y >= 0 && y < MASK_H && !mask[maskRow(y) * MASK_W + x];
     for (let y = treadTop; y >= lo; y--) {
       if (!air(y)) continue;
@@ -2612,7 +2612,7 @@ function ladderPixels([x, y0, y1]) {
   const out = [];
   for (let y = y0; y < y1; y += 8) {
     const h = Math.min(8, y1 - y);
-    for (const [px, py] of spritePixels(LADDER.slice(0, h), x, y + h - 1)) out.push([px, py]);
+    out.push(...spritePixels(LADDER.slice(0, h), x, y + h - 1));
   }
   return out;
 }
@@ -2622,46 +2622,60 @@ function sconcePixels([cx, y]) {
   return spritePixels(SCONCE, cx - 4, y - 1);
 }
 
+/** Ladder boxes [x, y0, y1) of cell c. Where a gallery starts in a cell, its ladder ends at the floor. */
+function cellLadders(bd, c) {
+  const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
+  const m = bd.links[c], doors = bd.doorMask[c];
+  const gallery = (cell) => cell < NCELL && (bd.links[cell] & 48) !== 0;
+  const out = [];
+  if (m & 2) out.push([X + 16, Y + 8, gallery(c + BW) ? Y + 56 : Y + 64]);
+  if (doors & 2) out.push([X + 16, Y + 8, Y + 48]);
+  if (doors & 8) out.push([X + 16, Y, gallery(c) ? Y + 8 : Y + 14]);
+  return out;
+}
+
+/** Sconce [centre x, y] of cell c, or null. A bottom door's moves clear of a north-east stair. */
+function cellSconce(bd, c) {
+  const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
+  const m = bd.links[c], doors = bd.doorMask[c];
+  if (!doors) return null;
+  let x = doors & 4 ? X + 13 : doors & 1 ? X + 35 : X + 36;
+  if (x === X + 36 && doors & 8 && m & 16) x = X + 12;
+  return [x, Y + 26];
+}
+
 /**
  * Stairs, ladders and sconces of board `bd`:
  * - flights: each stair's cell, origin and direction, with its pixel runs: a
  *   column t at board x holds rows bot..top, `tread` when top is the tread;
  * - stairs: role per mask pixel (ROLE), 0 elsewhere;
- * - ladders: [x, y0, y1) boxes. Where a gallery starts in the cell, the
- *   ladder ends at the floor, so the stair keeps the shaft open beneath it;
- * - sconces: [centre x, y]. A bottom door's moves clear of a north-east stair.
+ * - ladders: [x, y0, y1) boxes;
+ * - sconces: [centre x, y].
  */
 function fixtureSets(bd, mask = boardMask(bd)) {
   const flights = [], ladders = [], sconces = [];
   const stairs = new Uint8Array(MASK_W * MASK_H);
   for (let c = 0; c < NCELL; c++) {
     const X = (c % BW) * CELL_PX, Y = ((c / BW) | 0) * CELL_PX;
-    const m = bd.links[c], doors = bd.doorMask[c];
-    const gallery = (cell) => cell < NCELL && (bd.links[cell] & 48) !== 0;
-    if (m & 2) ladders.push([X + 16, Y + 8, gallery(c + BW) ? Y + 56 : Y + 64]);
-    if (doors & 2) ladders.push([X + 16, Y + 8, Y + 48]);
-    if (doors & 8) ladders.push([X + 16, Y, gallery(c) ? Y + 8 : Y + 14]);
+    ladders.push(...cellLadders(bd, c));
+    const sconce = cellSconce(bd, c);
+    if (sconce) sconces.push(sconce);
     for (const dir of [1, -1]) {
-      if (!(m & (dir > 0 ? 16 : 32))) continue;
-      const cols = flightRuns(X, Y, dir, mask);
-      flights.push({ c, X, Y, dir, cols });
-      for (const { t, x, top, bot, tread } of cols) {
+      if (!(bd.links[c] & (dir > 0 ? 16 : 32))) continue;
+      const runs = flightRuns(X, Y, dir, mask);
+      flights.push({ c, X, Y, dir, runs });
+      for (const { t, x, top, bot, tread } of runs) {
         for (let y = bot; y <= top; y++) {
           stairs[maskRow(y) * MASK_W + x] = tread && y === top ? ROLE.tread : t % STEP_W === 0 ? ROLE.riser : ROLE.body;
         }
       }
     }
-    if (doors) {
-      let x = doors & 4 ? X + 13 : doors & 1 ? X + 35 : X + 36;
-      if (x === X + 36 && doors & 8 && m & 16) x = X + 12;
-      sconces.push([x, Y + 26]);
-    }
   }
   return { flights, stairs, ladders, sconces };
 }
 
-// One mote per 25 x 20 px lattice cell: 48 per 200 x 120 px, and a window
-// that size holds 40 to 56. A mote sways inside a patch around its home.
+// One mote per 25 x 20 px lattice cell: a mean of 48 per 200 x 120 px window,
+// and sampled windows hold 40 to 56. A mote sways inside a patch around its home.
 const MOTE_W = 25;
 const MOTE_H = 20;
 const SWAY_X = 6;
@@ -2692,7 +2706,7 @@ function dustMotes(x0, y0, x1, y1, t, ox = 0, oy = 0) {
   }
   return out;
 }
-return { STEPS, STEP_W, ROLE, treadRow, supportRow, stairX, maskRow, ladderPixels, sconcePixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
+return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
 })();
 
 // src/game/map.mjs
@@ -2772,7 +2786,7 @@ const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = 
 const { BW, BH, DX, DY } = __m2;
 const { boardOfPos } = __m4;
 const { boardMask } = __m8;
-const { fixtureSets, dustMotes, STEP_W } = __m9;
+const { fixtureSets, dustMotes, maskRow, ROLE } = __m9;
 const { mapCells } = __m10;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
@@ -2790,6 +2804,8 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
+// Palette character of each stair role.
+const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 const MAP_SCALE = 3;
 
 /** CSS colour of palette character `ch`. */
@@ -2894,8 +2910,8 @@ function createRenderer(canvas, world) {
   }
 
   /**
-   * Rock and shadow pixels from the mask alone, so every opening drawn is a
-   * tree link or a door. `p` picks the rock tile variants. Rock shading also
+   * Rock and shadow pixels from the mask, so every opening drawn is a tree
+   * link or a door. `p` picks the rock tile variants. Rock shading also
    * counts the `stairs` pixels as solid, which leaves no highlight under a
    * flight; air shadows read the mask alone.
    */
@@ -2940,15 +2956,16 @@ function createRenderer(canvas, world) {
         g.drawImage(ladder, 0, 0, 16, h, x, toY(y + h), 16, h);
       }
     }
-    // Each column is one solid run: a bright tread, then the step's face or body.
-    for (const { cols } of fx.flights) {
-      for (const { t, x, top, bot, tread } of cols) {
-        const body = tread ? top - 1 : top;
-        g.fillStyle = pal(t % STEP_W === 0 ? 'a' : '8');
-        g.fillRect(x, toY(body + 1), 1, body - bot + 1);
-        if (tread) {
-          g.fillStyle = pal('b');
-          g.fillRect(x, toY(top + 1), 1, 1);
+    // Each run paints by its pixels' ROLE labels: tread, riser face, body.
+    for (const { runs } of fx.flights) {
+      for (const { x, top, bot } of runs) {
+        for (let y = top; y >= bot;) {
+          const role = fx.stairs[maskRow(y) * BOARD_W + x];
+          let low = y;
+          while (low > bot && fx.stairs[maskRow(low - 1) * BOARD_W + x] === role) low--;
+          g.fillStyle = pal(STAIR_COLOUR[role]);
+          g.fillRect(x, toY(y + 1), 1, y - low + 1);
+          y = low - 1;
         }
       }
     }
@@ -3124,6 +3141,8 @@ function createRenderer(canvas, world) {
     const cx = Math.round(cam.x), cy = Math.round(cam.y);
     const sx = (wx) => wx - cx + VIEW_W / 2;
     const sy = (wy) => cy - wy + VIEW_H / 2;
+    const unsx = (px) => px + cx - VIEW_W / 2;
+    const unsy = (py) => cy - py + VIEW_H / 2;
     prepare(cam);
     acc.fill(0);
     drawBackground(cx, cy);
@@ -3131,17 +3150,16 @@ function createRenderer(canvas, world) {
     drawFlames(lit, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
-    if (tip) drawDust(sim, tip, t, cx, cy);
+    if (tip) drawDust(sim, tip, t, sx, sy, unsx, unsy);
     return tip;
   }
 
   // Motes hang in the world and show only inside the torch radius.
-  function drawDust(sim, tip, t, cx, cy) {
+  function drawDust(sim, tip, t, sx, sy, unsx, unsy) {
     const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
-    // World position of the torch tip: the inverse of scene's sx and sy.
-    const wx = tip[0] + cx - VIEW_W / 2, wy = cy - tip[1] + VIEW_H / 2;
-    for (const m of dustMotes(wx - r, wy - r, wx + r, wy + r, t, 0, 0)) {
-      const x = m.x - cx + VIEW_W / 2, y = cy - m.y + VIEW_H / 2;
+    const x0 = unsx(tip[0]), y0 = unsy(tip[1]);
+    for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, 0, 0)) {
+      const x = sx(m.x), y = sy(m.y);
       const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
       if (a <= 0) continue;
       ctx.fillStyle = `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
