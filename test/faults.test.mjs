@@ -5,7 +5,7 @@ import { createWorld, acrossDoor, posOf, cellPath, boardCoords } from '../src/wo
 import { DX, DY, NCELL } from '../src/world/board.mjs';
 import {
   checkContinuity, checkTree, checkFlow, checkAcyclic, checkBounds, checkGalleries, checkCarve, checkFlames,
-  checkSolvability, checkSaves, checkWayUp, tombShape, tombWindow, WAY_UP_CAP,
+  checkSolvability, checkSaves, checkWayUp, tombShape, tombWindow, measureTargets, thresholds, LEVELS, WAY_UP_CAP,
 } from '../tools/acceptance.mjs';
 
 const WIN = tombWindow(-1, 1, -2, 2);
@@ -525,34 +525,252 @@ test('saves rejects a resumed board that differs from the board in sequence', ()
   assert.ok(errors.includes(`board at p=${p} differs when resumed`), errors.join('\n'));
 });
 
-const easy = createWorld('00000000', { difficulty: 'easy' });
+// Per-level faults: each level's own parameters, restated apart from the
+// generator and the harness.
+const LADDER = {
+  easy: { carve: 40, path: 16, junctions: 4, branch: 2, depth: 1 },
+  medium: { carve: 45, path: 22, junctions: 6, branch: 2, depth: 2 },
+  hard: { carve: 50, path: 22, junctions: 6, branch: 3, depth: 2 },
+  ultimate: { carve: 50, path: 22, junctions: 6, branch: 3, depth: 2 },
+};
+const levels = Object.fromEntries(Object.keys(LADDER).map((d) => [d, createWorld('00000000', { difficulty: d })]));
 
-test('bounds passes the sound EASY world, a one-board trunk included, and rejects an EASY trunk of 2 rooms', () => {
-  assert.deepEqual(checkBounds(easy, WIN).errors, []);
-  const { w: W } = easy.size;
-  let one = null, cut = null;
-  for (let v = 0; v <= 40 && !(one && cut); v++) {
-    for (let u = -5; u <= 5; u++) {
-      const t = easy.tomb(u, v);
-      if (!one && t.entries[0] === t.X) one = t;
-      // A trunk of 3 or more whose first entry borders X off the trunk: a door between them cuts it to 2 rooms.
-      const e = t.routes[0][0];
-      const d = [0, 1, 2, 3].find((q) => e + [1, W, -1, -W][q] === t.X && Math.abs((e % W) - (t.X % W)) <= 1);
-      if (!cut && t.routes[0].length >= 3 && d !== undefined) cut = { t, d };
+/** Tree boards of `win`'s tombs in world `w`. */
+function treeBoardsOf(w, win) {
+  const out = [];
+  for (let v = win.v0; v <= win.v1; v++) {
+    for (let u = win.u0; u <= win.u1; u++) for (const bd of tombShape(w, u, v).boards) if (bd.links) out.push(bd);
+  }
+  return out;
+}
+
+/** The cell beside c in orthogonal direction d, or -1 off the grid. */
+function beside(c, d) {
+  const x = (c % 12) + DX[d], y = ((c / 12) | 0) + DY[d];
+  return x < 0 || x >= 12 || y < 0 || y >= 7 ? -1 : y * 12 + x;
+}
+
+/** Route boards with a door at both ends of the primary path that meet the level's targets. */
+function soundRouteBoards(w, win) {
+  const lv = LADDER[w.difficulty];
+  return treeBoardsOf(w, win).filter((bd) => bd.kind === 'route' && bd.b >= 0 && !bd.fallback
+    && measureTargets(bd.links, bd.a, bd.b, bd.doors.map((d) => d.cell), lv).ok);
+}
+
+/** `bd` with a straight door-free branch of n new cells off its primary path, or null. */
+function withBranch(bd, n) {
+  for (const j of cellPath(bd.links, bd.a, bd.b).cells) {
+    for (let d = 0; d < 4; d++) {
+      const cells = [];
+      for (let c = beside(j, d); cells.length < n && c >= 0 && !bd.links[c] && !bd.doorMask[c]; c = beside(c, d)) cells.push(c);
+      if (cells.length < n) continue;
+      const out = copyBoard(bd);
+      [j, ...cells.slice(0, -1)].forEach((c) => setLink(out, c, d));
+      return out;
     }
   }
-  assert.ok(one, 'no EASY tomb enters at its exit board');
-  assert.deepEqual(checkBounds(easy, tombWindow(one.u, one.u, one.v, one.v)).errors, []);
-  assert.ok(cut, 'no EASY tomb has a first entry beside its exit board off the trunk');
-  const { t, d } = cut;
-  const a = boardCoords(t.u, t.v, t.routes[0][0], easy.size), b = boardCoords(t.u, t.v, t.X, easy.size);
-  const near = easy.board(a.x, a.y), far = easy.board(b.x, b.y);
-  const cell = d === 0 ? 2 * 12 + 11 : d === 2 ? 2 * 12 : d === 1 ? 72 + 1 + (a.x & 7) : 1 + (a.x & 7);
-  const w = broken(easy);
-  w._set(a.x, a.y, { ...copyBoard(near), doors: [...near.doors, { dir: d, cell }] });
-  w._set(b.x, b.y, { ...copyBoard(far), doors: [...far.doors, { dir: d ^ 2, cell: acrossDoor(cell, d) }] });
-  const win = tombWindow(t.u, t.u, t.v, t.v);
-  assert.equal(tombShape(w, t.u, t.v).routes[0].length, 2);
-  const errors = checkBounds(w, win).errors;
-  assert.ok(errors.includes(`tomb (${t.u},${t.v}): trunk of 2 boards holds under half of 6`), errors.join('\n'));
+  return null;
+}
+
+/** `bd` with door-free branches cut off its primary path until n junctions remain, or null. */
+function withJunctions(bd, n) {
+  const path = cellPath(bd.links, bd.a, bd.b).cells, on = new Set(path);
+  const out = copyBoard(bd);
+  const subtree = (from, root) => {
+    const seen = [root];
+    for (let h = 0; h < seen.length; h++) {
+      for (let d = 0; d < 8; d++) {
+        if (!(bd.links[seen[h]] & (1 << d))) continue;
+        const t = seen[h] + DY[d] * 12 + DX[d];
+        if (t !== from && !seen.includes(t)) seen.push(t);
+      }
+    }
+    return seen;
+  };
+  const junctions = path.map((j) => {
+    const roots = [];
+    for (let d = 0; d < 8; d++) if (bd.links[j] & (1 << d) && !on.has(j + DY[d] * 12 + DX[d])) roots.push(j + DY[d] * 12 + DX[d]);
+    return { j, cells: roots.flatMap((t) => subtree(j, t)) };
+  }).filter((x) => x.cells.length);
+  const free = junctions.filter((x) => !x.cells.some((c) => bd.doorMask[c]));
+  const cut = junctions.length - n;
+  if (cut < 1 || free.length < cut) return null;
+  for (const { cells } of free.slice(0, cut)) {
+    for (const c of cells) for (let d = 0; d < 8; d++) if (out.links[c] & (1 << d)) clearLink(out, c, d);
+  }
+  return out;
+}
+
+const one = (bd) => tombWindow(bd.u, bd.u, bd.v, bd.v);
+const misses = (bd) => (e) => e.startsWith(`board (${bd.x},${bd.y}): misses targets`);
+
+test('every check passes the sound world at every level, EASY on its own targets', () => {
+  for (const [d, w] of Object.entries(levels)) {
+    for (const check of [checkContinuity, checkTree, checkFlow, checkAcyclic, checkBounds, checkGalleries, checkCarve, checkFlames, checkSolvability]) {
+      assert.deepEqual(check(w, WIN).errors, [], `${d} ${check.name}`);
+    }
+  }
+  // EASY's boards pass on 16, 4 and 2: most miss today's 22, 6 and 3.
+  const easy = treeBoardsOf(levels.easy, WIN);
+  assert.equal(easy.length, 57);
+  assert.equal(easy.filter((bd) => bd.junctions < 6).length, 55);
+  assert.equal(easy.filter((bd) => bd.pathLen < 22).length, 31);
+});
+
+test('bounds rejects a dead-end branch one room deeper than the level allows', () => {
+  for (const [d, base] of Object.entries(levels)) {
+    // MEDIUM's first depth-2 room beside in-tomb rock lies in tomb (3, -1).
+    const win = d === 'medium' ? tombWindow(-3, 3, -2, 2) : WIN;
+    const deepest = LADDER[d].depth, w = broken(base);
+    // The leaf spans all 84 cells, so the door's far cell is carved.
+    const span = createWorld('00000000', { difficulty: d, carveCells: NCELL }).startPoint().board;
+    // Door cells on each wall E N W S.
+    const wall = [[12 + 11, 24 + 11, 36 + 11, 48 + 11, 60 + 11], [73, 74, 75, 76, 77, 78, 79, 80, 81, 82],
+      [12, 24, 36, 48, 60], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]];
+    let made = null;
+    for (let v = win.v0; v <= win.v1 && !made; v++) {
+      for (let u = win.u0; u <= win.u1 && !made; u++) {
+        const shape = tombShape(base, u, v);
+        shape.boards.forEach((bd, i) => {
+          if (made || shape.depth[i] !== deepest) return;
+          for (let k = 0; k < 4 && !made; k++) {
+            const nx = bd.x + DX[k], ny = bd.y + DY[k];
+            if (Math.floor(nx / base.size.w) !== u || Math.floor(ny / base.size.h) !== v || base.board(nx, ny).links) continue;
+            const cell = wall[k].find((c) => bd.links[c] && !bd.doorMask[c]);
+            if (cell === undefined) continue;
+            const deep = copyBoard(bd);
+            deep.doors.push({ dir: k, cell });
+            w._set(bd.x, bd.y, deep);
+            w._set(nx, ny, {
+              ...copyBoard(span),
+              x: nx, y: ny, p: posOf(nx, ny), u, v, kind: 'dead', fallback: true,
+              doors: [{ dir: k ^ 2, cell: acrossDoor(cell, k) }],
+            });
+            made = { x: nx, y: ny };
+          }
+        });
+      }
+    }
+    assert.ok(made, `${d}: no depth-${deepest} board borders rock`);
+    const errors = checkBounds(w, win).errors;
+    assert.ok(errors.some((e) => e.includes(`(${made.x},${made.y})`) && e.includes(`${deepest + 1} boards deep`)), `${d}\n${errors.join('\n')}`);
+    assert.deepEqual(checkTree(w, win).errors, [], d);
+  }
+});
+
+test('bounds rejects a side branch one cell under the level\'s target and accepts one at it', () => {
+  for (const [d, base] of Object.entries(levels)) {
+    const n = LADDER[d].branch;
+    const bd = soundRouteBoards(base, WIN).find((b) => withBranch(b, n));
+    assert.ok(bd, `${d}: no board takes a ${n}-cell branch`);
+    for (const [len, ok] of [[n - 1, false], [n, true]]) {
+      const w = broken(base);
+      w._set(bd.x, bd.y, withBranch(bd, len));
+      const errors = checkBounds(w, one(bd)).errors;
+      if (ok) assert.deepEqual(errors, [], `${d}: a ${len}-cell branch`);
+      else assert.ok(errors.some(misses(bd)) && errors.some((e) => e.includes('short 1')), `${d}: a ${len}-cell branch\n${errors.join('\n')}`);
+    }
+  }
+});
+
+test('bounds rejects a board left one junction under the level\'s target', () => {
+  for (const [d, base] of Object.entries(levels)) {
+    const n = LADDER[d].junctions - 1;
+    const bd = soundRouteBoards(base, WIN).find((b) => withJunctions(b, n));
+    assert.ok(bd, `${d}: no board sheds junctions down to ${n}`);
+    const cut = withJunctions(bd, n);
+    assert.equal(measureTargets(cut.links, cut.a, cut.b, cut.doors.map((x) => x.cell)).junctions, n, d);
+    const w = broken(base);
+    w._set(bd.x, bd.y, cut);
+    const errors = checkBounds(w, one(bd)).errors;
+    assert.ok(errors.some((e) => misses(bd)(e) && e.includes(`junctions ${n},`)), `${d}\n${errors.join('\n')}`);
+  }
+});
+
+test('carve rejects a board one cell under the level\'s count, and the level\'s uncarved world', () => {
+  for (const [d, base] of Object.entries(levels)) {
+    const C = LADDER[d].carve, w = broken(base);
+    const bd = treeBoardsOf(base, WIN).find((b) => b.links.filter(Boolean).length === C && leaves(b).length);
+    assert.ok(bd, `${d}: no board holds exactly ${C} cells`);
+    w._set(bd.x, bd.y, pruned(bd, leaves(bd)[0]));
+    const errors = checkCarve(w, WIN).errors;
+    assert.ok(errors.includes(`board (${bd.x},${bd.y}): ${C - 1} carved cells, under ${C}`), `${d}\n${errors.join('\n')}`);
+    const full = checkCarve(createWorld('00000000', { difficulty: d, carveCells: NCELL }), WIN);
+    assert.ok(full.errors.some((e) => e.includes('average 84.00')), d);
+  }
+});
+
+test('galleries rejects a world averaging just under the level\'s floor and accepts one just above it', () => {
+  for (const [d, base] of Object.entries(levels)) {
+    const C = LADDER[d].carve, floor = (4 * C) / 50;
+    const sound = checkGalleries(base, WIN);
+    assert.ok(sound.mean >= floor, `${d}: sound mean ${sound.mean}`);
+    // Flattens boards until the next one would drop the mean under the floor.
+    const above = broken(base), below = broken(base);
+    let galleries = sound.galleries;
+    for (const bd of treeBoardsOf(base, WIN)) {
+      let own = 0;
+      for (let c = 0; c < 84; c++) own += ((bd.links[c] >> 4) & 1) + ((bd.links[c] >> 5) & 1);
+      const flat = withoutGalleries(bd);
+      below._set(bd.x, bd.y, flat);
+      if (50 * (galleries - own) < 4 * C * sound.boards) break;
+      above._set(bd.x, bd.y, flat);
+      galleries -= own;
+    }
+    const hi = checkGalleries(above, WIN), lo = checkGalleries(below, WIN);
+    assert.ok(hi.mean >= floor && hi.mean < floor + 0.5, `${d}: above ${hi.mean}`);
+    assert.deepEqual(hi.errors, [], d);
+    assert.ok(lo.mean < floor && lo.mean > floor - 0.5, `${d}: below ${lo.mean}`);
+    assert.ok(lo.errors.some((e) => e.includes('galleries per board average')), `${d}\n${lo.errors.join('\n')}`);
+    assert.deepEqual(checkTree(below, WIN).errors, [], d);
+  }
+});
+
+test('the harness thresholds follow the carve count: carve mean C·96/100 to C·112/100, galleries 4·C/50 to 10·C/50', () => {
+  assert.deepEqual(LEVELS, LADDER);
+  assert.deepEqual(Object.fromEntries(Object.keys(LADDER).map((d) => [d, thresholds(d)])), {
+    easy: { carveMin: 40, carveMeanMin: 38.4, carveMeanMax: 44.8, galleriesMin: 3.2, galleriesMax: 8 },
+    medium: { carveMin: 45, carveMeanMin: 43.2, carveMeanMax: 50.4, galleriesMin: 3.6, galleriesMax: 9 },
+    hard: { carveMin: 50, carveMeanMin: 48, carveMeanMax: 56, galleriesMin: 4, galleriesMax: 10 },
+    ultimate: { carveMin: 50, carveMeanMin: 48, carveMeanMax: 56, galleriesMin: 4, galleriesMax: 10 },
+  });
+});
+
+test('bounds passes MEDIUM\'s 4-room trunks and EASY\'s one-room trunk, and rejects a MEDIUM trunk cut to 3 rooms', () => {
+  const medium = levels.medium, easy = levels.easy;
+  const { w: W } = medium.size;
+  const four = [];
+  let cut = null;
+  for (let v = -2; v <= 20 && !(four.length >= 3 && cut); v++) {
+    for (let u = -3; u <= 3; u++) {
+      const t = medium.tomb(u, v), r = t.routes[0];
+      if (r.length === 4) four.push(t);
+      // Two trunk rooms, side by side, whose door shortens the trunk to 3 rooms.
+      for (let i = 0; i < r.length && !cut; i++) {
+        for (let j = i + 2; j < r.length && !cut; j++) {
+          const k = [0, 1, 2, 3].find((q) => r[i] + [1, W, -1, -W][q] === r[j] && Math.abs((r[i] % W) - (r[j] % W)) <= 1);
+          if (k !== undefined && i + 1 + r.length - j === 3) cut = { t, i, j, k };
+        }
+      }
+    }
+  }
+  assert.ok(four.length >= 3, 'MEDIUM holds 4-room trunks');
+  for (const t of four) assert.deepEqual(checkBounds(medium, tombWindow(t.u, t.u, t.v, t.v)).errors, [], `MEDIUM tomb (${t.u},${t.v})`);
+  assert.ok(cut, 'no MEDIUM trunk holds two rooms side by side that a door cuts to 3');
+  const { t, i, j, k } = cut;
+  const a = boardCoords(t.u, t.v, t.routes[0][i], medium.size), b = boardCoords(t.u, t.v, t.routes[0][j], medium.size);
+  const near = medium.board(a.x, a.y), far = medium.board(b.x, b.y);
+  const cell = k === 0 ? 2 * 12 + 11 : k === 2 ? 2 * 12 : k === 1 ? 72 + 1 + (a.x & 7) : 1 + (a.x & 7);
+  const w = broken(medium);
+  w._set(a.x, a.y, { ...copyBoard(near), doors: [...near.doors, { dir: k, cell }] });
+  w._set(b.x, b.y, { ...copyBoard(far), doors: [...far.doors, { dir: k ^ 2, cell: acrossDoor(cell, k) }] });
+  assert.equal(tombShape(w, t.u, t.v).routes[0].length, 3);
+  const errors = checkBounds(w, tombWindow(t.u, t.u, t.v, t.v)).errors;
+  assert.ok(errors.includes(`tomb (${t.u},${t.v}): trunk of 3 boards holds under the minimum of 4`), errors.join('\n'));
+  // EASY: the sound world, and a tomb whose trunk is its one exit room.
+  assert.deepEqual(checkBounds(easy, WIN).errors, []);
+  let single = null;
+  for (let v = 0; v <= 40 && !single; v++) for (let u = -5; u <= 5 && !single; u++) if (easy.tomb(u, v).entries[0] === easy.tomb(u, v).X) single = easy.tomb(u, v);
+  assert.ok(single, 'no EASY tomb enters at its exit board');
+  assert.deepEqual(checkBounds(easy, tombWindow(single.u, single.u, single.v, single.v)).errors, []);
 });

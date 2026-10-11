@@ -8,6 +8,7 @@ import {
   layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X, textWidth,
 } from '../src/game/touch.mjs';
 import { build } from '../tools/build.mjs';
+import { DIFFICULTIES } from '../src/world/band.mjs';
 
 const PORTRAIT = { w: 393, h: 852, dpr: 3, insets: { top: 59, bottom: 34, left: 0, right: 0 }, touch: true };
 const LANDSCAPE = { w: 852, h: 393, dpr: 3, insets: { top: 0, bottom: 21, left: 59, right: 59 }, touch: true };
@@ -178,6 +179,21 @@ test('the title\'s typing line fits its panel at TYPED_MAX characters', () => {
   assert.ok(end <= PANEL_X.typing[1] - 10, `the line ends at x ${end}`);
 });
 
+test('the title\'s four level names lie right of L and inside the 248 text margin', () => {
+  const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
+  const fn = src.match(/function drawSettingRow\([^)]*\) \{[\s\S]*?\n\}\n/);
+  assert.ok(fn, 'drawSettingRow found');
+  let x = Number(fn[0].match(/let x = (\d+);/)[1]);
+  assert.match(fn[0], /x \+= \(name\.length \+ 1\) \* 6;/);
+  assert.deepEqual(DIFFICULTIES, ['easy', 'medium', 'hard', 'ultimate']);
+  // Each name is the lit one at its own setting.
+  for (const d of DIFFICULTIES) {
+    const name = d.toUpperCase();
+    assert.ok(x >= 84 && x + textWidth(name) <= 248, `${name} spans x ${x}..${x + textWidth(name)}`);
+    x += (name.length + 1) * 6;
+  }
+});
+
 test('soft keys follow the game state', () => {
   const ids = (st) => softKeys(st).map((k) => k.id);
   assert.deepEqual(ids({ screen: 'title', typing: false, resume: false }), ['begin', 'reset', 'type', 'difficulty', 'copy', 'sound']);
@@ -189,7 +205,7 @@ test('soft keys follow the game state', () => {
   assert.deepEqual(ids({ screen: 'splash' }), ['continue', 'home']);
   assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
   // The difficulty key reads the setting, as SOUND reads mute.
-  for (const d of ['easy', 'medium', 'hard']) {
+  for (const d of ['easy', 'medium', 'hard', 'ultimate']) {
     const keys = softKeys({ screen: 'title', difficulty: d, muted: true });
     assert.equal(keys.find((k) => k.id === 'difficulty').text, d.toUpperCase());
     assert.equal(keys.find((k) => k.id === 'sound').text, 'MUTED');
@@ -300,11 +316,11 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     // Each difficulty, pause-key, coin, splash and oil rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
-      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
-      ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 3) % 3', /^fail: touch ArrowRight steps the setting to HARD/],
-      ["return difficulty === 'hard' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
-      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_SAVE_DIFFICULTY, 'medium')", /^fail: touch RESUME plays a save with no stored difficulty at HARD/],
-      ["const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';", "const KEY_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';", /^fail: touch RESUME plays a save with no stored difficulty at HARD/],
+      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
+      ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 4) % 4', /^fail: touch ArrowRight steps the setting to ULTIMATE/],
+      ["return difficulty === 'ultimate' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
+      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate')", "storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", /^fail: touch RESUME plays a save with no stored difficulty at ULTIMATE/],
+      ["const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';", "const KEY_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';", /^fail: touch RESUME plays a save with no stored difficulty at ULTIMATE/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.key === 'Escape') { if (!e.repeat) resume(g); }", /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "(e.code === 'KeyP' && !e.repeat) || e.key === 'Escape') { resume(g); }", /^fail: touch the title ignores an auto-repeated Esc/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.code === 'KeyP' || (e.key === 'Escape' && !e.repeat)) { resume(g); }", /^fail: touch the title ignores an auto-repeated P/],
@@ -314,7 +330,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['function readCoinState() {\n', 'function readCoinState() {\n  return { wallet: 0, coins: new Map(), paid: new Map() };\n', /^fail: touch boot reads the wallet and the collected set/],
       ["if (ev === 'coin') collectCoin(g);", "if (ev === 'coin') void g;", /^fail: touch touching the first coin adds one to the wallet/],
       ['if (s.collected.has(id)) continue;', 'if (false) continue;', /^fail: touch a collected coin credits nothing on a new run/],
-      ['const COIN_RATE = { easy: 1, medium: 2, hard: 5 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1 };', /^fail: touch a new best tomb pays 5 at HARD/],
+      ['const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1, ultimate: 10 };', /^fail: touch a new best tomb pays 5 at HARD/],
       ['const record = g.paid.get(key) || 0;', 'const record = 0;', /^fail: touch a replay at the record pays nothing at EASY/],
       ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'else if (false) showSplash(g, hit.k, hit.paid);', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],

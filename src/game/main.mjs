@@ -23,8 +23,8 @@ import { RGB, idx } from './art.mjs';
 // Saves and bests of the tomb plane keep keys of their own, so a stacked-world
 // value never reads as a position or a score.
 const KEY_SAVE = 'infinite-maze.plane.save';
-// The difficulty of the run that wrote KEY_SAVE; absent means HARD, the
-// only size before difficulties.
+// The difficulty of the run that wrote KEY_SAVE; absent means ULTIMATE, the
+// 6x4 world and the only size before difficulties.
 const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
@@ -80,7 +80,7 @@ function storedDifficulty(key, fallback) {
 
 /** The stored save read at the difficulty that wrote it, or null. */
 function readSave() {
-  const difficulty = storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard');
+  const difficulty = storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate');
   const s = decodeSave(load(KEY_SAVE) || '');
   return s && { ...s, difficulty };
 }
@@ -146,7 +146,7 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
-    // The game's default level, MEDIUM, whose tomb (1, 0) starts at column 4.
+    // The game's default level, MEDIUM, whose tomb (1, 0) starts at column 3.
     planeLeg(createWorld(SELFTEST_CODE, { difficulty: 'medium' }));
     touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
@@ -447,8 +447,9 @@ function driveTouch(copied) {
   splashLeg(g, { need, click, press });
   oilLeg(g, { need, click });
 
-  // Leave the self-test script's run paused on screen for the screenshot.
-  setDifficulty(g, 'hard');
+  // Leave the self-test script's run paused on screen for the screenshot,
+  // in the 6x4 world the script was written for.
+  setDifficulty(g, 'ultimate');
   useCode(g, SELFTEST_CODE);
   g.sim = runScript(g.world).sim;
   snapCam(g.cam, g.sim);
@@ -468,16 +469,16 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   const sized = (d) => g.difficulty === d && g.world.difficulty === d && load(KEY_DIFFICULTY) === d
     && g.world.size.w === DIFFICULTY[d].w && g.world.size.h === DIFFICULTY[d].h;
 
-  // The key cycles the setting, and the preview's tomb size follows.
+  // The key cycles the four levels, and the preview's tomb size follows.
   setDifficulty(g, 'easy');
   need(sized('easy'), 'the setting starts at EASY');
-  for (const d of ['medium', 'hard', 'easy']) {
+  for (const d of ['medium', 'hard', 'ultimate', 'easy']) {
     click('title', 'difficulty');
     need(sized(d), `the difficulty key moves to ${difficultyLabel(d)}`);
   }
   // The arrows step it and stop at the ends.
-  for (const [code, d] of [['ArrowRight', 'medium'], ['ArrowRight', 'hard'], ['ArrowRight', 'hard'],
-    ['ArrowLeft', 'medium'], ['ArrowLeft', 'easy'], ['ArrowLeft', 'easy']]) {
+  for (const [code, d] of [['ArrowRight', 'medium'], ['ArrowRight', 'hard'], ['ArrowRight', 'ultimate'], ['ArrowRight', 'ultimate'],
+    ['ArrowLeft', 'hard'], ['ArrowLeft', 'medium'], ['ArrowLeft', 'easy'], ['ArrowLeft', 'easy']]) {
     press(code, code);
     need(sized(d), `${code} steps the setting to ${difficultyLabel(d)}`);
   }
@@ -499,19 +500,22 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
     need(g.screen === 'play' && sized(d), `RESUME rebuilds the save at ${difficultyLabel(d)} and moves the setting`);
     need(g.sim !== where.sim && g.sim.bd.x === where.x && g.sim.bd.y === where.y, `the ${difficultyLabel(d)} save resumes on its board`);
   };
+  // A HARD save resumes at HARD, the 4x4 world.
   const hard = saveAt('hard');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   need(sized('easy'), 'the setting moves to EASY over a HARD save');
   resumesAt('hard', hard);
+  need(g.world.size.w === 4 && g.world.size.h === 4, 'a HARD save resumes in a 4x4 world');
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
-  // A save from before difficulties, with none stored beside it, plays at HARD,
-  // whatever difficulty the stacked world's save left.
-  const old = saveAt('hard');
+  // A save from before difficulties, with none stored beside it, plays at
+  // ULTIMATE, the 6x4 world, whatever difficulty the stacked world's save left.
+  const old = saveAt('ultimate');
   unstore(KEY_SAVE_DIFFICULTY);
   store(KEY_STACKED_SAVE_DIFFICULTY, 'easy');
+  press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   need(sized('easy'), 'the setting moves to EASY over a save with no difficulty');
@@ -521,7 +525,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   press('Escape', 'Escape', true);
   need(g.screen === 'title', 'the title ignores an auto-repeated Esc');
   click('title', 'resume');
-  need(g.screen === 'play' && sized('hard') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays a save with no stored difficulty at HARD on its board');
+  need(g.screen === 'play' && sized('ultimate') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays a save with no stored difficulty at ULTIMATE on its board');
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
@@ -537,7 +541,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   click('title', 'reset');
   need(g.code !== code && load(KEY_SAVE) === save[0] && load(KEY_SAVE_DIFFICULTY) === save[1], 'RESET changes the seed and keeps the save');
 
-  // The best tomb is per seed and difficulty; HARD keeps the bare seed code.
+  // The best tomb is per seed and difficulty; ULTIMATE keeps the bare seed code.
   click('title', 'resume');
   store(KEY_BEST, '{}');
   g.sim.solved = new Set(Array.from({ length: 7 }, (_, i) => `${i},0`));
@@ -546,8 +550,8 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   const bests = JSON.parse(load(KEY_BEST));
   need(bests[`${g.code}:EASY`] === 7 && bests[g.code] === undefined, 'an EASY run records its best under the seed and EASY');
   click('over', 'title');
-  store(KEY_BEST, JSON.stringify({ [g.code]: 5, [`${g.code}:EASY`]: 2, [`${g.code}:MEDIUM`]: 3 }));
-  for (const [d, best] of [['easy', 2], ['medium', 3], ['hard', 5]]) {
+  store(KEY_BEST, JSON.stringify({ [g.code]: 5, [`${g.code}:EASY`]: 2, [`${g.code}:MEDIUM`]: 3, [`${g.code}:HARD`]: 4 }));
+  for (const [d, best] of [['easy', 2], ['medium', 3], ['hard', 4], ['ultimate', 5]]) {
     setDifficulty(g, d);
     need(titleBest(g) === best, `BEST TOMB reads ${best} at ${difficultyLabel(d)}`);
   }
@@ -688,7 +692,7 @@ function oilLeg(g, { need, click }) {
 
 /** The coin steps of the touch leg, from the title with no run open. */
 function coinLeg(g, { need, click }) {
-  const rates = { easy: 1, medium: 2, hard: 5 };
+  const rates = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
   const onLevel = (d) => {
     setDifficulty(g, d);
     useCode(g, SELFTEST_CODE);
@@ -725,7 +729,7 @@ function coinLeg(g, { need, click }) {
   need(g.coins.get(key).has(id), 'the collected set keeps the coin');
 
   // Step 3: a new best tomb pays its rate.
-  for (const d of ['easy', 'medium', 'hard']) {
+  for (const d of DIFFICULTIES) {
     onLevel(d);
     g.paid.delete(coinKey(SELFTEST_CODE, d));
     keepCoins(g);
@@ -737,7 +741,7 @@ function coinLeg(g, { need, click }) {
   }
 
   // Step 4: a replay pays only past the record.
-  for (const d of ['easy', 'medium', 'hard']) {
+  for (const d of DIFFICULTIES) {
     onLevel(d);
     g.paid.set(coinKey(SELFTEST_CODE, d), 1);
     keepCoins(g);
@@ -867,9 +871,10 @@ const JUMP_KEYS = ['Space', 'KeyZ'];
 // Title keys that step the difficulty setting, stopping at the ends.
 const SETTING_STEP = { ArrowLeft: -1, KeyA: -1, ArrowRight: 1, KeyD: 1 };
 
-// HARD keeps the bare seed code, so bests from before difficulties carry over.
+// ULTIMATE, the 6x4 world, keeps the bare seed code, so bests from before
+// difficulties carry over.
 function bestKey(code, difficulty) {
-  return difficulty === 'hard' ? code : `${code}:${difficultyLabel(difficulty)}`;
+  return difficulty === 'ultimate' ? code : `${code}:${difficultyLabel(difficulty)}`;
 }
 
 function readBest(code, difficulty) {
@@ -1238,7 +1243,7 @@ function drawTitle(g, t) {
     r.text('R      RESET', 72, 98, 'b');
     r.text('K COPY', 248, 98, 'b', { align: 'right' });
     r.text('T      TYPE A CODE', 72, 110, 'b');
-    // At most 26 characters right of P: a 9-character p and MEDIUM fit the panel.
+    // At most 28 characters right of P: a 9-character p and ULTIMATE fit the panel.
     if (saved) {
       r.text('P', 72, 122, 'b');
       r.text(`${formatCode(saved.code)}:${saved.p} ${difficultyLabel(saved.difficulty)}`, 248, 122, 'b', { align: 'right' });
@@ -1249,11 +1254,14 @@ function drawTitle(g, t) {
   r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  P PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
-/** The title's setting row at y: all three names after L, the current one lit. */
+/**
+ * The title's setting row at y: all four names after L, the current one lit.
+ * The row spans 149 px and ends at 248, the panel's text margin.
+ */
 function drawSettingRow(g, y) {
   const r = g.renderer;
   r.text('L', 72, y, 'b');
-  let x = 114;
+  let x = 99;
   for (const d of DIFFICULTIES) {
     const name = difficultyLabel(d);
     r.text(name, x, y, d === g.difficulty ? 'p' : '7');
@@ -1261,17 +1269,20 @@ function drawSettingRow(g, y) {
   }
 }
 
-// The HARD map, the largest, spans the pause panel inside its 2 px rules,
-// from y 28 under the PAUSED title; smaller maps centre in that frame.
+// The largest frame over the levels, ULTIMATE's 72x28 cells, spans the pause
+// panel inside its 2 px rules, from y 28 under the PAUSED title; smaller maps
+// centre in that frame.
 const PAUSE_MAP_LEFT = PANEL_X.pause[0] + 2;
 const PAUSE_MAP_TOP = 28;
+const MAP_FRAME = Object.values(DIFFICULTY).map(mapCells)
+  .reduce((m, c) => ({ cols: Math.max(m.cols, c.cols), rows: Math.max(m.rows, c.rows) }));
 
 /** Top left of the pause map and its rows, for the world's tomb size. */
 function mapOrigin(world) {
-  const hard = mapCells(DIFFICULTY.hard), { cols, rows } = mapCells(world.size);
+  const { cols, rows } = mapCells(world.size);
   return {
-    x: PAUSE_MAP_LEFT + ((hard.cols - cols) * MAP_SCALE) / 2,
-    y: PAUSE_MAP_TOP + Math.floor(((hard.rows - rows) * MAP_SCALE) / 2),
+    x: PAUSE_MAP_LEFT + ((MAP_FRAME.cols - cols) * MAP_SCALE) / 2,
+    y: PAUSE_MAP_TOP + Math.floor(((MAP_FRAME.rows - rows) * MAP_SCALE) / 2),
     rows,
   };
 }

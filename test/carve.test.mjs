@@ -10,6 +10,12 @@ import { measureTargets } from '../tools/acceptance.mjs';
 
 const CODE = '00000000';
 const H = makeHasher(worldKey(CODE));
+// The carve count and room targets per level, restated apart from the generator.
+const ULTIMATE = { count: CARVE_CELLS, targets: { path: 22, junctions: 6, branch: 3 } };
+const EASED = {
+  easy: { count: 40, targets: { path: 16, junctions: 4, branch: 2 } },
+  medium: { count: 45, targets: { path: 22, junctions: 6, branch: 2 } },
+};
 const uncarved = createWorld(CODE, { carveCells: NCELL });
 const carvedWorld = createWorld(CODE);
 
@@ -47,13 +53,13 @@ function rooted(links, a) {
   return parent;
 }
 
-/** The carve rule's context for an uncarved board `bd`. */
-function context(bd) {
+/** The carve rule's context for an uncarved board `bd` at a level's carve count and targets. */
+function context(bd, { count, targets } = ULTIMATE) {
   const prot = new Set(bd.doors.map((d) => d.cell));
   prot.add(bd.a);
   prot.add(bd.b);
   prot.add(u32(H('flame', bd.x, bd.y), 4) % NCELL);
-  return { bd, prot, doorCells: bd.doors.map((d) => d.cell), limit: bd.deficit };
+  return { bd, prot, doorCells: bd.doors.map((d) => d.cell), limit: bd.deficit, count, targets };
 }
 
 /** Cells of the subtree below c (c included) in the tree `parent`. */
@@ -69,13 +75,13 @@ function below(parent, c) {
  * removes a gallery link. `rules` switches the deficit rule off.
  */
 function cuts(ctx, links, rules = {}) {
-  const { bd, prot, doorCells, limit } = ctx;
+  const { bd, prot, doorCells, limit, count, targets } = ctx;
   const parent = rooted(links, bd.a);
   const out = [];
   for (let c = 0; c < NCELL; c++) {
     if (c === bd.a || !parent.has(c)) continue;
     const gone = below(parent, c);
-    if (gone.some((u) => prot.has(u)) || gone.length > parent.size - CARVE_CELLS) continue;
+    if (gone.some((u) => prot.has(u)) || gone.length > parent.size - count) continue;
     const trial = links.slice();
     let gallery = false;
     for (const u of gone) {
@@ -86,18 +92,18 @@ function cuts(ctx, links, rules = {}) {
       }
       trial[u] = 0;
     }
-    if (rules.deficit !== false && measureTargets(trial, bd.a, bd.b, doorCells).deficit > limit) continue;
+    if (rules.deficit !== false && measureTargets(trial, bd.a, bd.b, doorCells, targets).deficit > limit) continue;
     out.push({ c, gallery, trial });
   }
   return out;
 }
 
-/** Carves a copy of the uncarved board `bd`; `rules` breaks one rule. */
-function reference(bd, rules = {}) {
-  const ctx = context(bd);
+/** Carves a copy of the uncarved board `bd` at `level`; `rules` breaks one rule. */
+function reference(bd, rules = {}, level = ULTIMATE) {
+  const ctx = context(bd, level);
   const rng = sfc32(H('carve', bd.x, bd.y));
   let links = bd.links.slice();
-  while (rooted(links, bd.a).size > CARVE_CELLS) {
+  while (rooted(links, bd.a).size > level.count) {
     const all = cuts(ctx, links, rules);
     const free = rules.gallery === false ? [] : all.filter((cut) => !cut.gallery);
     const pool = free.length ? free : all;
@@ -161,6 +167,20 @@ test('a board holding more than 50 cells has no qualifying cut left', () => {
     assert.deepEqual(cuts(context(bd), cv.links).map((cut) => cut.c), [], `board (${bd.x},${bd.y})`);
   }
   assert.ok(over > 0, 'no board stops above 50 cells');
+});
+
+test('the reference carve at EASY (40; 16, 4, 2) and MEDIUM (45; 22, 6, 2) reproduces the generator on tombs u -1..0, v 0..4', () => {
+  for (const [d, level] of Object.entries(EASED)) {
+    const bare = createWorld(CODE, { difficulty: d, carveCells: NCELL }), cut = createWorld(CODE, { difficulty: d });
+    const list = boards(bare, -1, 0, 0, 4);
+    assert.ok(list.length > 30, `${d}: ${list.length} boards`);
+    const bad = list.find((bd) => !same(reference(bd, {}, level), cut.board(bd.x, bd.y).links));
+    assert.equal(bad, undefined, bad && `${d} board (${bad.x},${bad.y})`);
+    // Every board keeps at least the count; most stop on it.
+    const sizes = list.map((bd) => { const cv = cut.board(bd.x, bd.y); return rooted(cv.links, cv.a).size; });
+    assert.ok(sizes.every((n) => n >= level.count), `${d}: ${Math.min(...sizes)} cells`);
+    assert.ok(sizes.includes(level.count), `${d}: no board stops at ${level.count}`);
+  }
 });
 
 test('the mask opens the room of a carved cell and keeps a pruned cell solid', () => {

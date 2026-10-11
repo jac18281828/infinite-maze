@@ -202,13 +202,18 @@ test('every cell the model names holds a link or door, and a flame sits on a sto
 });
 
 test('frameOf floors board coordinates into tombs, negatives included', () => {
+  const ultimate = DIFFICULTY.ultimate;
+  assert.deepEqual(frameOf({ x: 0, y: 0 }, ultimate), { u: 0, v: 0 });
+  assert.deepEqual(frameOf({ x: 5, y: 3 }, ultimate), { u: 0, v: 0 });
+  assert.deepEqual(frameOf({ x: 6, y: 4 }, ultimate), { u: 1, v: 1 });
+  assert.deepEqual(frameOf({ x: -1, y: -1 }, ultimate), { u: -1, v: -1 });
+  assert.deepEqual(frameOf({ x: -6, y: -4 }, ultimate), { u: -1, v: -1 });
+  assert.deepEqual(frameOf({ x: -7, y: -5 }, ultimate), { u: -2, v: -2 });
   const hard = DIFFICULTY.hard;
-  assert.deepEqual(frameOf({ x: 0, y: 0 }, hard), { u: 0, v: 0 });
-  assert.deepEqual(frameOf({ x: 5, y: 3 }, hard), { u: 0, v: 0 });
-  assert.deepEqual(frameOf({ x: 6, y: 4 }, hard), { u: 1, v: 1 });
-  assert.deepEqual(frameOf({ x: -1, y: -1 }, hard), { u: -1, v: -1 });
-  assert.deepEqual(frameOf({ x: -6, y: -4 }, hard), { u: -1, v: -1 });
-  assert.deepEqual(frameOf({ x: -7, y: -5 }, hard), { u: -2, v: -2 });
+  assert.deepEqual(frameOf({ x: 3, y: 3 }, hard), { u: 0, v: 0 });
+  assert.deepEqual(frameOf({ x: 4, y: 4 }, hard), { u: 1, v: 1 });
+  assert.deepEqual(frameOf({ x: -4, y: -4 }, hard), { u: -1, v: -1 });
+  assert.deepEqual(frameOf({ x: -5, y: -5 }, hard), { u: -2, v: -2 });
 });
 
 test('panFrame moves one tomb in each arrow\'s direction', () => {
@@ -252,10 +257,11 @@ test('a fresh run frames a map of its start cell alone', () => {
   assert.ok(m.stubs.length >= 1);
 });
 
-test('an EASY frame is its 3x2 tomb: 36x14 cells counted from its left wall and floor', () => {
-  assert.deepEqual(mapCells(DIFFICULTY.easy), { cols: 36, rows: 14 });
-  assert.deepEqual(mapCells(DIFFICULTY.medium), { cols: 48, rows: 21 });
-  assert.deepEqual(mapCells(DIFFICULTY.hard), { cols: 72, rows: 28 });
+test('an EASY frame is its 2x2 tomb: 24x14 cells counted from its left wall and floor', () => {
+  assert.deepEqual(mapCells(DIFFICULTY.easy), { cols: 24, rows: 14 });
+  assert.deepEqual(mapCells(DIFFICULTY.medium), { cols: 36, rows: 21 });
+  assert.deepEqual(mapCells(DIFFICULTY.hard), { cols: 48, rows: 28 });
+  assert.deepEqual(mapCells(DIFFICULTY.ultimate), { cols: 72, rows: 28 });
   assert.deepEqual(frameOf({ x: 3, y: 3 }, DIFFICULTY.easy), { u: 1, v: 1 });
   assert.deepEqual(frameOf({ x: -1, y: -1 }, DIFFICULTY.easy), { u: -1, v: -1 });
   const world = createWorld(SELFTEST_CODE, { difficulty: 'easy' });
@@ -282,12 +288,12 @@ test('an EASY frame is its 3x2 tomb: 36x14 cells counted from its left wall and 
     const m = mapModel(world, s.trail, f, at);
     assert.ok(m.outlines.length >= 1, `tomb ${fkey(f)} outlines its entered boards`);
     for (const o of [...m.lines, ...m.stubs, ...m.outlines, ...m.flames, ...(m.explorer ? [m.explorer] : [])]) {
-      assert.ok(o.col >= 0 && o.col < 36 && o.row >= 0 && o.row < 14, `tomb ${fkey(f)}: (${o.col},${o.row}) stays in the EASY frame`);
+      assert.ok(o.col >= 0 && o.col < 24 && o.row >= 0 && o.row < 14, `tomb ${fkey(f)}: (${o.col},${o.row}) stays in the EASY frame`);
     }
   }
   checkTombs(world, s, w, {});
-  // The model counts columns from the tomb's left wall at board column 3u and rows from its floor at row 2v.
+  // The model counts columns from the tomb's left wall at board column 2u and rows from its floor at row 2v.
   const m = mapModel(world, s.trail, frameOf(s.bd, world.size), at);
-  assert.equal(m.explorer.col, (s.bd.x - 3 * s.bd.u) * BW + (s.cell % BW));
+  assert.equal(m.explorer.col, (s.bd.x - 2 * s.bd.u) * BW + (s.cell % BW));
   assert.equal(m.explorer.row, (s.bd.y - 2 * s.bd.v) * BH + Math.floor(s.cell / BW));
 });

@@ -12,7 +12,7 @@ import {
 } from '../src/game/wallet.mjs';
 
 test('the payout is the level rate times the tombs past the record, and 0 at or under it', () => {
-  assert.deepEqual(COIN_RATE, { easy: 1, medium: 2, hard: 5 });
+  assert.deepEqual(COIN_RATE, { easy: 1, medium: 2, hard: 5, ultimate: 10 });
   for (const d of DIFFICULTIES) {
     for (const [record, count] of [[0, 1], [0, 3], [1, 2], [4, 9], [7, 7], [7, 3], [0, 0]]) {
       assert.equal(tombPayout(d, record, count), count > record ? COIN_RATE[d] * (count - record) : 0, `${d} ${record} ${count}`);
@@ -22,6 +22,7 @@ test('the payout is the level rate times the tombs past the record, and 0 at or 
   assert.equal(tombPayout('medium', 0, 1), 2);
   assert.equal(tombPayout('hard', 0, 1), 5);
   assert.equal(tombPayout('hard', 2, 2), 0);
+  assert.equal(tombPayout('ultimate', 0, 1), 10);
 });
 
 test('the wallet, the collected set and the payout record read absent or malformed storage as empty', () => {

@@ -19,10 +19,11 @@ The world has two scales, and both use the same maze rule:
   tree. Tombs tile an unbounded plane.
 
 The difficulty, picked on the title (§8), sets the tomb's size in boards:
-EASY 3×2 (6 boards), MEDIUM 4×3 (12) and HARD 6×4 (24). Every other rule
-holds at every difficulty, and a world never mixes sizes. A tomb depends on
-the seed, its position and the difficulty alone; the difficulty enters no
-hash.
+EASY 2×2 (4 boards), MEDIUM 3×3 (9), HARD 4×4 (16) and ULTIMATE 6×4 (24).
+ULTIMATE is the original 6×4 world. The level also sets the room parameters
+of §3 and §4: the dead-end depth, the carve count and the path, junction and
+side-branch targets. A world never mixes sizes. A tomb depends on the seed,
+its position and the difficulty alone; the difficulty enters no hash.
 
 Board coordinates are integers `(x, y)`, both unbounded, where y increases
 upward. Tombs are keyed `(u, v)`, both in ℤ: tomb `(u, v)` holds boards
@@ -116,7 +117,8 @@ one board never share a cell.
 
 ## 3. Band maze
 
-A tomb is W×H boards: 3×2 at EASY, 4×3 at MEDIUM and 6×4 at HARD (§1).
+A tomb is W×H boards: 2×2 at EASY, 3×3 at MEDIUM, 4×4 at HARD and 6×4 at
+ULTIMATE (§1).
 Tomb `(u, v)` spans board columns `Wu … Wu+W−1` and rows `Hv … Hv+H−1`, and
 its board index is `i = W · row + column` within the tomb. A door on the tomb
 wall between `(u, v)` and `(u, v + 1)` crosses at board column
@@ -130,9 +132,9 @@ holds the exit door.
 2. **Trunk.** Run a randomized depth-first search over the W×H boards,
    seeded from `H("band", u, v, k)`, from `E_1` (or `S`) to `X`. The search
    stack on arrival is the trunk. Reroll `k` until the trunk covers at least
-   half the tomb's boards: 3 at EASY, 6 at MEDIUM and 12 at HARD. When the
-   entry board is `X` itself, the trunk is that one board and is exempt from
-   the minimum.
+   half the tomb's boards, rounded down: 2 at EASY, 4 at MEDIUM, 8 at HARD
+   and 12 at ULTIMATE. When the entry board is `X` itself, the trunk is that
+   one board and is exempt from the minimum.
 3. **Tributaries.** For `j = 2 … k` in order, an `E_j` already in the tree
    needs nothing. Otherwise a randomized depth-first search on the same
    generator runs from `E_j` over boards outside the tree and ends on its
@@ -140,9 +142,10 @@ holds the exit door.
    tributary. The unused boards around `E_j` always touch the tree, so a
    tributary never fails.
 4. **Dead ends.** Repeatedly pick, uniformly, a board in the tree at depth
-   below 2 with an unused neighbour, and attach that neighbour. Trunk and
-   tributaries sit at depth 0. Stop when no candidate remains. Every dead-end
-   branch is therefore at most `D = 2` boards deep.
+   below the level's dead-end depth `D` with an unused neighbour, and attach
+   that neighbour. Trunk and tributaries sit at depth 0. Stop when no
+   candidate remains. Every dead-end branch is therefore at most `D` boards
+   deep: `D = 1` at EASY and 2 at MEDIUM, HARD and ULTIMATE.
 5. **Rock.** Board positions left unused are solid rock.
 6. **Flames.** Every `E_j` and `S` holds a flame at its flame cell, an `E_j`
    already on the trunk included. Number each route's boards from 0 at its
@@ -171,7 +174,8 @@ confluence board's extra door needs no rule of its own.
 ## 4. Board maze
 
 Each attempt grows a spanning tree over a board's 12×7 grid with the
-growing-tree algorithm, and the chosen tree is then carved down to 50 cells:
+growing-tree algorithm, and the chosen tree is then carved down to the
+level's carve count `C` cells:
 
 - Pick the newest active cell with probability 0.6, otherwise a random
   active cell.
@@ -187,19 +191,28 @@ Before growing its tree, each attempt reserves up to 8 disjoint blocks from
 at most 32 random draws. A reserved block loses its four orthogonal links and
 offers one diagonal, drawn at random. A block whose four cells the remaining
 links no longer join is dropped, so those links connect the grid and each
-attempt's tree spans every cell. Boards average 4–10 galleries.
+attempt's tree spans every cell. Boards average 4·C/50 to 10·C/50 galleries
+(§10).
 
 The board's primary door pair is its route entry and route exit, or, on a
 dead-end board, its single door and its deepest cell. Each attempt must meet
-two targets:
+two targets, set per level with the carve count:
 
-- The primary path covers at least 22 cells, with at least 6 junctions on it.
-- Every branch leaving the primary path runs at least 3 cells, so its end
-  sits outside torchlight at the junction.
+- The primary path covers at least `P` cells, with at least `J` junctions on
+  it.
+- Every branch leaving the primary path runs at least `B` cells.
+
+| Level | `C` | `P` | `J` | `B` |
+|---|---|---|---|---|
+| EASY | 40 | 16 | 4 | 2 |
+| MEDIUM | 45 | 22 | 6 | 2 |
+| HARD | 50 | 22 | 6 | 3 |
+| ULTIMATE | 50 | 22 | 6 | 3 |
 
 The deficit of a tree is its shortfall in path cells, plus its shortfall in
-junctions, plus, for each branch under 3 cells, the cells it lacks. A branch
-holding a door is exempt. An attempt meets the targets at deficit 0.
+junctions, plus, for each branch under `B` cells, the cells it lacks. A branch
+holding a door is exempt. An attempt meets the targets at deficit 0. The
+level's targets govern attempt selection, repair and carve alike.
 
 After growing its tree, an attempt repairs it by edge swaps. A swap adds a
 link between two cells that the attempt's reserved blocks leave open and
@@ -223,20 +236,21 @@ away from `a`, and their links. A cut qualifies when:
 
 - it removes no protected cell: a door cell, `a`, the second primary cell `b`
   (the deepest cell on a dead-end board) or the flame cell of §2;
-- it removes at most (cells − 50) cells, where cells is the tree's current
+- it removes at most (cells − `C`) cells, where cells is the tree's current
   size; and
 - the deficit afterwards, measured against `b`, is at most the deficit the
   chosen attempt had.
 
-While the tree holds more than 50 cells, the carve lists the qualifying cuts
+While the tree holds more than `C` cells, the carve lists the qualifying cuts
 that remove no gallery link, or every qualifying cut when none is free of
 one, in ascending cell order. It removes the cut at index `rng() % count`,
-where `rng` is sfc32 of `H("carve", x, y)`. It stops at 50 cells or when no
+where `rng` is sfc32 of `H("carve", x, y)`. It stops at `C` cells or when no
 cut qualifies. A cut leaves the path between protected cells whole, so every
 flame lies on a carved cell and walking times between flames are unchanged.
 The cells that remain form a tree, and the rest is rock: the game opens a
-room only for a cell that holds a link or a door. Boards average about 51
-carved cells and 5 galleries.
+room only for a cell that holds a link or a door. Over the §10 window, boards
+average 40.7 carved cells and 4.59 galleries at EASY, 45.8 and 4.72 at
+MEDIUM, 50.6 and 5.03 at HARD and 50.7 and 5.02 at ULTIMATE.
 
 **Signs.** A sign junction is a cell of a route board (§3) on the tree path
 from an in-cell to the out-door's cell `o`, `o` excepted, with three or more
@@ -248,8 +262,8 @@ merging here and the upstream tomb's exit board beyond an in-door, and the
 flame cell of a source board `S`. These differ from the junctions above, which
 count cells on the primary path with a tree link off it, `b` included and doors
 not counted. Paths run from every in-cell, `o` has no sign because a sconce
-already marks its door, and doors count as ways out. A route board holds 5.6
-sign junctions on average at every level.
+already marks its door, and doors count as ways out. A route board holds 3.9
+sign junctions on average at EASY and 5.7 at the other levels.
 
 A sign junction carries a sign when `u32(H("sign", x, y, cell)) mod 48` is
 under the level's threshold: 8 at EASY, 6 at MEDIUM, 4 at HARD and 3 at
@@ -279,9 +293,14 @@ a jar lies on a dead-end cell whose coin hash fails and whose oil hash passes:
 95% of the rate, 9.5%, 6.7%, 4.8% and 3.8% of dead-end cells. Items are read
 off a built board and built into none. The difficulty enters the jar's
 percentage and no tag, and no pinned digest depends on either. On seed
-`0000-0000`, tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`, a tree board holds 6.5 to
-6.6 dead-end cells; 4.4% to 5.2% of them hold a coin, by level, and 9.8% hold a
-jar at EASY, 7.1% at MEDIUM and 4.9% at HARD.
+`0000-0000`, tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`:
+
+| Level | Dead-end cells per tree board | Coin | Jar |
+|---|---|---|---|
+| EASY | 4.55 | 6.0% | 9.2% |
+| MEDIUM | 6.35 | 5.0% | 6.9% |
+| HARD | 6.56 | 4.9% | 4.6% |
+| ULTIMATE | 6.59 | 4.8% | 3.9% |
 
 ## 5. Save code
 
@@ -307,16 +326,18 @@ title, and the code reads at the difficulty in force:
 
 - The game stores the title setting; absent, it is MEDIUM.
 - Every stored save keeps the difficulty of the run that wrote it; absent,
-  it is HARD.
+  it is ULTIMATE, the 6×4 world a save from before difficulties holds. A
+  stored `hard` names the level called HARD, now 4×4, so a HARD save from
+  before the four levels resumes in the 4×4 world, as a typed code would.
 - RESUME plays the stored save at its own difficulty, and the title setting
   moves to match. A typed save code plays at the title setting.
 
 Resuming lights the torch to full. Flames never run out, so the save carries
 no pickup state. It carries none of the coins taken, which live under a key of
 their own per seed and level, below, and none of the oil jars taken, which §7
-resets on every new run. The game separately keeps the most
-tombs solved, as the score, per seed and difficulty; HARD keeps the bare seed
-code as its key.
+resets on every new run. The game separately keeps the most tombs solved, as
+the score, per seed and difficulty; ULTIMATE keeps the bare seed code as its
+key, and EASY, MEDIUM and HARD add `:EASY`, `:MEDIUM` or `:HARD`.
 
 Browser storage holds the plane's values under keys of their own, so a
 value from the stacked world that came before never reads as a position or
@@ -342,10 +363,10 @@ unformatted and `<LEVEL>` the difficulty label, as in `K7Q2M9XA:MEDIUM`.
 A run also earns coins for tombs. The record holds the highest tomb count
 already paid for a seed and level, 0 when absent. When the run's tomb count
 (the score of §8) rises above it, the wallet gains the rate times the rise and
-the record becomes the count. The rate is 1 per tomb at EASY, 2 at MEDIUM and
-5 at HARD, set by the world's difficulty alone. A replay pays only past its
-record, and a resumed save counts from 0 and pays once its run climbs past the
-record. A milestone pays on top: for each k with `record < 100k ≤ count`, the
+the record becomes the count. The rate is 1 per tomb at EASY, 2 at MEDIUM, 5
+at HARD and 10 at ULTIMATE, set by the world's difficulty alone. A replay pays
+only past its record, and a resumed save counts from 0 and pays once its run
+climbs past the record. A milestone pays on top: for each k with `record < 100k ≤ count`, the
 wallet gains 100 × k, once per seed and level because the record passes it. A
 record already past 100k counts as paid. The game holds the three values in
 memory from boot and writes each through on every change. Absent, blocked or
@@ -575,12 +596,13 @@ Past k = 10 the rank reads `PHARAOH` and the Roman numeral of k − 9: PHARAOH I
 at k = 11, PHARAOH III at 12. A numeral past 3999 adds a leading M per
 thousand. Every name uses only characters the font draws.
 
-**Labels.** The title's panel holds a difficulty row naming EASY, MEDIUM and
-HARD with the setting lit, and its save line names the save's difficulty. Its
-best tomb is the shown seed's at the setting. The pause and end screens name
-the run's difficulty after the save code. The pause map draws the run's tomb
-at 3 px per cell, a frame of `W·36 × H·21` px: 108×42 at EASY, 144×63 at
-MEDIUM and 216×84 at HARD.
+**Labels.** The title's panel holds a difficulty row naming EASY, MEDIUM,
+HARD and ULTIMATE with the setting lit, and its save line names the save's
+difficulty. Its best tomb is the shown seed's at the setting. The pause and
+end screens name the run's difficulty after the save code. The pause map
+draws the run's tomb at 3 px per cell, a frame of `W·36 × H·21` px: 72×42 at
+EASY, 108×63 at MEDIUM, 144×84 at HARD and 216×84 at ULTIMATE, centred in the
+largest.
 
 **Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
 pixels. It scrolls freely across board seams, and rock fills every position
@@ -638,8 +660,9 @@ keydown, so a held key cannot skip it. M mutes, as on every screen.
 
 On the title, Enter begins the shown seed at tomb 0, R rolls a new seed and
 keeps the save, and T opens code entry. L cycles the difficulty EASY, MEDIUM,
-HARD and round again; Left and Right, or A and D, step it and stop at the
-ends. A change rebuilds the title's world. P (or Esc) resumes:
+HARD, ULTIMATE and round again; Left and Right, or A and D, step it and stop
+at EASY and ULTIMATE. A change rebuilds the title's world. P (or Esc)
+resumes:
 
 - A title reached from pause by Q leaves the run open, and P returns to it
   unchanged: torch, time, trail and difficulty. The open run keeps its own
@@ -689,13 +712,16 @@ scrolls, zooms or selects.
 ## 10. Acceptance
 
 A headless test harness, run with `node`, checks the generator against the
-same source the game uses, at every difficulty. It checks the window of tombs
-`u ∈ [−10, 10]`, `v ∈ [−50, 50]`, 2,121 tombs, unless told otherwise. Each
-check reads the tomb size from its world. Flow, Way up and Solvability's
-tomb walk read the generator's exits, and every check reads a source tomb's
-`S` from the generator. Everything else follows doors held on both sides,
+same source the game uses, at each of the four levels over one window of
+tombs: `u ∈ [−10, 10]`, `v ∈ [−50, 50]`, 2,121 tombs, unless told otherwise.
+Each check reads the tomb size from its world, and the room parameters of §3
+and §4 from the harness's own table by the world's level. Flow, Way up and
+Solvability's tomb walk read the generator's exits, and every check reads a
+source tomb's `S` from the generator. Everything else follows doors held on both sides,
 never the generator's tomb graph, so a generator fault cannot vouch for
-itself.
+itself. Per level, the summary also prints the room rule and the exploration
+time: the mean, over the tree boards checked, of the walk that takes every
+link of a room out and back.
 
 - **Keccak:** SHA3-256 matches the FIPS 202 test vectors.
 - **Continuity:** every door in the window matches in position on both
@@ -714,20 +740,24 @@ itself.
 - **Way up:** from every window tomb, the walk along the generator's exits
   climbs past the window's top row within 100,000 steps, leaving the window
   sideways if it does. It reads the flow alone, which no difficulty changes,
-  so it runs once, at HARD. The harness reports, without judging them, the
-  share of window tombs whose walk meets tomb `(0, 0)`'s within the cap and
-  the largest and mean steps to meet.
-- **Bounds:** every tomb's trunk covers at least half its boards, a
-  one-board trunk aside, every dead-end branch is at most 2 boards deep, and
-  every board meets the targets in §4 or records its best-attempt fallback.
+  so it runs once, at ULTIMATE. The harness reports, without judging them,
+  the share of window tombs whose walk meets tomb `(0, 0)`'s within the cap
+  and the largest and mean steps to meet.
+- **Bounds:** every tomb's trunk covers at least half its boards, rounded
+  down, a one-board trunk aside, every dead-end branch is at most the level's
+  `D` boards deep, and every board meets the level's targets in §4 or
+  records its best-attempt fallback.
   A run of at least 2,000 boards fails when more than 2% of them fall back; a
   shorter run reports the rate.
 - **Galleries:** every gallery owns its 2×2 block, no two blocks share a
-  cell, and galleries average 4–10 per board. The harness reports the mean
+  cell, and galleries average 4·C/50 to 10·C/50 per board: 3.2–8 at EASY,
+  3.6–9 at MEDIUM and 4–10 at HARD and ULTIMATE. The harness reports the mean
   and the block conflicts.
 - **Carve:** every door cell and flame cell holds a link, every tree board
-  carves at least 50 cells, and the mean stays within 48–56. A cell is carved
-  when it holds a link, doors aside. The harness reports the mean.
+  carves at least `C` cells, and the mean stays within C·96/100 to C·112/100:
+  38.4–44.8 at EASY, 43.2–50.4 at MEDIUM and 48–56 at HARD and ULTIMATE. A
+  cell is carved when it holds a link, doors aside. The harness reports the
+  mean.
 - **Flames:** every tomb entry holds a flame, and along each entry's way on
   the walking time between consecutive chain flames stays at or under 150 s.
   The harness reports the maximum and the 99th percentile.
@@ -739,5 +769,5 @@ itself.
   both signs, and a board resumed at the world's difficulty is
   byte-identical to one generated in sequence.
 - **Determinism:** a fixed seed code produces a fixed digest of tombs
-  `u ∈ [−2, 2]`, `v ∈ [0, 19]`, v outer and u inner, at each difficulty: three
+  `u ∈ [−2, 2]`, `v ∈ [0, 19]`, v outer and u inner, at each difficulty: four
   pinned digests, each distinct.

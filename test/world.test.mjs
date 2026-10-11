@@ -6,19 +6,23 @@ import {
 import { COST, DX, DY, NCELL, growTree, repairTree, analyze, flameCell } from '../src/world/board.mjs';
 import { parseCode, formatCode, codeFromBytes, makeHasher, worldKey, sfc32 } from '../src/world/hash.mjs';
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
-import { MAX_DEPTH, DIFFICULTY, DIFFICULTIES, minRoute } from '../src/world/band.mjs';
+import { DIFFICULTY, DIFFICULTIES, minRoute } from '../src/world/band.mjs';
 import { createFlow, exitDir, wallRight, UP, LEFT, RIGHT } from '../src/world/flow.mjs';
 import {
   checkFlames, checkFlow, checkTree, checkBounds, checkDeterminism, tombShape, tombWindow, entrySpan, walkMs,
-  measureTargets, runChecks, checkWayUp, WAY_UP_CAP,
+  measureTargets, runChecks, checkWayUp, explorationMs, WAY_UP_CAP,
 } from '../tools/acceptance.mjs';
 
 // Pinned digests of tombs u in [-2, 2], v in [0, 19] for seed code 0000-0000.
 const DIGESTS = {
-  easy: '0364383e0c18581310a2e58aa5bf69222f1611c060eaf5ab88ab6bae57c1a9a5',
-  medium: 'b0ad6e959d6fbd84a481219019c141e8259edea1c28f1d01dde0d30d3ae4d320',
-  hard: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
+  easy: 'c9538458fc19a80ae5916226bd318745ca219316cba5fa6e57a7507e0eb0ffe5',
+  medium: '82fc773e6be71470860f801aac466600b553ebbe0cc3f4c76fd8aa239ea875ab',
+  hard: 'd1ccd45db1a2f026aceea254241a64cd36b41420e76f73411d9f3606a1024cbd',
+  ultimate: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
 };
+// Each level's dead-end depth and path target, restated apart from the generator.
+const DEPTH = { easy: 1, medium: 2, hard: 2, ultimate: 2 };
+const PATH = { easy: 16, medium: 22, hard: 22, ultimate: 22 };
 const world = createWorld('00000000');
 const DEFAULT = tombWindow(-10, 10, -50, 50);
 const worlds = Object.fromEntries(DIFFICULTIES.map((d) => [d, createWorld('00000000', { difficulty: d })]));
@@ -31,15 +35,22 @@ test('seed 0000-0000 yields the pinned digest of tombs u -2..2, v 0..19 at each 
     assert.equal(digestTombs(w, -2, 2, 0, 19), DIGESTS[d], d);
     assert.deepEqual(checkDeterminism('00000000', DIGESTS[d], d).errors, [], d);
   }
-  assert.equal(new Set(Object.values(DIGESTS)).size, 3);
-  assert.deepEqual(DIFFICULTY, { easy: { w: 3, h: 2 }, medium: { w: 4, h: 3 }, hard: { w: 6, h: 4 } });
+  assert.equal(new Set(Object.values(DIGESTS)).size, 4);
+  assert.deepEqual(DIFFICULTY, { easy: { w: 2, h: 2 }, medium: { w: 3, h: 3 }, hard: { w: 4, h: 4 }, ultimate: { w: 6, h: 4 } });
+  assert.deepEqual(DIFFICULTIES, ['easy', 'medium', 'hard', 'ultimate']);
 });
 
-test('HARD is the default', () => {
+test('ULTIMATE, the original 6x4 world, is the default', () => {
   const plain = createWorld('00000000');
-  assert.equal(plain.difficulty, 'hard');
+  assert.equal(plain.difficulty, 'ultimate');
   assert.deepEqual(plain.size, { w: 6, h: 4 });
-  assert.equal(digestTombs(plain, -2, 2, 0, 19), DIGESTS.hard);
+  assert.equal(digestTombs(plain, -2, 2, 0, 19), DIGESTS.ultimate);
+});
+
+test('exploring a room fully and walking back takes 57.086 s at EASY, 64.328 s at MEDIUM, 71.830 s at HARD and 71.762 s at ULTIMATE', () => {
+  const win = tombWindow(-2, 2, 0, 19);
+  const want = { easy: '57.086', medium: '64.328', hard: '71.830', ultimate: '71.762' };
+  for (const d of DIFFICULTIES) assert.equal((explorationMs(worlds[d], win) / 1000).toFixed(3), want[d], d);
 });
 
 test('an unknown difficulty throws', () => {
@@ -47,8 +58,8 @@ test('an unknown difficulty throws', () => {
   assert.throws(() => createWorld('00000000', { difficulty: 'toString' }), /unknown difficulty/);
 });
 
-test('every level is a plane: EASY and MEDIUM pass every check over the default window', () => {
-  for (const d of ['easy', 'medium']) {
+test('every level is a plane: EASY, MEDIUM and HARD pass every check over the default window', () => {
+  for (const d of ['easy', 'medium', 'hard']) {
     for (const [name, r] of runChecks(createWorld('00000000', { difficulty: d }), '00000000', DEFAULT).rows) {
       assert.deepEqual(r.errors, [], `${d} ${name}`);
     }
@@ -95,6 +106,7 @@ test('the flow is the same at every level: walls, exits and in-doors agree over 
       const hard = at(worlds.hard, u, v);
       assert.equal(at(worlds.easy, u, v), hard, `tomb (${u},${v}) at EASY`);
       assert.equal(at(worlds.medium, u, v), hard, `tomb (${u},${v}) at MEDIUM`);
+      assert.equal(at(worlds.ultimate, u, v), hard, `tomb (${u},${v}) at ULTIMATE`);
       if (worlds.hard.tomb(u, v).exit !== UP) sides++;
     }
   }
@@ -185,7 +197,7 @@ test('at each difficulty a board resumed from p equals the same board reached al
   // One p names one board, which belongs to a different tomb at each level.
   const at = decodeSave(`0000-0000:${posOf(4, 3)}`);
   assert.deepEqual([at.x, at.y], [4, 3]);
-  assert.deepEqual(DIFFICULTIES.map((d) => tombOf(at.x, at.y, DIFFICULTY[d])), [{ u: 1, v: 1 }, { u: 1, v: 1 }, { u: 0, v: 0 }]);
+  assert.deepEqual(DIFFICULTIES.map((d) => tombOf(at.x, at.y, DIFFICULTY[d])), [{ u: 2, v: 1 }, { u: 1, v: 1 }, { u: 1, v: 0 }, { u: 0, v: 0 }]);
 });
 
 test('saves of boards at or past 2^25 in either axis decode to null', () => {
@@ -247,15 +259,18 @@ test('a resume lands on the first primary cell; a rock board resumes at its tomb
   assert.equal(start.cell, start.board.a);
 });
 
-test('tomb trees keep a trunk of half their boards or more, dead ends at most 2 deep, and match their doors', () => {
+test('tomb trees keep a trunk of half their boards or more, dead ends at most the level\'s depth, and match their doors', () => {
+  const rooms = {};
   for (const d of DIFFICULTIES) {
     const w = worlds[d], min = minRoute(w.size);
+    const deep = rooms[d] = [0, 0, 0];
     for (let v = -12; v <= 12; v++) {
       for (let u = -4; u <= 4; u++) {
         const t = w.tomb(u, v);
         const at = `${d} tomb (${u},${v})`;
         assert.ok(t.routes[0].length >= min || t.entries[0] === t.X, at);
-        assert.ok(Math.max(...t.depth) <= MAX_DEPTH, at);
+        assert.ok(Math.max(...t.depth) <= DEPTH[d], at);
+        for (const k of t.depth) if (k > 0) deep[Math.min(k, 2)]++;
         assert.equal(t.routes[0][0], t.entries[0], at);
         assert.equal(t.routes[0].at(-1), t.X, at);
         assert.notEqual(t.exit, 3, at);
@@ -266,20 +281,27 @@ test('tomb trees keep a trunk of half their boards or more, dead ends at most 2 
         assert.deepEqual(shape.routes, t.routes, at);
       }
     }
+    assert.ok(rooms[d][1] > 0, `${d} holds depth-1 rooms`);
+    if (DEPTH[d] < 2) assert.equal(rooms[d][2], 0, `${d}: ${rooms[d][2]} rooms at depth 2`);
   }
+  // EASY's dead ends are one room deep; MEDIUM's reach two.
+  assert.deepEqual(rooms.easy, [0, 228, 0]);
+  assert.equal(rooms.medium[2], 168);
 });
 
 test('tombOf floors toward negative infinity on both axes at each tomb size', () => {
-  const hard = DIFFICULTY.hard, easy = DIFFICULTY.easy;
-  assert.deepEqual(tombOf(-1, -1, hard), { u: -1, v: -1 });
-  assert.deepEqual(tombOf(-6, -4, hard), { u: -1, v: -1 });
-  assert.deepEqual(tombOf(-7, -5, hard), { u: -2, v: -2 });
-  assert.deepEqual(tombOf(5, 3, hard), { u: 0, v: 0 });
-  assert.deepEqual(tombOf(6, 4, hard), { u: 1, v: 1 });
+  const ultimate = DIFFICULTY.ultimate, hard = DIFFICULTY.hard, easy = DIFFICULTY.easy;
+  assert.deepEqual(tombOf(-1, -1, ultimate), { u: -1, v: -1 });
+  assert.deepEqual(tombOf(-6, -4, ultimate), { u: -1, v: -1 });
+  assert.deepEqual(tombOf(-7, -5, ultimate), { u: -2, v: -2 });
+  assert.deepEqual(tombOf(5, 3, ultimate), { u: 0, v: 0 });
+  assert.deepEqual(tombOf(6, 4, ultimate), { u: 1, v: 1 });
+  assert.deepEqual(tombOf(3, 3, hard), { u: 0, v: 0 });
+  assert.deepEqual(tombOf(-4, -5, hard), { u: -1, v: -2 });
   assert.deepEqual(tombOf(3, 2, easy), { u: 1, v: 1 });
   assert.deepEqual(tombOf(-1, -1, easy), { u: -1, v: -1 });
   assert.deepEqual(tombOf(-4, -3, easy), { u: -2, v: -2 });
-  assert.deepEqual(tombOf(4, 3, DIFFICULTY.medium), { u: 1, v: 1 });
+  assert.deepEqual(tombOf(3, 3, DIFFICULTY.medium), { u: 1, v: 1 });
 });
 
 test('a tomb exits up, or through the side its walls open, and never down', () => {
@@ -384,9 +406,9 @@ test('a tomb whose first entry board is its exit board builds a one-board trunk 
 });
 
 test('a board whose primary pair meets in one cell measures to its deepest cell', () => {
-  // S's flame cell is the door it leaves by: S is X in EASY tomb (-8, -47) and
-  // HARD tomb (3, 28), and leads on along the trunk in EASY tomb (1, 10).
-  for (const [d, u, v, sIsX] of [['easy', -8, -47, true], ['easy', 1, 10, false], ['hard', 3, 28, true]]) {
+  // S's flame cell is the door it leaves by: S is X in EASY tomb (0, -149) and
+  // ULTIMATE tomb (3, 28), and leads on along the trunk in EASY tomb (0, -2).
+  for (const [d, u, v, sIsX] of [['easy', 0, -149, true], ['easy', 0, -2, false], ['ultimate', 3, 28, true]]) {
     const w = worlds[d], t = w.tomb(u, v), at = `${d} tomb (${u},${v})`;
     assert.ok(t.source, at);
     assert.equal(t.entries[0] === t.X, sIsX, at);
@@ -395,7 +417,7 @@ test('a board whose primary pair meets in one cell measures to its deepest cell'
     assert.equal(bd.a, flameCell(w.H, x, y), at);
     assert.equal(bd.a, bd.doors.find((dr) => dr.dir === bd.bDir).cell, `${at}: the pair meets in one cell`);
     assert.notEqual(bd.b, bd.a, at);
-    assert.ok(!bd.fallback && bd.pathLen >= 22, `${at} meets the targets`);
+    assert.ok(!bd.fallback && bd.pathLen >= PATH[d], `${at} meets the targets`);
     assert.deepEqual(checkBounds(w, tombWindow(u, u, v, v)).errors, [], at);
   }
 });

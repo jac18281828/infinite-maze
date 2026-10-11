@@ -3,7 +3,7 @@
 import { MILESTONE } from './ranks.mjs';
 
 // Coins per tomb, by the world's difficulty.
-export const COIN_RATE = { easy: 1, medium: 2, hard: 5 };
+export const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
 
 /**
  * Coins due when a run's tomb count rises from `record`, the highest count paid, to `count`:

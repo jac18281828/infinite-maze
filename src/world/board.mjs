@@ -1,9 +1,9 @@
 // Board cell maze: a growing-tree spanning tree over the 12x7 cell grid. Each
 // attempt repairs the tree by edge swaps, and attempts reroll until the
 // primary path meets the spec section 4 targets. The chosen tree is then
-// carved down to CARVE_CELLS cells; the rest is rock. Each gallery owns a 2x2
-// block that holds no other link, and blocks never overlap, so a cell has at
-// most one gallery.
+// carved down to the level's carve count; the rest is rock. Each gallery owns
+// a 2x2 block that holds no other link, and blocks never overlap, so a cell
+// has at most one gallery.
 import { sfc32, u32 } from './hash.mjs';
 
 export const BW = 12;
@@ -16,7 +16,7 @@ export const MAX_SWAPS = 24;
 export const MAX_BLOCKS = 8;
 export const BLOCK_DRAWS = 32;
 // The carve keeps this many cells of a board's tree, or more when no cut
-// qualifies.
+// qualifies. The level sets its own count; this is the default.
 export const CARVE_CELLS = 50;
 
 // Directions with y up: E N W S NE NW SW SE. The opposite of d is d ^ 2.
@@ -31,6 +31,9 @@ export const COST = [500, 1000, 500, 1000, 943, 943, 943, 943];
 export const TARGET_PATH = 22;
 export const TARGET_JUNCTIONS = 6;
 export const TARGET_BRANCH = 3;
+// A build's room targets: primary path cells, junctions and the minimum
+// length of a door-free branch. The level sets its own; these are the default.
+const TARGETS = { path: TARGET_PATH, junctions: TARGET_JUNCTIONS, branch: TARGET_BRANCH };
 
 // NB[8c + d] is the cell beside c in direction d, or -1 off the grid.
 const NB = new Int16Array(NCELL * 8);
@@ -167,12 +170,12 @@ const subDoor = new Uint8Array(NCELL);
 const fig = { b: 0, pathLen: 0, junctions: 0, shortBranches: 0, deficit: 0 };
 
 /**
- * Measures a tree against the targets into `fig`. `a` is the first primary
+ * Measures a tree against `targets` into `fig`. `a` is the first primary
  * cell; `b` is the second, or -1 for the deepest cell from `a` (ties to the
  * lowest index). Branches holding a cell flagged in `isDoor` are exempt from
  * the length rule. Returns the deficit.
  */
-function measure(links, a, b, isDoor) {
+function measure(links, a, b, isDoor, targets) {
   dist.fill(-1);
   parent.fill(-1);
   onPath.fill(0);
@@ -213,15 +216,15 @@ function measure(links, a, b, isDoor) {
       if (onPath[t]) continue;
       branches++;
       const depth = subMax[t] - dist[j];
-      if (!subDoor[t] && depth < TARGET_BRANCH) {
+      if (!subDoor[t] && depth < targets.branch) {
         shortBranches++;
-        shortfall += TARGET_BRANCH - depth;
+        shortfall += targets.branch - depth;
       }
     }
     if (branches) junctions++;
   }
-  const deficit = Math.max(0, TARGET_PATH - pathLen)
-    + Math.max(0, TARGET_JUNCTIONS - junctions) + shortfall;
+  const deficit = Math.max(0, targets.path - pathLen)
+    + Math.max(0, targets.junctions - junctions) + shortfall;
   fig.b = b;
   fig.pathLen = pathLen;
   fig.junctions = junctions;
@@ -235,8 +238,8 @@ function figures(a) {
   return { a, b, pathLen, junctions, shortBranches, deficit };
 }
 
-export function analyze(links, a, b, isDoor) {
-  measure(links, a, b, isDoor);
+export function analyze(links, a, b, isDoor, targets = TARGETS) {
+  measure(links, a, b, isDoor, targets);
   return figures(a);
 }
 
@@ -253,7 +256,7 @@ const cycDir = new Uint8Array(2 * NCELL);
  * shape of the last `measure` into `baseParent` and `baseDist`. Branches
  * come off the primary path, so the BFS order meets a parent first.
  */
-function markShort() {
+function markShort(targets) {
   baseParent.set(parent);
   baseDist.set(dist);
   inShort.fill(0);
@@ -262,7 +265,7 @@ function markShort() {
     if (onPath[c]) continue;
     const p = parent[c];
     inShort[c] = onPath[p]
-      ? (!subDoor[c] && subMax[c] - dist[p] < TARGET_BRANCH ? 1 : 0)
+      ? (!subDoor[c] && subMax[c] - dist[p] < targets.branch ? 1 : 0)
       : inShort[p];
   }
 }
@@ -313,11 +316,11 @@ function dropLink(links, c, d) {
  * stays. The repair stops at deficit 0, when no swap lowers it or after
  * MAX_SWAPS swaps. Returns the analysis of the repaired tree.
  */
-export function repairTree(links, a, b, isDoor) {
-  let deficit = measure(links, a, b, isDoor);
+export function repairTree(links, a, b, isDoor, targets = TARGETS) {
+  let deficit = measure(links, a, b, isDoor, targets);
   let fresh = true;
   for (let swaps = 0; swaps < MAX_SWAPS && deficit > 0; swaps++) {
-    markShort();
+    markShort(targets);
     const anyCell = fig.shortBranches === 0;
     let lowered = false;
     for (let u = 0; u < NCELL && !lowered; u++) {
@@ -329,7 +332,7 @@ export function repairTree(links, a, b, isDoor) {
         addLink(links, u, d);
         for (let i = 0; i < n; i++) {
           dropLink(links, cycCell[i], cycDir[i]);
-          const t = measure(links, a, b, isDoor);
+          const t = measure(links, a, b, isDoor, targets);
           if (t < deficit) { deficit = t; lowered = true; break; }
           addLink(links, cycCell[i], cycDir[i]);
         }
@@ -339,7 +342,7 @@ export function repairTree(links, a, b, isDoor) {
     if (!lowered) { fresh = false; break; }
   }
   // A failed trial leaves `fig` on a trial tree.
-  return fresh ? figures(a) : analyze(links, a, b, isDoor);
+  return fresh ? figures(a) : analyze(links, a, b, isDoor, targets);
 }
 
 /** The board's flame cell: bytes 4-7 of H("flame", x, y) mod the cell count. */
@@ -365,12 +368,13 @@ const stack = new Int16Array(NCELL);
  * Prunes the tree at `links`, rooted at a, down to `target` cells by cuts.
  * A cut at c removes c and every cell beyond it away from a. It qualifies
  * when it removes no `protect`ed cell, at most cells - target cells, and
- * leaves a deficit (with primary pair a, b) of at most `limit`. Each step
+ * leaves a deficit (with primary pair a, b, against `targets`) of at most
+ * `limit`. Each step
  * draws one qualifying cut at random, preferring cuts that remove no gallery
  * link, and stops at `target` cells or when no cut qualifies. A cut never
  * touches the a-b path, so a cut changes only the branch it lies in.
  */
-function carve(links, a, b, isDoor, protect, target, limit, rng) {
+function carve(links, a, b, isDoor, protect, target, limit, rng, targets) {
   for (;;) {
     // Depth-first preorder, so every subtree is a contiguous range of `pre`.
     dist.fill(-1);
@@ -419,10 +423,10 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
       if (onPath[p]) {
         rootOf[c] = c;
         if (!branches[p]++) junctions++;
-        if (!doorIn[c]) shortfall += Math.max(0, TARGET_BRANCH - (deepIn[c] - dist[p]));
+        if (!doorIn[c]) shortfall += Math.max(0, targets.branch - (deepIn[c] - dist[p]));
       } else rootOf[c] = rootOf[p];
     }
-    const base = Math.max(0, TARGET_PATH - pathLen) + shortfall;
+    const base = Math.max(0, targets.path - pathLen) + shortfall;
     const room = cells - target;
     let nAll = 0, nFree = 0;
     for (let c = 0; c < NCELL; c++) {
@@ -431,8 +435,8 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
       let deficit;
       if (c === t) {
         const js = junctions - (branches[j] === 1 ? 1 : 0);
-        deficit = base - (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deepIn[t] - dist[j])))
-          + Math.max(0, TARGET_JUNCTIONS - js);
+        deficit = base - (doorIn[t] ? 0 : Math.max(0, targets.branch - (deepIn[t] - dist[j])))
+          + Math.max(0, targets.junctions - js);
       } else {
         let deep = dist[t];
         const lo = tin[c], hi = lo + size[c];
@@ -440,9 +444,9 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
           if (i === lo) { i = hi - 1; continue; }
           if (dist[pre[i]] > deep) deep = dist[pre[i]];
         }
-        deficit = base - (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deepIn[t] - dist[j])))
-          + (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deep - dist[j])))
-          + Math.max(0, TARGET_JUNCTIONS - junctions);
+        deficit = base - (doorIn[t] ? 0 : Math.max(0, targets.branch - (deepIn[t] - dist[j])))
+          + (doorIn[t] ? 0 : Math.max(0, targets.branch - (deep - dist[j])))
+          + Math.max(0, targets.junctions - junctions);
       }
       if (deficit > limit) continue;
       poolAll[nAll++] = c;
@@ -466,34 +470,35 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
  * target wins, else the lowest deficit (earliest k on ties) is kept as the
  * best-attempt fallback. The winner is then carved to `carveCells` cells,
  * keeping every door cell, a, b and the flame cell; its figures describe the
- * carved tree.
+ * carved tree. `targets` ({ path, junctions, branch }) govern selection,
+ * repair and carve alike.
  */
-export function buildBoardMaze(H, x, y, doorCells, a, b, carveCells = CARVE_CELLS) {
+export function buildBoardMaze(H, x, y, doorCells, a, b, carveCells = CARVE_CELLS, targets = TARGETS) {
   const isDoor = new Uint8Array(NCELL);
   for (const c of doorCells) isDoor[c] = 1;
   const links = new Uint8Array(NCELL);
   let best = null, bestLinks = null;
   for (let k = 0; k <= MAX_REROLL; k++) {
     growTree(sfc32(H('board', x, y, k)), links);
-    const r = repairTree(links, a, b, isDoor);
+    const r = repairTree(links, a, b, isDoor, targets);
     if (r.deficit === 0) {
-      return carved(H, x, y, isDoor, links, { k, fallback: false, ...r }, carveCells);
+      return carved(H, x, y, isDoor, links, { k, fallback: false, ...r }, carveCells, targets);
     }
     if (!best || r.deficit < best.deficit) {
       best = { k, ...r };
       bestLinks = links.slice();
     }
   }
-  return carved(H, x, y, isDoor, bestLinks, { fallback: true, ...best }, carveCells);
+  return carved(H, x, y, isDoor, bestLinks, { fallback: true, ...best }, carveCells, targets);
 }
 
 /** The record `won` for `links`, carved and re-measured. */
-function carved(H, x, y, isDoor, links, won, carveCells) {
+function carved(H, x, y, isDoor, links, won, carveCells, targets) {
   if (carveCells >= NCELL) return { links, ...won };
   const protect = new Uint8Array(isDoor);
   protect[won.a] = protect[won.b] = 1;
   protect[flameCell(H, x, y)] = 1;
-  carve(links, won.a, won.b, isDoor, protect, carveCells, won.deficit, sfc32(H('carve', x, y)));
-  const { a, b, pathLen, junctions, shortBranches, deficit } = analyze(links, won.a, won.b, isDoor);
+  carve(links, won.a, won.b, isDoor, protect, carveCells, won.deficit, sfc32(H('carve', x, y)), targets);
+  const { a, b, pathLen, junctions, shortBranches, deficit } = analyze(links, won.a, won.b, isDoor, targets);
   return { ...won, links, a, b, pathLen, junctions, shortBranches, deficit };
 }

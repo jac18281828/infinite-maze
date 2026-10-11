@@ -3,11 +3,19 @@
 // only memoize.
 import { makeHasher, worldKey, u32, toHex, writeInt64BE } from './hash.mjs';
 import { sha3_256 } from './keccak.mjs';
-import { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } from './board.mjs';
+import { BW, BH, NCELL, COST, buildBoardMaze, cellNeighbor, flameCell } from './board.mjs';
 import { DIFFICULTY, BDX, BDY, buildTombTree } from './band.mjs';
 import { createFlow, TDX, TDY } from './flow.mjs';
 
 export const GAP_LIMIT_MS = 150000;
+// Room parameters per level (spec sections 3 and 4): the carve count, the
+// path, junction and side-branch targets, and the dead-end depth in boards.
+export const ROOMS = {
+  easy: { carve: 40, targets: { path: 16, junctions: 4, branch: 2 }, depth: 1 },
+  medium: { carve: 45, targets: { path: 22, junctions: 6, branch: 2 }, depth: 2 },
+  hard: { carve: 50, targets: { path: 22, junctions: 6, branch: 3 }, depth: 2 },
+  ultimate: { carve: 50, targets: { path: 22, junctions: 6, branch: 3 }, depth: 2 },
+};
 // Saves hold |x| and |y| below 2^25, where p stays an exact integer.
 export const SAVE_LIMIT = 33554432;
 
@@ -179,16 +187,19 @@ export function cellPath(links, from, to) {
 }
 
 /**
- * `difficulty` ('easy', 'medium' or 'hard') sets the tomb size and enters no
- * hash. `gapLimitMs` bounds the walking time between consecutive chain
- * flames; spec section 3 sets 150 s. `carveCells` sets the cells each board
- * keeps; NCELL keeps them all. `faults` builds a broken world for the
+ * `difficulty` ('easy', 'medium', 'hard' or 'ultimate') sets the tomb size
+ * and the ROOMS row, and enters no hash. `gapLimitMs` bounds the walking
+ * time between consecutive chain flames; spec section 3 sets 150 s.
+ * `carveCells` sets the cells each board keeps, the level's count by
+ * default; NCELL keeps them all. `faults` builds a broken world for the
  * harness's tests: `ignoreWalls` (see createFlow) or `dropTributary` (see
  * buildTombTree).
  */
-export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS, faults = {} } = {}) {
+export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LIMIT_MS, carveCells, faults = {} } = {}) {
   if (!Object.hasOwn(DIFFICULTY, difficulty)) throw new Error(`unknown difficulty ${difficulty}`);
-  const size = DIFFICULTY[difficulty];
+  const size = DIFFICULTY[difficulty], room = ROOMS[difficulty];
+  const carve = carveCells ?? room.carve;
+  const treeOptions = { ...faults, deadEndDepth: room.depth };
   const H = makeHasher(worldKey(code));
   const flow = createFlow(H, size, faults);
   const tombs = new Map();
@@ -200,7 +211,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
   function tomb(u, v) {
     const k = tkey(u, v);
     let t = tombs.get(k);
-    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), size, faults); tombs.set(k, t); }
+    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), size, treeOptions); tombs.set(k, t); }
     return t;
   }
 
@@ -229,7 +240,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
     const a = aDir >= 0 ? doorCell(H, x, y, aDir) : flameCell(H, x, y);
     let b = bDir >= 0 ? doorCell(H, x, y, bDir) : -1;
     if (b === a) b = -1;
-    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b, carveCells);
+    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b, carve, room.targets);
     return {
       ...base, kind: t.routeIndex[i] >= 0 ? 'route' : 'dead', doors, doorMask, aDir, bDir,
       links: maze.links, a: maze.a, b: maze.b, k: maze.k, fallback: maze.fallback,

@@ -2,8 +2,10 @@
 
 An endless tomb maze, climbed by torchlight. One seed code grows a plane of
 tombs without end in any direction. The difficulty picked on the title sets a
-tomb's size: EASY 3x2 boards, MEDIUM 4x3 and HARD 6x4. Every board is a 12x7
-grid of cells, of which a board carves about 60% and leaves the rest rock.
+tomb's size: EASY 2x2 boards, MEDIUM 3x3, HARD 4x4 and ULTIMATE 6x4, the
+original world. Every board is a 12x7 grid of cells, and the level also sets
+how much of each room is carved, about half at EASY and 60% at HARD and
+ULTIMATE; the rest is rock.
 Each tomb leaves up, left or right, never down, so the way on wanders sideways
 as it climbs, and the maze has no loops at any scale. Every difficulty is the
 same open plane: the tombs and their doors are the same at every level, and
@@ -36,22 +38,25 @@ and no assets.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends. Oil jars lie on dead ends,
-  about one in ten at EASY, one in fourteen at MEDIUM and one in twenty at HARD
-  (a coin takes a cell first, so 9.8%, 7.1% and 4.9% measured); touch one to
-  add 60 s of burn, up to a full torch, or to relight an ember. They return on
-  every new run.
+  about one in ten at EASY, one in fourteen at MEDIUM, one in twenty at HARD
+  and one in twenty-five at ULTIMATE. A coin takes a cell first: a room holds
+  4.6, 6.4, 6.6 and 6.6 dead ends by level, and 6.0%, 5.0%, 4.9% and 4.8% of
+  them hold a coin and 9.2%, 6.9%, 4.6% and 3.9% a jar, measured. Touch a jar
+  to add 60 s of burn, up to a full torch, or to relight an ember. Jars return
+  on every new run.
 - Some junctions on a route carry a carved arrow in the upper corner of the
   room, pointing along the link toward the way on; they are always on and
-  about 1 in 6 at EASY, 1 in 8 at MEDIUM and 1 in 12 at HARD.
+  about 1 in 6 at EASY, 1 in 8 at MEDIUM, 1 in 12 at HARD and 1 in 16 at
+  ULTIMATE.
 - Every tomb entry holds a flame, and no stretch of a way on runs more than
   150 s between flames.
 - Coins lie on the floors of dead ends, about one dead end in twenty. Touch one
   to take it. Each tomb the run solves past its best on that seed and level
-  pays 1 coin at EASY, 2 at MEDIUM and 5 at HARD, and a replay pays only past
-  its best. The wallet shows under `TOMB n`; the end screen shows the coins
-  earned this run. The game keeps the wallet, one per device, and the coins
-  taken and payout record, per seed and level, in `localStorage`. Nothing buys
-  with coins yet.
+  pays 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE, and a
+  replay pays only past its best. The wallet shows under `TOMB n`; the end
+  screen shows the coins earned this run. The game keeps the wallet, one per
+  device, and the coins taken and payout record, per seed and level, in
+  `localStorage`. Nothing buys with coins yet.
 - Every 100 tombs a splash names an adventure rank and pays 100 × k coins once
   per seed and level; **Enter** or CONTINUE plays on, and **Q** or HOME goes to
   the title with the run open.
@@ -106,12 +111,12 @@ node tools/acceptance.mjs
 `u` -10 to 10 by `v` -50 to 50 (`--cols` and `--rows` set the half-widths) at
 each difficulty and prints, per difficulty, the fallback-board count, the
 largest and 99th percentile flame gaps and the shares of up, left and right
-exits with the mean sideways run. Way up, run once at HARD, checks that every
-tomb's way on climbs out of the window within 100,000 steps and reports how
-many ways on meet tomb (0, 0)'s. The harness ends with its run time.
+exits with the mean sideways run. Way up, run once at ULTIMATE, checks that
+every tomb's way on climbs out of the window within 100,000 steps and reports
+how many ways on meet tomb (0, 0)'s. The harness ends with its run time.
 `infinite-maze.html#selftest` boots seed `0000-0000`, drives 3600 ticks of
 scripted input and draws the pause map. A second leg resumes at MEDIUM in
-tomb (1, 0), outside board columns 0-3, and fails unless the explorer's room
+tomb (1, 0), outside board columns 0-2, and fails unless the explorer's room
 draws as maze rather than rock. The self-test then sets `data-selftest` on
 `<body>`.
 

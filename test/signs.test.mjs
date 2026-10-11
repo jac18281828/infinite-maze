@@ -57,7 +57,8 @@ function expected(world, bd) {
 test('the share of sign junctions that carry a sign is 1/6 at EASY, 1/8 at MEDIUM and 1/12 at HARD', () => {
   for (const level of DIFFICULTIES) {
     let junc = 0, carried = 0;
-    for (const bd of boardsOf(level, 0, 19)) {
+    // EASY's 2x2 tombs need twice the rows to pass 2,000 sign junctions.
+    for (const bd of boardsOf(level, 0, level === 'easy' ? 39 : 19)) {
       junc += junctions(worlds[level], bd).length;
       carried += signs(worlds[level], bd).length;
     }
@@ -89,7 +90,8 @@ test('junctions lists exactly the cells on a path from an in-cell to the out-doo
   for (const level of DIFFICULTIES) {
     const w = worlds[level];
     const n = { fewLinks: 0, inCell: 0, outCell: 0, merging: 0 };
-    for (const bd of boardsOf(level, 0, 3)) {
+    // Rows 0..5: HARD's first merging junction lies above row 3.
+    for (const bd of boardsOf(level, 0, 5)) {
       const got = junctions(w, bd);
       if (bd.kind !== 'route') { assert.deepEqual(got, []); continue; }
       const want = expected(w, bd);

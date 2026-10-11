@@ -4,9 +4,10 @@
 // source tomb's S from the generator; everything else derives from boards,
 // doors and links alone.
 //
-// Every check reads the tomb size from its world, and the run checks each
-// difficulty over the same window of tombs. Way up reads the flow alone,
-// which every difficulty shares, so it runs once, at HARD.
+// Every check reads the tomb size from its world and the room parameters
+// from LEVELS by the world's difficulty, and the run checks each difficulty
+// over the same window of tombs. Way up reads the flow alone, which every
+// difficulty shares, so it runs once, at ULTIMATE.
 //
 //   node tools/acceptance.mjs [--code XXXX-XXXX] [--cols W] [--rows N]
 import { pathToFileURL } from 'node:url';
@@ -20,18 +21,39 @@ import { encodeSave, decodeSave } from '../src/world/save.mjs';
 export const SEED = '00000000';
 // Digests of tombs u in [-2, 2], v in [0, 19] for seed 0000-0000, per difficulty.
 export const DIGESTS = {
-  easy: '0364383e0c18581310a2e58aa5bf69222f1611c060eaf5ab88ab6bae57c1a9a5',
-  medium: 'b0ad6e959d6fbd84a481219019c141e8259edea1c28f1d01dde0d30d3ae4d320',
-  hard: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
+  easy: 'c9538458fc19a80ae5916226bd318745ca219316cba5fa6e57a7507e0eb0ffe5',
+  medium: '82fc773e6be71470860f801aac466600b553ebbe0cc3f4c76fd8aa239ea875ab',
+  hard: 'd1ccd45db1a2f026aceea254241a64cd36b41420e76f73411d9f3606a1024cbd',
+  ultimate: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
 };
 export const GAP_LIMIT_MS = 150000;
-export const GALLERIES_MIN = 4;
-export const GALLERIES_MAX = 10;
-// Every tree board carves at least CARVE_MIN cells, and the mean per board
-// stays within CARVE_MEAN_MIN..CARVE_MEAN_MAX.
-export const CARVE_MIN = 50;
-export const CARVE_MEAN_MIN = 48;
-export const CARVE_MEAN_MAX = 56;
+// The section 3 and 4 room parameters per level, in ladder order, written
+// apart from the generator: carve count C, path, junction and side-branch
+// targets, and dead-end depth in boards.
+export const LEVELS = {
+  easy: { carve: 40, path: 16, junctions: 4, branch: 2, depth: 1 },
+  medium: { carve: 45, path: 22, junctions: 6, branch: 2, depth: 2 },
+  hard: { carve: 50, path: 22, junctions: 6, branch: 3, depth: 2 },
+  ultimate: { carve: 50, path: 22, junctions: 6, branch: 3, depth: 2 },
+};
+
+/**
+ * A level's thresholds from its carve count C: every tree board carves at
+ * least C cells, the mean lies within C·96/100..C·112/100, and galleries
+ * average 4·C/50..10·C/50 per board. The checks compare in integers.
+ */
+export function thresholds(difficulty) {
+  const C = levelOf(difficulty).carve;
+  return {
+    carveMin: C, carveMeanMin: (C * 96) / 100, carveMeanMax: (C * 112) / 100,
+    galleriesMin: (4 * C) / 50, galleriesMax: (10 * C) / 50,
+  };
+}
+
+function levelOf(difficulty) {
+  if (!Object.hasOwn(LEVELS, difficulty)) throw new Error(`no harness level ${difficulty}`);
+  return LEVELS[difficulty];
+}
 // A run of CEILING_MIN_BOARDS or more boards fails above CEILING_PERCENT
 // percent on fallback; shorter runs swing too far to enforce it.
 export const CEILING_PERCENT = 2;
@@ -204,11 +226,11 @@ export function tombShape(world, u, v) {
 
 /**
  * Path, junction and branch measures, written apart from the generator.
- * `deficit` is the section 4 deficit: the path's shortfall below 22 cells,
- * the junctions' shortfall below 6 and, for each door-free branch under 3
- * cells, the cells it lacks.
+ * `deficit` is the section 4 deficit against `targets`: the path's shortfall
+ * below `path` cells, the junctions' shortfall below `junctions` and, for
+ * each door-free branch under `branch` cells, the cells it lacks.
  */
-export function measureTargets(links, a, b, doorCells) {
+export function measureTargets(links, a, b, doorCells, targets = { path: 22, junctions: 6, branch: 3 }) {
   const dist = new Array(NCELL).fill(-1), parent = new Array(NCELL).fill(-1);
   dist[a] = 0;
   const q = [a];
@@ -247,12 +269,12 @@ export function measureTargets(links, a, b, doorCells) {
           if (!seen.has(u)) { seen.add(u); stack.push([u, k + 1]); }
         }
       }
-      if (!door && deepest < 3) { shortBranches++; shortfall += 3 - deepest; }
+      if (!door && deepest < targets.branch) { shortBranches++; shortfall += targets.branch - deepest; }
     }
     if (branches) junctions++;
   }
-  const ok = path.length >= 22 && junctions >= 6 && shortBranches === 0;
-  const deficit = Math.max(0, 22 - path.length) + Math.max(0, 6 - junctions) + shortfall;
+  const ok = path.length >= targets.path && junctions >= targets.junctions && shortBranches === 0;
+  const deficit = Math.max(0, targets.path - path.length) + Math.max(0, targets.junctions - junctions) + shortfall;
   return { ok, b, pathLen: path.length, junctions, shortBranches, deficit };
 }
 
@@ -504,13 +526,14 @@ function primaryPair(world, s, i, bd) {
 }
 
 /**
- * The trunk holds at least half the tomb's boards, a one-board trunk aside;
- * dead ends reach at most 2 boards; boards meet section 4 or flag fallback;
- * a run of `minBoards` boards or more keeps fallbacks at or under 2%.
- * Reports trunk lengths and rock boards.
+ * The trunk holds at least half the tomb's boards, rounded down, a one-board
+ * trunk aside; dead ends reach at most the level's depth; boards meet the
+ * level's section 4 targets or flag fallback; a run of `minBoards` boards or
+ * more keeps fallbacks at or under 2%. Reports trunk lengths and rock boards.
  */
 export function checkBounds(world, win, minBoards = CEILING_MIN_BOARDS) {
   const errors = [], tombs = [];
+  const level = levelOf(world.difficulty);
   let boards = 0, fallbacks = 0;
   for (const [u, v] of tombsOf(win)) {
     const s = tombShape(world, u, v);
@@ -523,9 +546,9 @@ export function checkBounds(world, win, minBoards = CEILING_MIN_BOARDS) {
       boards++;
       if (bd.fallback) fallbacks++;
       if (s.depth[i] < 0) { errors.push(`board (${bd.x},${bd.y}): cut off from the routes`); return; }
-      if (s.depth[i] > 2) errors.push(`board (${bd.x},${bd.y}): dead-end branch ${s.depth[i]} boards deep`);
+      if (s.depth[i] > level.depth) errors.push(`board (${bd.x},${bd.y}): dead-end branch ${s.depth[i]} boards deep`);
       const [a, c] = primaryPair(world, s, i, bd);
-      const m = measureTargets(bd.links, a, c, bd.doors.map((d) => d.cell));
+      const m = measureTargets(bd.links, a, c, bd.doors.map((d) => d.cell), level);
       if (!m.ok && !bd.fallback) {
         errors.push(`board (${bd.x},${bd.y}): misses targets (path ${m.pathLen}, junctions ${m.junctions}, short ${m.shortBranches}) without fallback`);
       }
@@ -539,11 +562,12 @@ export function checkBounds(world, win, minBoards = CEILING_MIN_BOARDS) {
 
 /**
  * An error unless tomb shape s's trunk holds at least half the tomb's
- * boards. A trunk of the one board X is exempt: its first entry is X.
+ * boards, rounded down: 2, 4, 8 and 12 at the four levels. A trunk of the
+ * one board X is exempt: its first entry is X.
  */
 function trunkErrors(world, s) {
-  const n = world.size.w * world.size.h, len = s.routes[0].length;
-  return len > 1 && 2 * len < n ? [`tomb (${s.u},${s.v}): trunk of ${len} boards holds under half of ${n}`] : [];
+  const min = Math.floor((world.size.w * world.size.h) / 2), len = s.routes[0].length;
+  return len > 1 && len < min ? [`tomb (${s.u},${s.v}): trunk of ${len} boards holds under the minimum of ${min}`] : [];
 }
 
 /** Shortest and mean trunk, and mean rock boards, over tombs of { route, rock }. */
@@ -554,10 +578,11 @@ function tombFigures(tombs) {
 
 /**
  * Every gallery owns its 2x2 block: no other link joins two of its cells and
- * no cell lies in two blocks. Galleries average 4-10 per board.
+ * no cell lies in two blocks. Galleries average 4·C/50 to 10·C/50 per board.
  */
 export function checkGalleries(world, win) {
   const errors = [];
+  const C = levelOf(world.difficulty).carve, th = thresholds(world.difficulty);
   let boards = 0, galleries = 0, conflicts = 0;
   for (const bd of windowBoards(world, win)) {
     if (!bd.links) continue;
@@ -583,19 +608,20 @@ export function checkGalleries(world, win) {
     }
   }
   const mean = boards ? galleries / boards : 0;
-  if (mean < GALLERIES_MIN || mean > GALLERIES_MAX) {
-    errors.push(`galleries per board average ${mean.toFixed(2)}, outside ${GALLERIES_MIN}-${GALLERIES_MAX}`);
+  if (50 * galleries < 4 * C * boards || 50 * galleries > 10 * C * boards) {
+    errors.push(`galleries per board average ${mean.toFixed(2)}, outside ${th.galleriesMin}-${th.galleriesMax}`);
   }
   return { errors, boards, galleries, conflicts, mean };
 }
 
 /**
- * Doors and flames sit on carved cells, every tree board carves at least 50
- * cells and the mean stays within 48-56. A cell is carved when it holds a
- * link, doors aside.
+ * Doors and flames sit on carved cells, every tree board carves at least C
+ * cells and the mean stays within C·96/100 to C·112/100. A cell is carved
+ * when it holds a link, doors aside.
  */
 export function checkCarve(world, win) {
   const errors = [];
+  const C = levelOf(world.difficulty).carve, th = thresholds(world.difficulty);
   let boards = 0, carved = 0;
   for (const bd of windowBoards(world, win)) {
     if (!bd.links) continue;
@@ -603,7 +629,7 @@ export function checkCarve(world, win) {
     let n = 0;
     for (let c = 0; c < NCELL; c++) if (bd.links[c]) n++;
     carved += n;
-    if (n < CARVE_MIN) errors.push(`board (${bd.x},${bd.y}): ${n} carved cells, under ${CARVE_MIN}`);
+    if (n < C) errors.push(`board (${bd.x},${bd.y}): ${n} carved cells, under ${C}`);
     for (const dr of bd.doors) {
       if (!bd.links[dr.cell]) errors.push(`board (${bd.x},${bd.y}): door cell ${dr.cell} is pruned`);
     }
@@ -612,10 +638,25 @@ export function checkCarve(world, win) {
     }
   }
   const mean = boards ? carved / boards : 0;
-  if (mean < CARVE_MEAN_MIN || mean > CARVE_MEAN_MAX) {
-    errors.push(`carved cells per board average ${mean.toFixed(2)}, outside ${CARVE_MEAN_MIN}-${CARVE_MEAN_MAX}`);
+  if (100 * carved < 96 * C * boards || 100 * carved > 112 * C * boards) {
+    errors.push(`carved cells per board average ${mean.toFixed(2)}, outside ${th.carveMeanMin}-${th.carveMeanMax}`);
   }
   return { errors, boards, mean };
+}
+
+/**
+ * Mean ms, over the window's tree boards, to explore a room fully and walk
+ * back: every link's LINK_MS from each of its ends, so each counts out and
+ * back.
+ */
+export function explorationMs(world, win) {
+  let boards = 0, ms = 0;
+  for (const bd of windowBoards(world, win)) {
+    if (!bd.links) continue;
+    boards++;
+    for (let c = 0; c < NCELL; c++) for (let d = 0; d < 8; d++) if (bd.links[c] & (1 << d)) ms += LINK_MS[d];
+  }
+  return boards ? ms / boards : 0;
 }
 
 /** Walking time in ms from cell A to cell B through the cell graph of `boards`. */
@@ -804,7 +845,7 @@ export function checkSaves(world, positions) {
  * A fixed seed code yields the pinned digest of tombs u in [-2, 2], v in
  * [0, 19] at a difficulty.
  */
-export function checkDeterminism(code = SEED, want = DIGESTS.hard, difficulty = 'hard') {
+export function checkDeterminism(code = SEED, want = DIGESTS.ultimate, difficulty = 'ultimate') {
   const got = digestTombs(createWorld(code, { difficulty }), -2, 2, 0, 19);
   return { errors: got === want ? [] : [`digest of tombs [-2, 2] x [0, 19] is ${got}, pinned ${want}`], digest: got };
 }
@@ -859,7 +900,7 @@ export function runChecks(world, code, win) {
     ? checkDeterminism(SEED, DIGESTS[d], d)
     : { errors: [], digest: digestTombs(createWorld(code, { difficulty: d }), -2, 2, 0, 19) };
   rows.push(['determinism', det, `tombs [-2, 2] x [0, 19] digest ${det.digest.slice(0, 16)}...`]);
-  return { rows, bounds, galleries, carve, gapText, flowText, digest: det.digest };
+  return { rows, bounds, galleries, carve, gapText, flowText, exploreMs: explorationMs(world, win), digest: det.digest };
 }
 
 function printRows(rows, tag) {
@@ -867,7 +908,7 @@ function printRows(rows, tag) {
   for (const [name, r, detail] of rows) {
     const ok = r.errors.length === 0;
     if (!ok) failed++;
-    console.log(`${ok ? 'PASS' : 'FAIL'}  ${tag.padEnd(7)}${name.padEnd(12)} ${detail}`);
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${tag.padEnd(9)}${name.padEnd(12)} ${detail}`);
     for (const e of r.errors.slice(0, 10)) console.log(`      ${e}`);
     if (r.errors.length > 10) console.log(`      ... ${r.errors.length - 10} more`);
   }
@@ -880,11 +921,16 @@ function wayUpText(r, win) {
   return `${r.tombs} tombs climb past row ${win.v1} in at most ${r.climbMax} steps; ${meet}`;
 }
 
-/** One difficulty's figures: tomb size, window, trunks, rock, fallbacks, galleries, carve, gaps, flow, way up and digest. */
-function printSummary({ difficulty, size, win, bounds, galleries, carve, gapText, flowText, wayUp, digest }, code) {
+/**
+ * One difficulty's figures: tomb size, room rule, window, trunks, rock,
+ * fallbacks, galleries, carve, exploration, gaps, flow, way up and digest.
+ */
+function printSummary({ difficulty, size, win, bounds, galleries, carve, exploreMs, gapText, flowText, wayUp, digest }, code) {
   const tombs = (win.u1 - win.u0 + 1) * (win.v1 - win.v0 + 1);
+  const lv = LEVELS[difficulty];
   console.log('');
   console.log(`${difficulty.toUpperCase()}: tombs of ${size.w}x${size.h} = ${size.w * size.h} rooms`);
+  console.log(`room rule:      carve ${lv.carve} cells; path ${lv.path}, junctions ${lv.junctions}, side branches ${lv.branch}; dead ends ${lv.depth} deep`);
   console.log(`tombs checked:  u ${win.u0}..${win.u1}, v ${win.v0}..${win.v1} (${tombs}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
   console.log(`trunk:          mean ${bounds.routeMean.toFixed(2)}, min ${bounds.routeMin} rooms (half the tomb: ${(size.w * size.h) >> 1})`);
   console.log(`rock rooms:     ${bounds.rockMean.toFixed(2)} per tomb`);
@@ -892,6 +938,7 @@ function printSummary({ difficulty, size, win, bounds, galleries, carve, gapText
   console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
   console.log(`block conflicts: ${galleries.conflicts}`);
   console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
+  console.log(`exploration:    ${(exploreMs / 1000).toFixed(1)} s per room, out and back`);
   console.log(`flame gap:      ${gapText}`);
   console.log(`flow:           ${flowText}`);
   if (wayUp) console.log(`way up:         ${wayUpText(wayUp, win)}`);
@@ -911,10 +958,10 @@ async function main(argv) {
   const k = checkKeccak();
   let failed = printRows([['keccak', k, `${k.vectors} FIPS 202 vectors`]], '');
   const summaries = [];
-  for (const difficulty of ['hard', 'easy', 'medium']) {
+  for (const difficulty of Object.keys(LEVELS)) {
     const world = createWorld(code, { difficulty });
     const r = runChecks(world, code, win);
-    if (difficulty === 'hard') {
+    if (difficulty === 'ultimate') {
       r.wayUp = checkWayUp(world, win);
       r.rows.push(['way up', r.wayUp, wayUpText(r.wayUp, win)]);
     }

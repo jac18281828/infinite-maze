@@ -69,10 +69,11 @@ test('the jar rate is 10 at EASY, 7 at MEDIUM, 5 at HARD and 4 at ULTIMATE, not 
   assert.deepEqual(OIL_PERCENT, { easy: 10, medium: 7, hard: 5, ultimate: 4 });
 });
 
-test('over tombs u -2..2 by v 0..19 the share of dead-end cells holding a coin lies in [0.035, 0.065] and a jar within 1.5 points of 0.95 times its level\'s rate at each level', () => {
+test('over tombs u -2..2 by v 0..19, v 0..39 at EASY, the share of dead-end cells holding a coin lies in [0.035, 0.065] and a jar within 1.5 points of 0.95 times its level\'s rate at each level', () => {
   for (const d of DIFFICULTIES) {
     const world = worlds[d];
     let dead = 0, coins = 0, jars = 0;
+    // EASY's 2x2 tombs need twice the rows to pass 3,000 dead-end cells.
     for (const bd of sample(d, d === 'easy' ? 39 : 19)) {
       dead += deadEnds(world, bd).length;
       for (const { kind } of floorItems(world, bd)) { if (kind === 'coin') coins++; else jars++; }

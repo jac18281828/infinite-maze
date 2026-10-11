@@ -1,16 +1,18 @@
 // Band maze (spec section 3): a tomb's W x H boards form a tree of a trunk
 // from its first entry to its exit board, tributaries joining every other
-// entry, and dead-end branches at most two boards deep. Board index
+// entry, and dead-end branches at most the level's depth. Board index
 // i = W * row + column.
 import { sfc32, u32 } from './hash.mjs';
 
-/** Tomb size per difficulty, in boards. */
+/** Tomb size per difficulty, in boards, in ladder order. */
 export const DIFFICULTY = {
-  easy: { w: 3, h: 2 },
-  medium: { w: 4, h: 3 },
-  hard: { w: 6, h: 4 },
+  easy: { w: 2, h: 2 },
+  medium: { w: 3, h: 3 },
+  hard: { w: 4, h: 4 },
+  ultimate: { w: 6, h: 4 },
 };
 export const DIFFICULTIES = Object.keys(DIFFICULTY);
+// Default dead-end depth in boards; the level sets its own.
 export const MAX_DEPTH = 2;
 
 /** The trunk's minimum length: half the tomb's boards. */
@@ -50,14 +52,14 @@ function dfsRoute(rng, entry, exit, size) {
 
 /**
  * Attaches dead ends: repeatedly picks, uniformly, a tree board at depth
- * below MAX_DEPTH with an unused neighbour and attaches one such neighbour.
+ * below `maxDepth` with an unused neighbour and attaches one such neighbour.
  */
-function attachDeadEnds(rng, depth, parent, size) {
+function attachDeadEnds(rng, depth, parent, size, maxDepth) {
   const cands = [], free = [];
   for (;;) {
     cands.length = 0;
     for (let i = 0; i < depth.length; i++) {
-      if (depth[i] < 0 || depth[i] >= MAX_DEPTH) continue;
+      if (depth[i] < 0 || depth[i] >= maxDepth) continue;
       for (let d = 0; d < 4; d++) {
         const n = boardNeighbor(i, d, size);
         if (n >= 0 && depth[n] < 0) { cands.push(i); break; }
@@ -110,13 +112,13 @@ function dfsJoin(rng, from, inTree, size) {
  * outside the tree joins it by a tributary; dead ends hang off both.
  *
  * Per board i: `routeIndex[i]` is the index along its own route or -1,
- * `depth[i]` is 0 on a route, 1..2 on a dead end, -1 for rock, and
- * `next[i]` is the board the way on leads to: the route successor, a dead
- * end's parent, or -1 on X. `routeEntry[r]` is the wall a route enters by:
+ * `depth[i]` is 0 on a route, 1..`deadEndDepth` on a dead end, -1 for rock,
+ * and `next[i]` is the board the way on leads to: the route successor, a
+ * dead end's parent, or -1 on X. `routeEntry[r]` is the wall a route enters by:
  * the in-door direction, or -1 for S. `dropTributary` leaves each tributary
  * unjoined, a broken world.
  */
-export function buildTombTree(H, u, v, walls, size, { dropTributary = false } = {}) {
+export function buildTombTree(H, u, v, walls, size, { dropTributary = false, deadEndDepth = MAX_DEPTH } = {}) {
   const n = size.w * size.h, min = minRoute(size);
   const exit = walls[0].dir, X = walls[0].i;
   const ins = walls.slice(1);
@@ -149,7 +151,7 @@ export function buildTombTree(H, u, v, walls, size, { dropTributary = false } = 
       lay(stack, routes.length - 1, dropTributary ? -1 : join);
     }
     const parent = new Int8Array(n).fill(-1);
-    attachDeadEnds(rng, depth, parent, size);
+    attachDeadEnds(rng, depth, parent, size, deadEndDepth);
     for (let i = 0; i < n; i++) if (depth[i] > 0) next[i] = parent[i];
     return { u, v, k, exit, X, walls, source, entries, routes, routeEntry, routeOf, routeIndex, depth, next };
   }

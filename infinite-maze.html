@@ -256,9 +256,9 @@ const { sfc32, u32 } = __m1;
 // Board cell maze: a growing-tree spanning tree over the 12x7 cell grid. Each
 // attempt repairs the tree by edge swaps, and attempts reroll until the
 // primary path meets the spec section 4 targets. The chosen tree is then
-// carved down to CARVE_CELLS cells; the rest is rock. Each gallery owns a 2x2
-// block that holds no other link, and blocks never overlap, so a cell has at
-// most one gallery.
+// carved down to the level's carve count; the rest is rock. Each gallery owns
+// a 2x2 block that holds no other link, and blocks never overlap, so a cell
+// has at most one gallery.
 
 
 const BW = 12;
@@ -271,7 +271,7 @@ const MAX_SWAPS = 24;
 const MAX_BLOCKS = 8;
 const BLOCK_DRAWS = 32;
 // The carve keeps this many cells of a board's tree, or more when no cut
-// qualifies.
+// qualifies. The level sets its own count; this is the default.
 const CARVE_CELLS = 50;
 
 // Directions with y up: E N W S NE NW SW SE. The opposite of d is d ^ 2.
@@ -286,6 +286,9 @@ const COST = [500, 1000, 500, 1000, 943, 943, 943, 943];
 const TARGET_PATH = 22;
 const TARGET_JUNCTIONS = 6;
 const TARGET_BRANCH = 3;
+// A build's room targets: primary path cells, junctions and the minimum
+// length of a door-free branch. The level sets its own; these are the default.
+const TARGETS = { path: TARGET_PATH, junctions: TARGET_JUNCTIONS, branch: TARGET_BRANCH };
 
 // NB[8c + d] is the cell beside c in direction d, or -1 off the grid.
 const NB = new Int16Array(NCELL * 8);
@@ -422,12 +425,12 @@ const subDoor = new Uint8Array(NCELL);
 const fig = { b: 0, pathLen: 0, junctions: 0, shortBranches: 0, deficit: 0 };
 
 /**
- * Measures a tree against the targets into `fig`. `a` is the first primary
+ * Measures a tree against `targets` into `fig`. `a` is the first primary
  * cell; `b` is the second, or -1 for the deepest cell from `a` (ties to the
  * lowest index). Branches holding a cell flagged in `isDoor` are exempt from
  * the length rule. Returns the deficit.
  */
-function measure(links, a, b, isDoor) {
+function measure(links, a, b, isDoor, targets) {
   dist.fill(-1);
   parent.fill(-1);
   onPath.fill(0);
@@ -468,15 +471,15 @@ function measure(links, a, b, isDoor) {
       if (onPath[t]) continue;
       branches++;
       const depth = subMax[t] - dist[j];
-      if (!subDoor[t] && depth < TARGET_BRANCH) {
+      if (!subDoor[t] && depth < targets.branch) {
         shortBranches++;
-        shortfall += TARGET_BRANCH - depth;
+        shortfall += targets.branch - depth;
       }
     }
     if (branches) junctions++;
   }
-  const deficit = Math.max(0, TARGET_PATH - pathLen)
-    + Math.max(0, TARGET_JUNCTIONS - junctions) + shortfall;
+  const deficit = Math.max(0, targets.path - pathLen)
+    + Math.max(0, targets.junctions - junctions) + shortfall;
   fig.b = b;
   fig.pathLen = pathLen;
   fig.junctions = junctions;
@@ -490,8 +493,8 @@ function figures(a) {
   return { a, b, pathLen, junctions, shortBranches, deficit };
 }
 
-function analyze(links, a, b, isDoor) {
-  measure(links, a, b, isDoor);
+function analyze(links, a, b, isDoor, targets = TARGETS) {
+  measure(links, a, b, isDoor, targets);
   return figures(a);
 }
 
@@ -508,7 +511,7 @@ const cycDir = new Uint8Array(2 * NCELL);
  * shape of the last `measure` into `baseParent` and `baseDist`. Branches
  * come off the primary path, so the BFS order meets a parent first.
  */
-function markShort() {
+function markShort(targets) {
   baseParent.set(parent);
   baseDist.set(dist);
   inShort.fill(0);
@@ -517,7 +520,7 @@ function markShort() {
     if (onPath[c]) continue;
     const p = parent[c];
     inShort[c] = onPath[p]
-      ? (!subDoor[c] && subMax[c] - dist[p] < TARGET_BRANCH ? 1 : 0)
+      ? (!subDoor[c] && subMax[c] - dist[p] < targets.branch ? 1 : 0)
       : inShort[p];
   }
 }
@@ -568,11 +571,11 @@ function dropLink(links, c, d) {
  * stays. The repair stops at deficit 0, when no swap lowers it or after
  * MAX_SWAPS swaps. Returns the analysis of the repaired tree.
  */
-function repairTree(links, a, b, isDoor) {
-  let deficit = measure(links, a, b, isDoor);
+function repairTree(links, a, b, isDoor, targets = TARGETS) {
+  let deficit = measure(links, a, b, isDoor, targets);
   let fresh = true;
   for (let swaps = 0; swaps < MAX_SWAPS && deficit > 0; swaps++) {
-    markShort();
+    markShort(targets);
     const anyCell = fig.shortBranches === 0;
     let lowered = false;
     for (let u = 0; u < NCELL && !lowered; u++) {
@@ -584,7 +587,7 @@ function repairTree(links, a, b, isDoor) {
         addLink(links, u, d);
         for (let i = 0; i < n; i++) {
           dropLink(links, cycCell[i], cycDir[i]);
-          const t = measure(links, a, b, isDoor);
+          const t = measure(links, a, b, isDoor, targets);
           if (t < deficit) { deficit = t; lowered = true; break; }
           addLink(links, cycCell[i], cycDir[i]);
         }
@@ -594,7 +597,7 @@ function repairTree(links, a, b, isDoor) {
     if (!lowered) { fresh = false; break; }
   }
   // A failed trial leaves `fig` on a trial tree.
-  return fresh ? figures(a) : analyze(links, a, b, isDoor);
+  return fresh ? figures(a) : analyze(links, a, b, isDoor, targets);
 }
 
 /** The board's flame cell: bytes 4-7 of H("flame", x, y) mod the cell count. */
@@ -620,12 +623,13 @@ const stack = new Int16Array(NCELL);
  * Prunes the tree at `links`, rooted at a, down to `target` cells by cuts.
  * A cut at c removes c and every cell beyond it away from a. It qualifies
  * when it removes no `protect`ed cell, at most cells - target cells, and
- * leaves a deficit (with primary pair a, b) of at most `limit`. Each step
+ * leaves a deficit (with primary pair a, b, against `targets`) of at most
+ * `limit`. Each step
  * draws one qualifying cut at random, preferring cuts that remove no gallery
  * link, and stops at `target` cells or when no cut qualifies. A cut never
  * touches the a-b path, so a cut changes only the branch it lies in.
  */
-function carve(links, a, b, isDoor, protect, target, limit, rng) {
+function carve(links, a, b, isDoor, protect, target, limit, rng, targets) {
   for (;;) {
     // Depth-first preorder, so every subtree is a contiguous range of `pre`.
     dist.fill(-1);
@@ -674,10 +678,10 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
       if (onPath[p]) {
         rootOf[c] = c;
         if (!branches[p]++) junctions++;
-        if (!doorIn[c]) shortfall += Math.max(0, TARGET_BRANCH - (deepIn[c] - dist[p]));
+        if (!doorIn[c]) shortfall += Math.max(0, targets.branch - (deepIn[c] - dist[p]));
       } else rootOf[c] = rootOf[p];
     }
-    const base = Math.max(0, TARGET_PATH - pathLen) + shortfall;
+    const base = Math.max(0, targets.path - pathLen) + shortfall;
     const room = cells - target;
     let nAll = 0, nFree = 0;
     for (let c = 0; c < NCELL; c++) {
@@ -686,8 +690,8 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
       let deficit;
       if (c === t) {
         const js = junctions - (branches[j] === 1 ? 1 : 0);
-        deficit = base - (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deepIn[t] - dist[j])))
-          + Math.max(0, TARGET_JUNCTIONS - js);
+        deficit = base - (doorIn[t] ? 0 : Math.max(0, targets.branch - (deepIn[t] - dist[j])))
+          + Math.max(0, targets.junctions - js);
       } else {
         let deep = dist[t];
         const lo = tin[c], hi = lo + size[c];
@@ -695,9 +699,9 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
           if (i === lo) { i = hi - 1; continue; }
           if (dist[pre[i]] > deep) deep = dist[pre[i]];
         }
-        deficit = base - (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deepIn[t] - dist[j])))
-          + (doorIn[t] ? 0 : Math.max(0, TARGET_BRANCH - (deep - dist[j])))
-          + Math.max(0, TARGET_JUNCTIONS - junctions);
+        deficit = base - (doorIn[t] ? 0 : Math.max(0, targets.branch - (deepIn[t] - dist[j])))
+          + (doorIn[t] ? 0 : Math.max(0, targets.branch - (deep - dist[j])))
+          + Math.max(0, targets.junctions - junctions);
       }
       if (deficit > limit) continue;
       poolAll[nAll++] = c;
@@ -721,35 +725,36 @@ function carve(links, a, b, isDoor, protect, target, limit, rng) {
  * target wins, else the lowest deficit (earliest k on ties) is kept as the
  * best-attempt fallback. The winner is then carved to `carveCells` cells,
  * keeping every door cell, a, b and the flame cell; its figures describe the
- * carved tree.
+ * carved tree. `targets` ({ path, junctions, branch }) govern selection,
+ * repair and carve alike.
  */
-function buildBoardMaze(H, x, y, doorCells, a, b, carveCells = CARVE_CELLS) {
+function buildBoardMaze(H, x, y, doorCells, a, b, carveCells = CARVE_CELLS, targets = TARGETS) {
   const isDoor = new Uint8Array(NCELL);
   for (const c of doorCells) isDoor[c] = 1;
   const links = new Uint8Array(NCELL);
   let best = null, bestLinks = null;
   for (let k = 0; k <= MAX_REROLL; k++) {
     growTree(sfc32(H('board', x, y, k)), links);
-    const r = repairTree(links, a, b, isDoor);
+    const r = repairTree(links, a, b, isDoor, targets);
     if (r.deficit === 0) {
-      return carved(H, x, y, isDoor, links, { k, fallback: false, ...r }, carveCells);
+      return carved(H, x, y, isDoor, links, { k, fallback: false, ...r }, carveCells, targets);
     }
     if (!best || r.deficit < best.deficit) {
       best = { k, ...r };
       bestLinks = links.slice();
     }
   }
-  return carved(H, x, y, isDoor, bestLinks, { fallback: true, ...best }, carveCells);
+  return carved(H, x, y, isDoor, bestLinks, { fallback: true, ...best }, carveCells, targets);
 }
 
 /** The record `won` for `links`, carved and re-measured. */
-function carved(H, x, y, isDoor, links, won, carveCells) {
+function carved(H, x, y, isDoor, links, won, carveCells, targets) {
   if (carveCells >= NCELL) return { links, ...won };
   const protect = new Uint8Array(isDoor);
   protect[won.a] = protect[won.b] = 1;
   protect[flameCell(H, x, y)] = 1;
-  carve(links, won.a, won.b, isDoor, protect, carveCells, won.deficit, sfc32(H('carve', x, y)));
-  const { a, b, pathLen, junctions, shortBranches, deficit } = analyze(links, won.a, won.b, isDoor);
+  carve(links, won.a, won.b, isDoor, protect, carveCells, won.deficit, sfc32(H('carve', x, y)), targets);
+  const { a, b, pathLen, junctions, shortBranches, deficit } = analyze(links, won.a, won.b, isDoor, targets);
   return { ...won, links, a, b, pathLen, junctions, shortBranches, deficit };
 }
 return { BW, BH, NCELL, MAX_REROLL, MAX_SWAPS, MAX_BLOCKS, BLOCK_DRAWS, CARVE_CELLS, DX, DY, COST, TARGET_PATH, TARGET_JUNCTIONS, TARGET_BRANCH, cellNeighbor, growTree, analyze, repairTree, flameCell, buildBoardMaze };
@@ -760,17 +765,19 @@ const __m3 = (() => {
 const { sfc32, u32 } = __m1;
 // Band maze (spec section 3): a tomb's W x H boards form a tree of a trunk
 // from its first entry to its exit board, tributaries joining every other
-// entry, and dead-end branches at most two boards deep. Board index
+// entry, and dead-end branches at most the level's depth. Board index
 // i = W * row + column.
 
 
-/** Tomb size per difficulty, in boards. */
+/** Tomb size per difficulty, in boards, in ladder order. */
 const DIFFICULTY = {
-  easy: { w: 3, h: 2 },
-  medium: { w: 4, h: 3 },
-  hard: { w: 6, h: 4 },
+  easy: { w: 2, h: 2 },
+  medium: { w: 3, h: 3 },
+  hard: { w: 4, h: 4 },
+  ultimate: { w: 6, h: 4 },
 };
 const DIFFICULTIES = Object.keys(DIFFICULTY);
+// Default dead-end depth in boards; the level sets its own.
 const MAX_DEPTH = 2;
 
 /** The trunk's minimum length: half the tomb's boards. */
@@ -810,14 +817,14 @@ function dfsRoute(rng, entry, exit, size) {
 
 /**
  * Attaches dead ends: repeatedly picks, uniformly, a tree board at depth
- * below MAX_DEPTH with an unused neighbour and attaches one such neighbour.
+ * below `maxDepth` with an unused neighbour and attaches one such neighbour.
  */
-function attachDeadEnds(rng, depth, parent, size) {
+function attachDeadEnds(rng, depth, parent, size, maxDepth) {
   const cands = [], free = [];
   for (;;) {
     cands.length = 0;
     for (let i = 0; i < depth.length; i++) {
-      if (depth[i] < 0 || depth[i] >= MAX_DEPTH) continue;
+      if (depth[i] < 0 || depth[i] >= maxDepth) continue;
       for (let d = 0; d < 4; d++) {
         const n = boardNeighbor(i, d, size);
         if (n >= 0 && depth[n] < 0) { cands.push(i); break; }
@@ -870,13 +877,13 @@ function dfsJoin(rng, from, inTree, size) {
  * outside the tree joins it by a tributary; dead ends hang off both.
  *
  * Per board i: `routeIndex[i]` is the index along its own route or -1,
- * `depth[i]` is 0 on a route, 1..2 on a dead end, -1 for rock, and
- * `next[i]` is the board the way on leads to: the route successor, a dead
- * end's parent, or -1 on X. `routeEntry[r]` is the wall a route enters by:
+ * `depth[i]` is 0 on a route, 1..`deadEndDepth` on a dead end, -1 for rock,
+ * and `next[i]` is the board the way on leads to: the route successor, a
+ * dead end's parent, or -1 on X. `routeEntry[r]` is the wall a route enters by:
  * the in-door direction, or -1 for S. `dropTributary` leaves each tributary
  * unjoined, a broken world.
  */
-function buildTombTree(H, u, v, walls, size, { dropTributary = false } = {}) {
+function buildTombTree(H, u, v, walls, size, { dropTributary = false, deadEndDepth = MAX_DEPTH } = {}) {
   const n = size.w * size.h, min = minRoute(size);
   const exit = walls[0].dir, X = walls[0].i;
   const ins = walls.slice(1);
@@ -909,7 +916,7 @@ function buildTombTree(H, u, v, walls, size, { dropTributary = false } = {}) {
       lay(stack, routes.length - 1, dropTributary ? -1 : join);
     }
     const parent = new Int8Array(n).fill(-1);
-    attachDeadEnds(rng, depth, parent, size);
+    attachDeadEnds(rng, depth, parent, size, deadEndDepth);
     for (let i = 0; i < n; i++) if (depth[i] > 0) next[i] = parent[i];
     return { u, v, k, exit, X, walls, source, entries, routes, routeEntry, routeOf, routeIndex, depth, next };
   }
@@ -1026,7 +1033,7 @@ return { RIGHT, UP, LEFT, DOWN, TDX, TDY, wallRight, exitDir, floorColumn, sideR
 const __m5 = (() => {
 const { makeHasher, worldKey, u32, toHex, writeInt64BE } = __m1;
 const { sha3_256 } = __m0;
-const { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } = __m2;
+const { BW, BH, NCELL, COST, buildBoardMaze, cellNeighbor, flameCell } = __m2;
 const { DIFFICULTY, BDX, BDY, buildTombTree } = __m3;
 const { createFlow, TDX, TDY } = __m4;
 // The world: tombs tiling the plane, their band trees, boards with doors,
@@ -1039,6 +1046,14 @@ const { createFlow, TDX, TDY } = __m4;
 
 
 const GAP_LIMIT_MS = 150000;
+// Room parameters per level (spec sections 3 and 4): the carve count, the
+// path, junction and side-branch targets, and the dead-end depth in boards.
+const ROOMS = {
+  easy: { carve: 40, targets: { path: 16, junctions: 4, branch: 2 }, depth: 1 },
+  medium: { carve: 45, targets: { path: 22, junctions: 6, branch: 2 }, depth: 2 },
+  hard: { carve: 50, targets: { path: 22, junctions: 6, branch: 3 }, depth: 2 },
+  ultimate: { carve: 50, targets: { path: 22, junctions: 6, branch: 3 }, depth: 2 },
+};
 // Saves hold |x| and |y| below 2^25, where p stays an exact integer.
 const SAVE_LIMIT = 33554432;
 
@@ -1210,16 +1225,19 @@ function cellPath(links, from, to) {
 }
 
 /**
- * `difficulty` ('easy', 'medium' or 'hard') sets the tomb size and enters no
- * hash. `gapLimitMs` bounds the walking time between consecutive chain
- * flames; spec section 3 sets 150 s. `carveCells` sets the cells each board
- * keeps; NCELL keeps them all. `faults` builds a broken world for the
+ * `difficulty` ('easy', 'medium', 'hard' or 'ultimate') sets the tomb size
+ * and the ROOMS row, and enters no hash. `gapLimitMs` bounds the walking
+ * time between consecutive chain flames; spec section 3 sets 150 s.
+ * `carveCells` sets the cells each board keeps, the level's count by
+ * default; NCELL keeps them all. `faults` builds a broken world for the
  * harness's tests: `ignoreWalls` (see createFlow) or `dropTributary` (see
  * buildTombTree).
  */
-function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, carveCells = CARVE_CELLS, faults = {} } = {}) {
+function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LIMIT_MS, carveCells, faults = {} } = {}) {
   if (!Object.hasOwn(DIFFICULTY, difficulty)) throw new Error(`unknown difficulty ${difficulty}`);
-  const size = DIFFICULTY[difficulty];
+  const size = DIFFICULTY[difficulty], room = ROOMS[difficulty];
+  const carve = carveCells ?? room.carve;
+  const treeOptions = { ...faults, deadEndDepth: room.depth };
   const H = makeHasher(worldKey(code));
   const flow = createFlow(H, size, faults);
   const tombs = new Map();
@@ -1231,7 +1249,7 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
   function tomb(u, v) {
     const k = tkey(u, v);
     let t = tombs.get(k);
-    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), size, faults); tombs.set(k, t); }
+    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), size, treeOptions); tombs.set(k, t); }
     return t;
   }
 
@@ -1260,7 +1278,7 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
     const a = aDir >= 0 ? doorCell(H, x, y, aDir) : flameCell(H, x, y);
     let b = bDir >= 0 ? doorCell(H, x, y, bDir) : -1;
     if (b === a) b = -1;
-    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b, carveCells);
+    const maze = buildBoardMaze(H, x, y, doors.map((dr) => dr.cell), a, b, carve, room.targets);
     return {
       ...base, kind: t.routeIndex[i] >= 0 ? 'route' : 'dead', doors, doorMask, aDir, bDir,
       links: maze.links, a: maze.a, b: maze.b, k: maze.k, fallback: maze.fallback,
@@ -1510,7 +1528,7 @@ function digestTombs(world, u0, u1, v0, v1) {
   for (const p of parts) { all.set(p, o); o += p.length; }
   return toHex(sha3_256(all));
 }
-return { GAP_LIMIT_MS, SAVE_LIMIT, tombOf, posOf, boardOfPos, boardCoords, boardIndex, doorCell, acrossDoor, midpointIndex, cellPath, createWorld, serializeBoard, digestTombs };
+return { GAP_LIMIT_MS, ROOMS, SAVE_LIMIT, tombOf, posOf, boardOfPos, boardCoords, boardIndex, doorCell, acrossDoor, midpointIndex, cellPath, createWorld, serializeBoard, digestTombs };
 })();
 
 // src/world/save.mjs
@@ -1660,7 +1678,7 @@ const { MILESTONE } = __m8;
 
 
 // Coins per tomb, by the world's difficulty.
-const COIN_RATE = { easy: 1, medium: 2, hard: 5 };
+const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
 
 /**
  * Coins due when a run's tomb count rises from `record`, the highest count paid, to `count`:
@@ -5068,8 +5086,8 @@ const { RGB, idx } = __m11;
 // Saves and bests of the tomb plane keep keys of their own, so a stacked-world
 // value never reads as a position or a score.
 const KEY_SAVE = 'infinite-maze.plane.save';
-// The difficulty of the run that wrote KEY_SAVE; absent means HARD, the
-// only size before difficulties.
+// The difficulty of the run that wrote KEY_SAVE; absent means ULTIMATE, the
+// 6x4 world and the only size before difficulties.
 const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
@@ -5125,7 +5143,7 @@ function storedDifficulty(key, fallback) {
 
 /** The stored save read at the difficulty that wrote it, or null. */
 function readSave() {
-  const difficulty = storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard');
+  const difficulty = storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate');
   const s = decodeSave(load(KEY_SAVE) || '');
   return s && { ...s, difficulty };
 }
@@ -5191,7 +5209,7 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
-    // The game's default level, MEDIUM, whose tomb (1, 0) starts at column 4.
+    // The game's default level, MEDIUM, whose tomb (1, 0) starts at column 3.
     planeLeg(createWorld(SELFTEST_CODE, { difficulty: 'medium' }));
     touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
@@ -5492,8 +5510,9 @@ function driveTouch(copied) {
   splashLeg(g, { need, click, press });
   oilLeg(g, { need, click });
 
-  // Leave the self-test script's run paused on screen for the screenshot.
-  setDifficulty(g, 'hard');
+  // Leave the self-test script's run paused on screen for the screenshot,
+  // in the 6x4 world the script was written for.
+  setDifficulty(g, 'ultimate');
   useCode(g, SELFTEST_CODE);
   g.sim = runScript(g.world).sim;
   snapCam(g.cam, g.sim);
@@ -5513,16 +5532,16 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   const sized = (d) => g.difficulty === d && g.world.difficulty === d && load(KEY_DIFFICULTY) === d
     && g.world.size.w === DIFFICULTY[d].w && g.world.size.h === DIFFICULTY[d].h;
 
-  // The key cycles the setting, and the preview's tomb size follows.
+  // The key cycles the four levels, and the preview's tomb size follows.
   setDifficulty(g, 'easy');
   need(sized('easy'), 'the setting starts at EASY');
-  for (const d of ['medium', 'hard', 'easy']) {
+  for (const d of ['medium', 'hard', 'ultimate', 'easy']) {
     click('title', 'difficulty');
     need(sized(d), `the difficulty key moves to ${difficultyLabel(d)}`);
   }
   // The arrows step it and stop at the ends.
-  for (const [code, d] of [['ArrowRight', 'medium'], ['ArrowRight', 'hard'], ['ArrowRight', 'hard'],
-    ['ArrowLeft', 'medium'], ['ArrowLeft', 'easy'], ['ArrowLeft', 'easy']]) {
+  for (const [code, d] of [['ArrowRight', 'medium'], ['ArrowRight', 'hard'], ['ArrowRight', 'ultimate'], ['ArrowRight', 'ultimate'],
+    ['ArrowLeft', 'hard'], ['ArrowLeft', 'medium'], ['ArrowLeft', 'easy'], ['ArrowLeft', 'easy']]) {
     press(code, code);
     need(sized(d), `${code} steps the setting to ${difficultyLabel(d)}`);
   }
@@ -5544,19 +5563,22 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
     need(g.screen === 'play' && sized(d), `RESUME rebuilds the save at ${difficultyLabel(d)} and moves the setting`);
     need(g.sim !== where.sim && g.sim.bd.x === where.x && g.sim.bd.y === where.y, `the ${difficultyLabel(d)} save resumes on its board`);
   };
+  // A HARD save resumes at HARD, the 4x4 world.
   const hard = saveAt('hard');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   need(sized('easy'), 'the setting moves to EASY over a HARD save');
   resumesAt('hard', hard);
+  need(g.world.size.w === 4 && g.world.size.h === 4, 'a HARD save resumes in a 4x4 world');
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
-  // A save from before difficulties, with none stored beside it, plays at HARD,
-  // whatever difficulty the stacked world's save left.
-  const old = saveAt('hard');
+  // A save from before difficulties, with none stored beside it, plays at
+  // ULTIMATE, the 6x4 world, whatever difficulty the stacked world's save left.
+  const old = saveAt('ultimate');
   unstore(KEY_SAVE_DIFFICULTY);
   store(KEY_STACKED_SAVE_DIFFICULTY, 'easy');
+  press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   need(sized('easy'), 'the setting moves to EASY over a save with no difficulty');
@@ -5566,7 +5588,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   press('Escape', 'Escape', true);
   need(g.screen === 'title', 'the title ignores an auto-repeated Esc');
   click('title', 'resume');
-  need(g.screen === 'play' && sized('hard') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays a save with no stored difficulty at HARD on its board');
+  need(g.screen === 'play' && sized('ultimate') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays a save with no stored difficulty at ULTIMATE on its board');
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
@@ -5582,7 +5604,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   click('title', 'reset');
   need(g.code !== code && load(KEY_SAVE) === save[0] && load(KEY_SAVE_DIFFICULTY) === save[1], 'RESET changes the seed and keeps the save');
 
-  // The best tomb is per seed and difficulty; HARD keeps the bare seed code.
+  // The best tomb is per seed and difficulty; ULTIMATE keeps the bare seed code.
   click('title', 'resume');
   store(KEY_BEST, '{}');
   g.sim.solved = new Set(Array.from({ length: 7 }, (_, i) => `${i},0`));
@@ -5591,8 +5613,8 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   const bests = JSON.parse(load(KEY_BEST));
   need(bests[`${g.code}:EASY`] === 7 && bests[g.code] === undefined, 'an EASY run records its best under the seed and EASY');
   click('over', 'title');
-  store(KEY_BEST, JSON.stringify({ [g.code]: 5, [`${g.code}:EASY`]: 2, [`${g.code}:MEDIUM`]: 3 }));
-  for (const [d, best] of [['easy', 2], ['medium', 3], ['hard', 5]]) {
+  store(KEY_BEST, JSON.stringify({ [g.code]: 5, [`${g.code}:EASY`]: 2, [`${g.code}:MEDIUM`]: 3, [`${g.code}:HARD`]: 4 }));
+  for (const [d, best] of [['easy', 2], ['medium', 3], ['hard', 4], ['ultimate', 5]]) {
     setDifficulty(g, d);
     need(titleBest(g) === best, `BEST TOMB reads ${best} at ${difficultyLabel(d)}`);
   }
@@ -5733,7 +5755,7 @@ function oilLeg(g, { need, click }) {
 
 /** The coin steps of the touch leg, from the title with no run open. */
 function coinLeg(g, { need, click }) {
-  const rates = { easy: 1, medium: 2, hard: 5 };
+  const rates = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
   const onLevel = (d) => {
     setDifficulty(g, d);
     useCode(g, SELFTEST_CODE);
@@ -5770,7 +5792,7 @@ function coinLeg(g, { need, click }) {
   need(g.coins.get(key).has(id), 'the collected set keeps the coin');
 
   // Step 3: a new best tomb pays its rate.
-  for (const d of ['easy', 'medium', 'hard']) {
+  for (const d of DIFFICULTIES) {
     onLevel(d);
     g.paid.delete(coinKey(SELFTEST_CODE, d));
     keepCoins(g);
@@ -5782,7 +5804,7 @@ function coinLeg(g, { need, click }) {
   }
 
   // Step 4: a replay pays only past the record.
-  for (const d of ['easy', 'medium', 'hard']) {
+  for (const d of DIFFICULTIES) {
     onLevel(d);
     g.paid.set(coinKey(SELFTEST_CODE, d), 1);
     keepCoins(g);
@@ -5912,9 +5934,10 @@ const JUMP_KEYS = ['Space', 'KeyZ'];
 // Title keys that step the difficulty setting, stopping at the ends.
 const SETTING_STEP = { ArrowLeft: -1, KeyA: -1, ArrowRight: 1, KeyD: 1 };
 
-// HARD keeps the bare seed code, so bests from before difficulties carry over.
+// ULTIMATE, the 6x4 world, keeps the bare seed code, so bests from before
+// difficulties carry over.
 function bestKey(code, difficulty) {
-  return difficulty === 'hard' ? code : `${code}:${difficultyLabel(difficulty)}`;
+  return difficulty === 'ultimate' ? code : `${code}:${difficultyLabel(difficulty)}`;
 }
 
 function readBest(code, difficulty) {
@@ -6283,7 +6306,7 @@ function drawTitle(g, t) {
     r.text('R      RESET', 72, 98, 'b');
     r.text('K COPY', 248, 98, 'b', { align: 'right' });
     r.text('T      TYPE A CODE', 72, 110, 'b');
-    // At most 26 characters right of P: a 9-character p and MEDIUM fit the panel.
+    // At most 28 characters right of P: a 9-character p and ULTIMATE fit the panel.
     if (saved) {
       r.text('P', 72, 122, 'b');
       r.text(`${formatCode(saved.code)}:${saved.p} ${difficultyLabel(saved.difficulty)}`, 248, 122, 'b', { align: 'right' });
@@ -6294,11 +6317,14 @@ function drawTitle(g, t) {
   r.text(touch && touch.on ? 'D-PAD MOVE  CENTRE JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  P PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
 }
 
-/** The title's setting row at y: all three names after L, the current one lit. */
+/**
+ * The title's setting row at y: all four names after L, the current one lit.
+ * The row spans 149 px and ends at 248, the panel's text margin.
+ */
 function drawSettingRow(g, y) {
   const r = g.renderer;
   r.text('L', 72, y, 'b');
-  let x = 114;
+  let x = 99;
   for (const d of DIFFICULTIES) {
     const name = difficultyLabel(d);
     r.text(name, x, y, d === g.difficulty ? 'p' : '7');
@@ -6306,17 +6332,20 @@ function drawSettingRow(g, y) {
   }
 }
 
-// The HARD map, the largest, spans the pause panel inside its 2 px rules,
-// from y 28 under the PAUSED title; smaller maps centre in that frame.
+// The largest frame over the levels, ULTIMATE's 72x28 cells, spans the pause
+// panel inside its 2 px rules, from y 28 under the PAUSED title; smaller maps
+// centre in that frame.
 const PAUSE_MAP_LEFT = PANEL_X.pause[0] + 2;
 const PAUSE_MAP_TOP = 28;
+const MAP_FRAME = Object.values(DIFFICULTY).map(mapCells)
+  .reduce((m, c) => ({ cols: Math.max(m.cols, c.cols), rows: Math.max(m.rows, c.rows) }));
 
 /** Top left of the pause map and its rows, for the world's tomb size. */
 function mapOrigin(world) {
-  const hard = mapCells(DIFFICULTY.hard), { cols, rows } = mapCells(world.size);
+  const { cols, rows } = mapCells(world.size);
   return {
-    x: PAUSE_MAP_LEFT + ((hard.cols - cols) * MAP_SCALE) / 2,
-    y: PAUSE_MAP_TOP + Math.floor(((hard.rows - rows) * MAP_SCALE) / 2),
+    x: PAUSE_MAP_LEFT + ((MAP_FRAME.cols - cols) * MAP_SCALE) / 2,
+    y: PAUSE_MAP_TOP + Math.floor(((MAP_FRAME.rows - rows) * MAP_SCALE) / 2),
     rows,
   };
 }
