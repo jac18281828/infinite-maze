@@ -18,8 +18,9 @@ const has = (bd, c, d) => !!world.step(bd, c, d);
 /** First cell over tombs (0, -3)..(0, 3) where pred(bd, cell) holds. */
 function findCell(pred) {
   for (let b = -3; b <= 3; b++) {
-    for (let i = 0; i < 24; i++) {
-      const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+    for (let i = 0; i < world.size.w * world.size.h; i++) {
+      const { x, y } = boardCoords(0, b, i, world.size);
+      const bd = world.board(x, y);
       if (!bd.links) continue;
       for (let c = 0; c < NCELL; c++) if (pred(bd, c)) return { bd, cell: c };
     }
@@ -48,8 +49,9 @@ function driver(s) {
 function sampleBoards() {
   const out = [];
   for (let b = -1; b <= 1; b++) {
-    for (let i = 0; i < 24; i++) {
-      const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+    for (let i = 0; i < world.size.w * world.size.h; i++) {
+      const { x, y } = boardCoords(0, b, i, world.size);
+      const bd = world.board(x, y);
       if (bd.links) out.push(bd);
     }
   }
@@ -794,7 +796,7 @@ test('the explorer never leaves a cell except along a link or door, nor enters r
     const w = createWorld(code);
     for (let b = -3; b <= 3; b++) {
       tombs++;
-      const e = boardCoords(b, b, w.tomb(b, b).entries[0]);
+      const e = boardCoords(b, b, w.tomb(b, b).entries[0], w.size);
       const s = createSim(w, w.resumePoint(e.x, e.y));
       const masks = new Map();
       let h = 0, v = 0, ph = 0, pv = 0, prev = [s.bd, s.cell];
@@ -1011,11 +1013,13 @@ test('a let-go from a down-ladder records the ladder and its lower cell; from an
 
 test('crossing a door records it on both boards and the model shows a gap in each outline', () => {
   let found = null;
+  const { w: W, h: H } = world.size;
   for (let b = -1; b <= 1 && !found; b++) {
-    for (let i = 0; i < 24 && !found; i++) {
+    for (let i = 0; i < W * H && !found; i++) {
       // Both boards lie in tomb (0, b), so one frame shows them.
-      if (i % 6 === 5) continue;
-      const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+      if (i % W === W - 1) continue;
+      const { x, y } = boardCoords(0, b, i, world.size);
+      const bd = world.board(x, y);
       const dr = bd.doors.find((q) => q.dir === 0);
       if (dr && !(bd.links[dr.cell] & 1) && world.step(bd, dr.cell, 0)) found = { bd, cell: dr.cell, b };
     }
@@ -1028,8 +1032,8 @@ test('crossing a door records it on both boards and the model shows a gap in eac
   assert.equal(walkedAt(s, found.bd, found.cell), 1 << 0);
   assert.equal(walkedAt(s, to.bd, to.cell), 1 << 2);
   const m = mapModel(world, s.trail, { u: 0, v: found.b }, to);
-  const gap = (x, y, cell, d) => m.outlines.some((o) => o.col === x * 12 && o.row === (y - 4 * found.b) * 7
-    && o.gaps.some((g) => g.d === d && g.col === x * 12 + (cell % BW) && g.row === (y - 4 * found.b) * 7 + Math.floor(cell / BW)));
+  const gap = (x, y, cell, d) => m.outlines.some((o) => o.col === x * 12 && o.row === (y - H * found.b) * 7
+    && o.gaps.some((g) => g.d === d && g.col === x * 12 + (cell % BW) && g.row === (y - H * found.b) * 7 + Math.floor(cell / BW)));
   assert.ok(gap(found.bd.x, found.bd.y, found.cell, 0), 'the near board opens its door');
   assert.ok(gap(to.bd.x, to.bd.y, to.cell, 2), 'the far board opens its door');
 });
@@ -1051,7 +1055,7 @@ test('crossing a tomb\'s exit door outward solves it once; going back in through
       const kind = t.exit === 1 ? 'up' : 'side';
       if (kinds.has(kind)) continue;
       kinds.add(kind);
-      const at = boardCoords(u, v, t.X);
+      const at = boardCoords(u, v, t.X, world.size);
       const bd = world.board(at.x, at.y);
       const door = bd.doors.find((d) => d.dir === t.exit);
       const s = simOn({ bd, cell: door.cell });

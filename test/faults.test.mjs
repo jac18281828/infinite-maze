@@ -158,7 +158,7 @@ test('flow and acyclic reject two side neighbours that exit into each other, wal
   let pair = null;
   for (let v = -5; v <= 5 && !pair; v++) {
     for (let u = -5; u <= 5 && !pair; u++) {
-      if (loose.tomb(u, v).exit === 0 && loose.tomb(u + 1, v).exit === 2 && sideRow(world.H, u, v) !== sideRow(world.H, u + 1, v)) pair = [u, v];
+      if (loose.tomb(u, v).exit === 0 && loose.tomb(u + 1, v).exit === 2 && sideRow(world.H, u, v, world.size) !== sideRow(world.H, u + 1, v, world.size)) pair = [u, v];
     }
   }
   assert.ok(pair, 'no pair exits into each other');
@@ -174,8 +174,9 @@ test('flow and acyclic reject two side neighbours that exit into each other, wal
 
 /** Copies of two tree boards that face each other across wall d of tomb (u, v), each holding a new door there. */
 function addWallDoor(u, v, d) {
-  for (let k = 0; k < (d % 2 === 0 ? 4 : 6); k++) {
-    const x = d === 0 ? 6 * u + 5 : 6 * u + k, y = d === 1 ? 4 * v + 3 : 4 * v + k;
+  const { w: W, h: H } = world.size;
+  for (let k = 0; k < (d % 2 === 0 ? H : W); k++) {
+    const x = d === 0 ? W * u + W - 1 : W * u + k, y = d === 1 ? H * v + H - 1 : H * v + k;
     const near = world.board(x, y), far = world.board(x + DX[d], y + DY[d]);
     if (!near.links || !far.links || near.doors.some((dr) => dr.dir === d)) continue;
     const cell = d === 0 ? 3 * 12 + 11 : 72 + 5;
@@ -232,7 +233,7 @@ test('bounds rejects a dead-end branch 3 boards deep', () => {
         if (made || shape.depth[i] !== 2) return;
         for (let d = 0; d < 4 && !made; d++) {
           const nx = bd.x + DX[d], ny = bd.y + DY[d];
-          if (Math.floor(nx / 6) !== u || Math.floor(ny / 4) !== v) continue;
+          if (Math.floor(nx / world.size.w) !== u || Math.floor(ny / world.size.h) !== v) continue;
           const rock = world.board(nx, ny);
           if (rock.links) continue;
           const cell = d === 0 ? 3 * 12 + 11 : d === 2 ? 3 * 12 : d === 1 ? 72 + 5 : 5;
@@ -463,7 +464,7 @@ test('flames rejects a removed flame that opens a gap over 150 s', () => {
 test('flames rejects an entry board without a flame', () => {
   const t = world.tomb(0, 1);
   const fs = world.tombFlames(0, 1);
-  const e = boardCoords(0, 1, t.entries[0]);
+  const e = boardCoords(0, 1, t.entries[0], world.size);
   const entryFlames = (f) => f.x === e.x && f.y === e.y;
   // Upstream chains end on the entry board; their flames go too.
   const flames = new Map([['0,1', { ...fs, flames: fs.flames.filter((f) => !entryFlames(f)) }]]);
@@ -483,7 +484,7 @@ test('solvability rejects a world cut at a tomb wall', () => {
   const first = world.tomb(0, WIN.v0);
   const t = world.tomb(DX[first.exit], WIN.v0 + DY[first.exit]);
   assert.ok(t.v < WIN.v1);
-  const x = boardCoords(t.u, t.v, t.X);
+  const x = boardCoords(t.u, t.v, t.X, world.size);
   const w = broken(world);
   const cut = copyBoard(world.board(x.x, x.y));
   cut.doors = cut.doors.filter((d) => d.dir !== t.exit);
@@ -506,29 +507,32 @@ test('saves rejects a resumed board that differs from the board in sequence', ()
 
 const easy = createWorld('00000000', { difficulty: 'easy' });
 
-test('bounds passes the sound EASY world and rejects an EASY tomb whose route holds 2 rooms', () => {
-  assert.deepEqual(checkBounds(easy, B0, B1).errors, []);
-  // A band whose entry and exit share a column: a door straight up between
-  // them cuts the route to 2 of the tomb's 6 rooms.
-  let b = 0;
-  while (easy.tree(b).entryX !== easy.tree(b + 1).entryX) b++;
-  const x = easy.tree(b).entryX, lower = easy.board(x, 2 * b), upper = easy.board(x, 2 * b + 1);
-  assert.ok(bandShape(easy, b).route.length >= 3);
-  const cell = 72 + 1 + (x % 10);
+test('bounds passes the sound EASY world, a one-board trunk included, and rejects an EASY trunk of 2 rooms', () => {
+  assert.deepEqual(checkBounds(easy, WIN).errors, []);
+  const { w: W } = easy.size;
+  let one = null, cut = null;
+  for (let v = 0; v <= 40 && !(one && cut); v++) {
+    for (let u = -5; u <= 5; u++) {
+      const t = easy.tomb(u, v);
+      if (!one && t.entries[0] === t.X) one = t;
+      // A trunk of 3 or more whose first entry borders X off the trunk: a door between them cuts it to 2 rooms.
+      const e = t.routes[0][0];
+      const d = [0, 1, 2, 3].find((q) => e + [1, W, -1, -W][q] === t.X && Math.abs((e % W) - (t.X % W)) <= 1);
+      if (!cut && t.routes[0].length >= 3 && d !== undefined) cut = { t, d };
+    }
+  }
+  assert.ok(one, 'no EASY tomb enters at its exit board');
+  assert.deepEqual(checkBounds(easy, tombWindow(one.u, one.u, one.v, one.v)).errors, []);
+  assert.ok(cut, 'no EASY tomb has a first entry beside its exit board off the trunk');
+  const { t, d } = cut;
+  const a = boardCoords(t.u, t.v, t.routes[0][0], easy.size), b = boardCoords(t.u, t.v, t.X, easy.size);
+  const near = easy.board(a.x, a.y), far = easy.board(b.x, b.y);
+  const cell = d === 0 ? 2 * 12 + 11 : d === 2 ? 2 * 12 : d === 1 ? 72 + 1 + (a.x & 7) : 1 + (a.x & 7);
   const w = broken(easy);
-  w._set(x, 2 * b, { ...copyBoard(lower), doors: [...lower.doors, { dir: 1, cell }] });
-  w._set(x, 2 * b + 1, { ...copyBoard(upper), doors: [...upper.doors, { dir: 3, cell: acrossDoor(cell, 1) }] });
-  assert.equal(bandShape(w, b).route.length, 2);
-  const errors = checkBounds(w, b, b).errors;
-  assert.ok(errors.includes(`band ${b}: route of 2 boards holds under half of 6`), errors.join('\n'));
-});
-
-test('bounds rejects a board with links outside an EASY tomb\'s columns', () => {
-  const w = broken(easy);
-  const inside = easy.board(easy.tree(0).entryX, 0);
-  w._set(3, 1, { ...copyBoard(inside), x: 3, y: 1, p: null });
-  const errors = checkBounds(w, B0, B1).errors;
-  assert.ok(errors.includes('board (3,1): outside the tomb\'s 3 columns holds links'), errors.join('\n'));
-  // No door reaches it, so the tomb's own structure stays sound.
-  assert.deepEqual(checkTree(w, B0, B1).errors, []);
+  w._set(a.x, a.y, { ...copyBoard(near), doors: [...near.doors, { dir: d, cell }] });
+  w._set(b.x, b.y, { ...copyBoard(far), doors: [...far.doors, { dir: d ^ 2, cell: acrossDoor(cell, d) }] });
+  const win = tombWindow(t.u, t.u, t.v, t.v);
+  assert.equal(tombShape(w, t.u, t.v).routes[0].length, 2);
+  const errors = checkBounds(w, win).errors;
+  assert.ok(errors.includes(`tomb (${t.u},${t.v}): trunk of 2 boards holds under half of 6`), errors.join('\n'));
 });

@@ -4,23 +4,24 @@
 // and links alone; Flow reads the generator's exits and checks them against
 // the doors.
 //
-// Every check reads the tomb size from its world.
+// Every check reads the tomb size from its world, and the run checks each
+// difficulty over the same window of tombs.
 //
 //   node tools/acceptance.mjs [--code XXXX-XXXX] [--cols W] [--rows N]
 import { pathToFileURL } from 'node:url';
 import { sha3_256 } from '../src/world/keccak.mjs';
 import { parseCode, toHex, u32 } from '../src/world/hash.mjs';
-import { createWorld, digestTombs, serializeBoard, acrossDoor, posOf, boardOfPos, boardCoords } from '../src/world/world.mjs';
+import {
+  createWorld, digestTombs, serializeBoard, acrossDoor, posOf, boardOfPos, boardCoords, boardIndex, tombOf,
+} from '../src/world/world.mjs';
 import { encodeSave, decodeSave } from '../src/world/save.mjs';
 
 export const SEED = '00000000';
-// Digest of tombs u in [-2, 2], v in [0, 19] for seed 0000-0000.
-export const DIGEST_TOMBS = 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01';
-// Pinned digests of SEED per difficulty; HARD's is DIGEST_TOMBS.
+// Digests of tombs u in [-2, 2], v in [0, 19] for seed 0000-0000, per difficulty.
 export const DIGESTS = {
-  easy: '6c1bca5a30810173ea1661bebd00c31a428c2bf457782750b46493c6efbe17ea',
-  medium: '2a96d6100952937d01794be44522e90764046ecd3e2573d11011d5cbb6189bf0',
-  hard: DIGEST_TOMBS,
+  easy: 'ad571179430465c8da3908e5633bb04d5194b60c9f68a10eaa57dbd28f9b71ef',
+  medium: 'b0ad6e959d6fbd84a481219019c141e8259edea1c28f1d01dde0d30d3ae4d320',
+  hard: 'c8024db96bc44f89b576e1bd535291008958c7ba9acdb15b220ecf48dbf54b01',
 };
 export const GAP_LIMIT_MS = 150000;
 export const GALLERIES_MIN = 4;
@@ -72,7 +73,7 @@ function tombsOf(win) {
 function tombBoards(world, u, v) {
   const out = [];
   for (let i = 0; i < world.size.w * world.size.h; i++) {
-    const { x, y } = boardCoords(u, v, i);
+    const { x, y } = boardCoords(u, v, i, world.size);
     out.push(world.board(x, y));
   }
   return out;
@@ -82,8 +83,8 @@ function windowBoards(world, win) {
   return tombsOf(win).flatMap(([u, v]) => tombBoards(world, u, v));
 }
 
-const tombOfBoard = (bd) => ({ u: Math.floor(bd.x / BANDW), v: Math.floor(bd.y / BANDH) });
-const indexOf = (bd) => (bd.y - BANDH * Math.floor(bd.y / BANDH)) * BANDW + (bd.x - BANDW * Math.floor(bd.x / BANDW));
+const tombOfBoard = (world, bd) => tombOf(bd.x, bd.y, world.size);
+const indexOf = (world, bd) => boardIndex(bd.x, bd.y, world.size);
 
 /** The board across door `dr` of `bd` when both sides hold the door, else null. */
 function throughDoor(world, bd, dr) {
@@ -95,9 +96,10 @@ function throughDoor(world, bd, dr) {
 /** Doors that boards of tomb (u, v) hold on its wall d, as { bd, dr }. */
 function wallDoors(world, u, v, d) {
   const out = [];
-  for (let k = 0; k < (d % 2 === 0 ? BANDH : BANDW); k++) {
-    const x = d === 0 ? BANDW * u + BANDW - 1 : d === 2 ? BANDW * u : BANDW * u + k;
-    const y = d === 1 ? BANDH * v + BANDH - 1 : d === 3 ? BANDH * v : BANDH * v + k;
+  const { w, h } = world.size;
+  for (let k = 0; k < (d % 2 === 0 ? h : w); k++) {
+    const x = d === 0 ? w * u + w - 1 : d === 2 ? w * u : w * u + k;
+    const y = d === 1 ? h * v + h - 1 : d === 3 ? h * v : h * v + k;
     const bd = world.board(x, y);
     if (bd.links) for (const dr of bd.doors) if (dr.dir === d) out.push({ bd, dr });
   }
@@ -153,12 +155,12 @@ export function tombShape(world, u, v) {
     for (const dr of bd.doors) {
       const t = throughDoor(world, bd, dr);
       if (!t) continue;
-      const o = tombOfBoard(t.board);
-      if (o.u === u && o.v === v) adj[i].push({ to: indexOf(t.board), dir: dr.dir, cell: dr.cell });
+      const o = tombOfBoard(world, t.board);
+      if (o.u === u && o.v === v) adj[i].push({ to: indexOf(world, t.board), dir: dr.dir, cell: dr.cell });
     }
   }
   const walls = [];
-  for (let d = 0; d < 4; d++) for (const { bd, dr } of wallDoors(world, u, v, d)) walls.push({ dir: d, i: indexOf(bd), cell: dr.cell });
+  for (let d = 0; d < 4; d++) for (const { bd, dr } of wallDoors(world, u, v, d)) walls.push({ dir: d, i: indexOf(world, bd), cell: dr.cell });
   const exit = doorExit(world, u, v);
   const out = walls.filter((w) => w.dir === exit);
   if (exit < 0) errors.push(`tomb (${u},${v}): no way on through its doors`);
@@ -303,7 +305,7 @@ function tombTreeErrors(world, u, v) {
   const carved = (bd, c) => bd.links[c] !== 0 || bd.doors.some((dr) => dr.cell === c);
   const find = (i) => { while (up[i] !== i) { up[i] = up[up[i]]; i = up[i]; } return i; };
   const join = (a, b) => { up[find(a)] = find(b); };
-  const inTomb = (bd) => { const o = tombOfBoard(bd); return o.u === u && o.v === v; };
+  const inTomb = (bd) => { const o = tombOfBoard(world, bd); return o.u === u && o.v === v; };
   let nodes = 0, edges = 0;
   for (const [i, bd] of boards.entries()) {
     if (!bd.links) continue;
@@ -322,7 +324,7 @@ function tombTreeErrors(world, u, v) {
       const t = throughDoor(world, bd, dr);
       if (!t || !inTomb(t.board)) continue;
       edges++;
-      join(i * NCELL + dr.cell, indexOf(t.board) * NCELL + t.cell);
+      join(i * NCELL + dr.cell, indexOf(world, t.board) * NCELL + t.cell);
     }
   }
   const roots = new Set();
@@ -429,10 +431,10 @@ function primaryPair(world, s, i, bd) {
 }
 
 /**
- * Nothing outside the tomb's columns holds a link; the route holds at least
- * half the tomb's boards; dead ends reach at most 2 boards; boards meet
- * section 4 or flag fallback; a run of `minBoards` boards or more keeps
- * fallbacks at or under 2%. Reports route lengths and rock boards.
+ * The trunk holds at least half the tomb's boards, a one-board trunk aside;
+ * dead ends reach at most 2 boards; boards meet section 4 or flag fallback;
+ * a run of `minBoards` boards or more keeps fallbacks at or under 2%.
+ * Reports trunk lengths and rock boards.
  */
 export function checkBounds(world, win, minBoards = CEILING_MIN_BOARDS) {
   const errors = [], tombs = [];
@@ -441,8 +443,8 @@ export function checkBounds(world, win, minBoards = CEILING_MIN_BOARDS) {
     const s = tombShape(world, u, v);
     errors.push(...s.errors);
     if (s.errors.length) continue;
-    errors.push(...routeErrors(world, s, b));
-    tombs.push({ route: s.route.length, rock: s.boards.filter((bd) => !bd.links).length });
+    errors.push(...trunkErrors(world, s));
+    tombs.push({ route: s.routes[0].length, rock: s.boards.filter((bd) => !bd.links).length });
     s.boards.forEach((bd, i) => {
       if (!bd.links) return;
       boards++;
@@ -462,23 +464,16 @@ export function checkBounds(world, win, minBoards = CEILING_MIN_BOARDS) {
   return { errors, boards, fallbacks, ...tombFigures(tombs) };
 }
 
-/** Errors for each board of band b at x = -1 or x = W that holds links. */
-function outsideErrors(world, b) {
-  const { w, h } = world.size;
-  const errors = [];
-  for (let y = h * b; y < h * b + h; y++) {
-    for (const x of [-1, w]) if (world.board(x, y).links) errors.push(`board (${x},${y}): outside the tomb's ${w} columns holds links`);
-  }
-  return errors;
+/**
+ * An error unless tomb shape s's trunk holds at least half the tomb's
+ * boards. A trunk of the one board X is exempt: its first entry is X.
+ */
+function trunkErrors(world, s) {
+  const n = world.size.w * world.size.h, len = s.routes[0].length;
+  return len > 1 && 2 * len < n ? [`tomb (${s.u},${s.v}): trunk of ${len} boards holds under half of ${n}`] : [];
 }
 
-/** An error unless band shape s's route holds at least half the tomb's boards. */
-function routeErrors(world, s, b) {
-  const n = world.size.w * world.size.h;
-  return 2 * s.route.length < n ? [`band ${b}: route of ${s.route.length} boards holds under half of ${n}`] : [];
-}
-
-/** Shortest and mean route, and mean rock boards, over tombs of { route, rock }. */
+/** Shortest and mean trunk, and mean rock boards, over tombs of { route, rock }. */
 function tombFigures(tombs) {
   const mean = (key) => (tombs.length ? tombs.reduce((sum, t) => sum + t[key], 0) / tombs.length : 0);
   return { routeMin: Math.min(...tombs.map((t) => t.route)), routeMean: mean('route'), rockMean: mean('rock') };
@@ -554,7 +549,7 @@ export function checkCarve(world, win) {
 export function walkMs(world, boards, A, B) {
   const slot = new Map(boards.map((bd, i) => [bd.p, i]));
   const ms = new Float64Array(boards.length * NCELL).fill(-1);
-  const sA = slot.get(posOf(A.x, A.y, world.size)), sB = slot.get(posOf(B.x, B.y, world.size));
+  const sA = slot.get(posOf(A.x, A.y)), sB = slot.get(posOf(B.x, B.y));
   if (sA === undefined || sB === undefined) return Infinity;
   const start = sA * NCELL + A.cell, goal = sB * NCELL + B.cell;
   ms[start] = 0;
@@ -700,7 +695,7 @@ export function checkSolvability(world, win, u = 0) {
       if (dr.cell !== c) continue;
       const t = throughDoor(world, bd, dr);
       if (!t) continue;
-      const o = tombOfBoard(t.board);
+      const o = tombOfBoard(world, t.board);
       if (!keys.has(`${o.u},${o.v}`)) continue;
       if (mark(t.board.p, t.cell)) q.push([t.board, t.cell]);
     }
@@ -713,17 +708,16 @@ export function checkSolvability(world, win, u = 0) {
 }
 
 /**
- * Saves round-trip at the world's size, and a board resumed at the world's
- * difficulty matches one generated in sequence.
+ * Saves round-trip, and a board resumed at the world's difficulty matches
+ * one generated in sequence.
  */
 export function checkSaves(world, positions) {
   const errors = [];
-  const { size } = world;
   const fresh = createWorld(world.code, { difficulty: world.difficulty });
   for (const p of positions) {
-    const { x, y } = boardOfPos(p, size);
-    const text = encodeSave(world.code, x, y, size);
-    const back = decodeSave(text, size);
+    const { x, y } = boardOfPos(p);
+    const text = encodeSave(world.code, x, y);
+    const back = decodeSave(text);
     if (!back || back.code !== world.code || back.p !== p || back.x !== x || back.y !== y) {
       errors.push(`save ${text} does not round-trip`);
     }
@@ -737,7 +731,7 @@ export function checkSaves(world, positions) {
  * A fixed seed code yields the pinned digest of tombs u in [-2, 2], v in
  * [0, 19] at a difficulty.
  */
-export function checkDeterminism(code = SEED, want = DIGEST_TOMBS, difficulty = 'hard') {
+export function checkDeterminism(code = SEED, want = DIGESTS.hard, difficulty = 'hard') {
   const got = digestTombs(createWorld(code, { difficulty }), -2, 2, 0, 19);
   return { errors: got === want ? [] : [`digest of tombs [-2, 2] x [0, 19] is ${got}, pinned ${want}`], digest: got };
 }
@@ -752,8 +746,9 @@ function saveSamples(world, win) {
   const du = Math.max(1, Math.floor((win.u1 - win.u0) / 2)), dv = Math.max(1, Math.floor((win.v1 - win.v0) / 6));
   for (let v = win.v0; v <= win.v1; v += dv) {
     for (let u = win.u0; u <= win.u1; u += du) {
-      const { x, y } = boardCoords(u, v, world.tomb(u, v).entries[0]);
-      const o = boardCoords(u, v, (u * 7 + v * 5 + 48) % 24);
+      const n = world.size.w * world.size.h;
+      const { x, y } = boardCoords(u, v, world.tomb(u, v).entries[0], world.size);
+      const o = boardCoords(u, v, (((u * 7 + v * 5) % n) + n) % n, world.size);
       samples.push(posOf(x, y), posOf(o.x, o.y));
     }
   }
@@ -761,7 +756,7 @@ function saveSamples(world, win) {
 }
 
 /** Runs every world check; returns [name, result, detail] rows and summary figures. */
-function runChecks(world, code, win) {
+export function runChecks(world, code, win) {
   const rows = [];
   const flames = checkFlames(world, win);
   const gaps = flames.gaps.slice().sort((p, q) => p - q);
@@ -806,19 +801,21 @@ function printRows(rows, tag) {
   return failed;
 }
 
-/** One difficulty's figures: tomb size, range, routes, rock, fallbacks, galleries, carve, gaps and digest. */
-function printSummary({ difficulty, n, size, bounds, galleries, carve, gapText, digest }, code) {
+/** One difficulty's figures: tomb size, window, trunks, rock, fallbacks, galleries, carve, gaps, flow and digest. */
+function printSummary({ difficulty, size, win, bounds, galleries, carve, gapText, flowText, digest }, code) {
+  const tombs = (win.u1 - win.u0 + 1) * (win.v1 - win.v0 + 1);
   console.log('');
   console.log(`${difficulty.toUpperCase()}: tombs of ${size.w}x${size.h} = ${size.w * size.h} rooms`);
-  console.log(`bands checked:  ${-n}..${n} (${2 * n + 1}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
-  console.log(`route:          mean ${bounds.routeMean.toFixed(2)}, min ${bounds.routeMin} rooms (half the tomb: ${(size.w * size.h) >> 1})`);
+  console.log(`tombs checked:  u ${win.u0}..${win.u1}, v ${win.v0}..${win.v1} (${tombs}) for seed ${code.slice(0, 4)}-${code.slice(4)}`);
+  console.log(`trunk:          mean ${bounds.routeMean.toFixed(2)}, min ${bounds.routeMin} rooms (half the tomb: ${(size.w * size.h) >> 1})`);
   console.log(`rock rooms:     ${bounds.rockMean.toFixed(2)} per tomb`);
   console.log(`fallback boards: ${bounds.fallbacks} of ${bounds.boards} (${(100 * bounds.fallbacks / bounds.boards).toFixed(1)}%)`);
   console.log(`galleries:      ${galleries.mean.toFixed(2)} per board`);
   console.log(`block conflicts: ${galleries.conflicts}`);
   console.log(`carved cells:   ${carve.mean.toFixed(1)} per board (${(100 * carve.mean / NCELL).toFixed(0)}% of ${NCELL})`);
   console.log(`flame gap:      ${gapText}`);
-  console.log(`digest 0..99:   ${digest}`);
+  console.log(`flow:           ${flowText}`);
+  console.log(`digest:         ${digest}`);
 }
 
 async function main(argv) {
@@ -838,7 +835,7 @@ async function main(argv) {
     const world = createWorld(code, { difficulty });
     const r = runChecks(world, code, win);
     failed += printRows(r.rows, difficulty.toUpperCase());
-    summaries.push({ difficulty, size: world.size, ...r });
+    summaries.push({ difficulty, size: world.size, win, ...r });
   }
   for (const summary of summaries) printSummary(summary, code);
   console.log('');

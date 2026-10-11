@@ -4,16 +4,16 @@
 import { makeHasher, worldKey, u32, toHex, writeInt64BE } from './hash.mjs';
 import { sha3_256 } from './keccak.mjs';
 import { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } from './board.mjs';
-import { DIFFICULTY, BANDW, BANDH, NBOARD, BDX, BDY, buildTombTree } from './band.mjs';
+import { DIFFICULTY, BDX, BDY, buildTombTree } from './band.mjs';
 import { createFlow, TDX, TDY } from './flow.mjs';
 
 export const GAP_LIMIT_MS = 150000;
 // Saves hold |x| and |y| below 2^25, where p stays an exact integer.
 export const SAVE_LIMIT = 33554432;
 
-/** Tomb (u, v) holding board (x, y). */
-export function tombOf(x, y) {
-  return { u: Math.floor(x / BANDW), v: Math.floor(y / BANDH) };
+/** Tomb (u, v) holding board (x, y), for tombs of `size` boards. */
+export function tombOf(x, y, size) {
+  return { u: Math.floor(x / size.w), v: Math.floor(y / size.h) };
 }
 
 const zig = (n) => (n >= 0 ? 2 * n : -2 * n - 1);
@@ -42,15 +42,15 @@ export function boardOfPos(p) {
   return r < s ? { x: unzig(r), y: unzig(s) } : { x: unzig(s), y: unzig(r - s) };
 }
 
-/** Board (x, y) at index i = 6 * row + column within tomb (u, v). */
-export function boardCoords(u, v, i) {
-  return { x: BANDW * u + (i % BANDW), y: BANDH * v + ((i / BANDW) | 0) };
+/** Board (x, y) at index i = W * row + column within tomb (u, v) of `size` boards. */
+export function boardCoords(u, v, i, size) {
+  return { x: size.w * u + (i % size.w), y: size.h * v + ((i / size.w) | 0) };
 }
 
-/** Index of board (x, y) within its tomb. */
-export function boardIndex(x, y) {
-  const { u, v } = tombOf(x, y);
-  return (y - BANDH * v) * BANDW + (x - BANDW * u);
+/** Index of board (x, y) within its tomb of `size` boards. */
+export function boardIndex(x, y, size) {
+  const { u, v } = tombOf(x, y, size);
+  return (y - size.h * v) * size.w + (x - size.w * u);
 }
 
 /** Door cell on wall d (E N W S) of board (x, y); both sides read one key. */
@@ -101,7 +101,7 @@ export function midpointIndex(cum, total) {
 function boardLinks(t, i) {
   const dirs = new Set();
   if (t.next[i] >= 0) dirs.add(dirBetween(i, t.next[i]));
-  for (let n = 0; n < NBOARD; n++) if (t.next[n] === i) dirs.add(dirBetween(i, n));
+  for (let n = 0; n < t.next.length; n++) if (t.next[n] === i) dirs.add(dirBetween(i, n));
   for (const w of t.walls) if (w.i === i) dirs.add(w.dir);
   const r = t.routeIndex[i];
   let aDir, bDir = -1;
@@ -190,7 +190,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
   if (!Object.hasOwn(DIFFICULTY, difficulty)) throw new Error(`unknown difficulty ${difficulty}`);
   const size = DIFFICULTY[difficulty];
   const H = makeHasher(worldKey(code));
-  const flow = createFlow(H, faults);
+  const flow = createFlow(H, size, faults);
   const tombs = new Map();
   const boards = new Map();
   const flameSets = new Map();
@@ -200,28 +200,21 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
   function tomb(u, v) {
     const k = tkey(u, v);
     let t = tombs.get(k);
-    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), faults); tombs.set(k, t); }
+    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), size, faults); tombs.set(k, t); }
     return t;
   }
 
-  /** Board (x, y); a column outside [0, W) is rock, built fresh and never cached. */
   function board(x, y) {
-    if (x < 0 || x >= size.w) return outside(x, y);
-    const p = posOf(x, y, size);
+    const p = posOf(x, y);
     let bd = boards.get(p);
     if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); }
     return bd;
   }
 
-  // Its p is null: posOf there names a board inside the tomb.
-  function outside(x, y) {
-    return rock({ x, y, p: null, band: bandOf(y, size), index: -1, routeIndex: -1, depth: -1 });
-  }
-
   function buildBoard(x, y, p) {
-    const { u, v } = tombOf(x, y);
+    const { u, v } = tombOf(x, y, size);
     const t = tomb(u, v);
-    const i = boardIndex(x, y);
+    const i = boardIndex(x, y, size);
     const base = {
       x, y, p, u, v, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i], entry: t.entries.includes(i),
     };
@@ -242,7 +235,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
   }
 
   function boardAt(t, i) {
-    const { x, y } = boardCoords(t.u, t.v, i);
+    const { x, y } = boardCoords(t.u, t.v, i, size);
     return board(x, y);
   }
 
@@ -307,7 +300,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
     if (fs) return fs;
     const t = tomb(u, v);
     const placed = [];
-    for (let i = 0; i < NBOARD; i++) {
+    for (let i = 0; i < t.depth.length; i++) {
       if (t.depth[i] < 0) continue;
       const bd = boardAt(t, i);
       if (t.routeIndex[i] >= 0) {
@@ -351,13 +344,12 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
    * entry board those the upstream tomb's chains place there.
    */
   function flamesAt(x, y) {
-    if (x < 0 || x >= size.w) return [];
-    const p = posOf(x, y, size);
+    const p = posOf(x, y);
     let cells = flameCells.get(p);
     if (cells) return cells;
-    const { u, v } = tombOf(x, y);
+    const { u, v } = tombOf(x, y, size);
     const t = tomb(u, v);
-    const i = boardIndex(x, y);
+    const i = boardIndex(x, y, size);
     const set = new Set();
     if (t.depth[i] >= 0) {
       const from = [tombFlames(u, v)];
@@ -397,7 +389,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
   /** Where a new run starts: tomb (0, 0)'s first entry. */
   function startPoint() {
     const t = tomb(0, 0);
-    const { x, y } = boardCoords(0, 0, t.entries[0]);
+    const { x, y } = boardCoords(0, 0, t.entries[0], size);
     return resumePoint(x, y);
   }
 
@@ -409,7 +401,7 @@ export function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_
     for (const [p, bd] of boards) if (far(bd.u, bd.v)) boards.delete(p);
     for (const p of flameCells.keys()) {
       const { x, y } = boardOfPos(p);
-      const t = tombOf(x, y);
+      const t = tombOf(x, y, size);
       if (far(t.u, t.v)) flameCells.delete(p);
     }
     flow.retain(u, v, 2);
@@ -470,8 +462,8 @@ export function digestTombs(world, u0, u1, v0, v1) {
         for (const f of chain) { w.i64(f.x); w.i64(f.y); w.u8(f.cell); }
       }
       parts.push(w.done());
-      for (let i = 0; i < NBOARD; i++) {
-        const { x, y } = boardCoords(u, v, i);
+      for (let i = 0; i < world.size.w * world.size.h; i++) {
+        const { x, y } = boardCoords(u, v, i, world.size);
         parts.push(serializeBoard(world, x, y));
       }
     }

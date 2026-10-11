@@ -3,7 +3,6 @@
 // boards, the flames at stood cells and the explorer; it never names a cell
 // the explorer did not stand on or a passage beyond a stub.
 import { BW, BH, NCELL } from '../world/board.mjs';
-import { BANDW, BANDH } from '../world/band.mjs';
 import { tombOf } from '../world/world.mjs';
 
 /** Frame size in cells for a tomb of `size` boards of 12x7 cells. */
@@ -14,9 +13,9 @@ export function mapCells(size) {
 // Each link is listed once, from the end whose direction is one of these.
 const LINE_DIRS = [0, 1, 4, 5];
 
-/** The tomb { u, v } that holds board `bd`. */
-export function frameOf(bd) {
-  return tombOf(bd.x, bd.y);
+/** The tomb { u, v } that holds board `bd`, for tombs of `size` boards. */
+export function frameOf(bd, size) {
+  return tombOf(bd.x, bd.y, size);
 }
 
 /** The frame one tomb on in the direction of pan key `dir`: 'l', 'r', 'u' or 'd'. */
@@ -31,13 +30,15 @@ export function sameFrame(f, g) {
 
 /**
  * Lines, stubs, outlines, flames and the explorer of tomb `f`, in frame
- * cells: column (x - 6u) * 12 + cell % 12, row (y - 4v) * 7 + floor(cell /
- * 12), row 0 at the bottom. `at` is the explorer's { bd, cell }.
+ * cells: column (x - Wu) * 12 + cell % 12, row (y - Hv) * 7 + floor(cell /
+ * 12), row 0 at the bottom, for the world's tomb size W x H. `at` is the
+ * explorer's { bd, cell }.
  */
 export function mapModel(world, trail, f, at) {
   const lines = [], stubs = [], outlines = [], flames = [];
-  const x0 = BANDW * f.u, y0 = BANDH * f.v;
-  const inFrame = (x, y) => x >= x0 && x < x0 + BANDW && y >= y0 && y < y0 + BANDH;
+  const { w, h } = world.size;
+  const x0 = w * f.u, y0 = h * f.v;
+  const inFrame = (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h;
   const cellAt = (bd, cell) => ({ col: (bd.x - x0) * BW + (cell % BW), row: (bd.y - y0) * BH + ((cell / BW) | 0) });
   const boards = [...trail.values()].filter((t) => inFrame(t.x, t.y)).sort((p, q) => p.y - q.y || p.x - q.x);
   for (const t of boards) {

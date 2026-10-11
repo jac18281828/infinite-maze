@@ -1,9 +1,9 @@
 // The tomb plane's flow: each tomb (u, v) leaves up, left or right, never
 // down. Every side wall points one way, so two side neighbours never exit
 // into each other, and with nothing leaving down no way on can loop.
-// Directions match board directions: 0 right, 1 up, 2 left, 3 down.
+// Directions match board directions: 0 right, 1 up, 2 left, 3 down. Exits
+// never read the tomb size, so every difficulty shares one flow.
 import { u32 } from './hash.mjs';
-import { BANDW, BANDH } from './band.mjs';
 
 export const RIGHT = 0;
 export const UP = 1;
@@ -33,24 +33,26 @@ export function exitDir(H, u, v, ignoreWalls = false) {
   return canR ? RIGHT : LEFT;
 }
 
-/** Board column of the door between tombs (u, v) and (u, v + 1). */
-export function floorColumn(H, u, v) {
-  return u32(H('tfloor', u, v)) % BANDW;
+/** Board column of the door between tombs (u, v) and (u, v + 1), for tombs of `size` boards. */
+export function floorColumn(H, u, v, size) {
+  return u32(H('tfloor', u, v)) % size.w;
 }
 
-/** Board row of the door between tombs (u, v) and (u + 1, v). */
-export function sideRow(H, u, v) {
-  return u32(H('tside', u, v)) % BANDH;
+/** Board row of the door between tombs (u, v) and (u + 1, v), for tombs of `size` boards. */
+export function sideRow(H, u, v, size) {
+  return u32(H('tside', u, v)) % size.h;
 }
 
 /**
- * The tomb plane's flow with memoized exits. `exit(u, v)` is the exit
- * direction; `walls(u, v)` lists the tomb's wall doors as { dir, i }, i the
- * board index, the exit first, then the in-doors in wall order floor, left,
- * right. A broken world with `ignoreWalls` keys each side door by the tomb
- * that exits through it, so a pair exiting into each other holds two doors.
+ * The tomb plane's flow with memoized exits, for tombs of `size` boards.
+ * `exit(u, v)` is the exit direction; `walls(u, v)` lists the tomb's wall
+ * doors as { dir, i }, i the board index, the exit first, then the in-doors
+ * in wall order floor, left, right. A broken world with `ignoreWalls` keys
+ * each side door by the tomb that exits through it, so a pair exiting into
+ * each other holds two doors.
  */
-export function createFlow(H, { ignoreWalls = false } = {}) {
+export function createFlow(H, size, { ignoreWalls = false } = {}) {
+  const { w, h } = size;
   const exits = new Map();
   const key = (u, v) => `${u},${v}`;
 
@@ -63,23 +65,23 @@ export function createFlow(H, { ignoreWalls = false } = {}) {
 
   /** Board row of the side door tomb (u, v) exits through toward d. */
   function exitRow(u, v, d) {
-    if (ignoreWalls) return sideRow(H, u, v);
-    return sideRow(H, d === RIGHT ? u : u - 1, v);
+    if (ignoreWalls) return sideRow(H, u, v, size);
+    return sideRow(H, d === RIGHT ? u : u - 1, v, size);
   }
 
   /** Board index, within tomb (u, v), of the door it exits through. */
   function exitIndex(u, v) {
     const d = exit(u, v);
-    if (d === UP) return (BANDH - 1) * BANDW + floorColumn(H, u, v);
+    if (d === UP) return (h - 1) * w + floorColumn(H, u, v, size);
     const row = exitRow(u, v, d);
-    return row * BANDW + (d === RIGHT ? BANDW - 1 : 0);
+    return row * w + (d === RIGHT ? w - 1 : 0);
   }
 
   function walls(u, v) {
     const out = [{ dir: exit(u, v), i: exitIndex(u, v) }];
-    if (exit(u, v - 1) === UP) out.push({ dir: DOWN, i: floorColumn(H, u, v - 1) });
-    if (exit(u - 1, v) === RIGHT) out.push({ dir: LEFT, i: exitRow(u - 1, v, RIGHT) * BANDW });
-    if (exit(u + 1, v) === LEFT) out.push({ dir: RIGHT, i: exitRow(u + 1, v, LEFT) * BANDW + BANDW - 1 });
+    if (exit(u, v - 1) === UP) out.push({ dir: DOWN, i: floorColumn(H, u, v - 1, size) });
+    if (exit(u - 1, v) === RIGHT) out.push({ dir: LEFT, i: exitRow(u - 1, v, RIGHT) * w });
+    if (exit(u + 1, v) === LEFT) out.push({ dir: RIGHT, i: exitRow(u + 1, v, LEFT) * w + w - 1 });
     return out;
   }
 

@@ -131,7 +131,8 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
-    planeLeg(world);
+    // The game's default level, MEDIUM, whose tomb (1, 0) starts at column 4.
+    planeLeg(createWorld(SELFTEST_CODE, { difficulty: 'medium' }));
     touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
@@ -142,23 +143,24 @@ function selftest() {
 
 /**
  * Resumes at the first entry of tomb (1, 0), whose boards lie outside
- * columns 0-5, and throws unless the frame draws the explorer's room as
- * maze: its pixels must differ from the same frame drawn with the
+ * columns 0 to W - 1, and throws unless the frame draws the explorer's room
+ * as maze: its pixels must differ from the same frame drawn with the
  * explorer's board as rock. The explorer stands on its first primary cell,
  * which the carve keeps. Touches no storage and never boots.
  */
 function planeLeg(world) {
   const t = world.tomb(1, 0);
-  const at = boardCoords(1, 0, t.entries[0]);
+  const at = boardCoords(1, 0, t.entries[0], world.size);
   const sim = createSim(world, world.resumePoint(at.x, at.y));
-  if (sim.bd.x < 6) throw new Error(`plane leg: board (${sim.bd.x},${sim.bd.y}) lies in columns 0-5`);
+  const w = world.size.w;
+  if (sim.bd.x < w) throw new Error(`plane leg: board (${sim.bd.x},${sim.bd.y}) lies in columns 0-${w - 1}`);
   const cam = { x: 0, y: 0 };
   snapCam(cam, sim);
   // The inner 28x28 px of the explorer's 32 px room, in view pixels (y down).
   const [nx, ny] = nodeXY(sim.bd, sim.cell);
   const x0 = nx - 14 - Math.round(cam.x) + VIEW_W / 2, y0 = Math.round(cam.y) - (ny + 30) + VIEW_H / 2;
-  const room = (w) => {
-    createRenderer(view, w).scene(sim, cam, 0);
+  const room = (wd) => {
+    createRenderer(view, wd).scene(sim, cam, 0);
     return view.getContext('2d').getImageData(x0, y0, 28, 28).data;
   };
   const rockBoard = { ...sim.bd, kind: 'rock', links: null, doors: [], doorMask: null };
@@ -224,7 +226,7 @@ function driveTouch(copied) {
     const carry = { time: s.time, solved: s.solved, lastEntry: s.lastEntry };
     const { w, h } = g.world.size;
     for (let i = 0; i < w * h; i++) {
-      const { x, y } = boardCoords(s.bd.u, s.bd.v, i);
+      const { x, y } = boardCoords(s.bd.u, s.bd.v, i, g.world.size);
       const bd = g.world.board(x, y);
       if (!bd.links || bd.entry || bd === s.bd || bd.p === s.lastEntry) continue;
       g.sim = createSim(g.world, g.world.resumePoint(bd.x, bd.y), carry);
@@ -337,7 +339,7 @@ function driveTouch(copied) {
   offEntry();
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
-  const home = frameOf(g.sim.bd);
+  const home = frameOf(g.sim.bd, g.world.size);
   const framed = (du, dv) => sameFrame(g.frame, { u: home.u + du, v: home.v + dv });
   need(framed(0, 0), 'PAUSE frames the explorer\'s tomb');
   need(load(KEY_SAVE_DIFFICULTY) === g.world.difficulty, 'PAUSE stores the save\'s difficulty');
@@ -358,18 +360,18 @@ function driveTouch(copied) {
   click('pause', 'resume');
   need(g.screen === 'play', 'RESUME returns to play');
   // Walk to another cell of the tomb, so a map kept from the last pause shows the old one.
-  const frame = frameOf(g.sim.bd), cell = g.sim.cell, bd = g.sim.bd;
+  const frame = frameOf(g.sim.bd, g.world.size), cell = g.sim.cell, bd = g.sim.bd;
   for (const [h, v] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     for (let i = 0; i < 600 && g.sim.cell === cell && g.sim.bd === bd; i++) step(g.sim, h, v);
     if (g.sim.cell !== cell || g.sim.bd !== bd) break;
   }
-  need(sameFrame(frameOf(g.sim.bd), frame) && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its tomb');
+  need(sameFrame(frameOf(g.sim.bd, g.world.size), frame) && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its tomb');
   // A torch and clock that a rebuild from the save would reset.
   const run = g.sim, runWorld = g.world, runCode = g.code;
   run.burn = BURN_S / 2;
   run.time = 77;
   click('play', 'pause');
-  need(sameFrame(g.frame, frameOf(g.sim.bd)), 'PAUSE frames the explorer\'s tomb again');
+  need(sameFrame(g.frame, frameOf(g.sim.bd, g.world.size)), 'PAUSE frames the explorer\'s tomb again');
   const after = pauseModel(g).explorer;
   need(after && (!before || after.col !== before.col || after.row !== before.row), 'PAUSE draws the explorer where it now stands');
   click('pause', 'title');
@@ -427,7 +429,7 @@ function driveTouch(copied) {
   g.screen = 'play';
   g.keys.clear();
   press('Escape', 'Escape');
-  need(g.screen === 'pause' && sameFrame(g.frame, frameOf(g.sim.bd)), 'Esc pauses on the explorer\'s tomb');
+  need(g.screen === 'pause' && sameFrame(g.frame, frameOf(g.sim.bd, g.world.size)), 'Esc pauses on the explorer\'s tomb');
   // The first pause frame lands half a second into the page and shows the explorer's dot.
   draw(g, 0.5);
   const e = pauseModel(g).explorer, o = mapOrigin(g.world);
@@ -510,7 +512,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   // The best tomb is per seed and difficulty; HARD keeps the bare seed code.
   click('title', 'resume');
   store(KEY_BEST, '{}');
-  g.sim.maxBand = 7;
+  g.sim.solved = new Set(Array.from({ length: 7 }, (_, i) => `${i},0`));
   endRun(g);
   draw(g, 0);
   const bests = JSON.parse(load(KEY_BEST));

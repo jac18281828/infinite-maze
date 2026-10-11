@@ -18,8 +18,8 @@ function boards(world, u0, u1, v0, v1) {
   const out = [];
   for (let v = v0; v <= v1; v++) {
     for (let u = u0; u <= u1; u++) {
-      for (let i = 0; i < 24; i++) {
-        const { x, y } = boardCoords(u, v, i);
+      for (let i = 0; i < world.size.w * world.size.h; i++) {
+        const { x, y } = boardCoords(u, v, i, world.size);
         const bd = world.board(x, y);
         if (bd.links) out.push(bd);
       }

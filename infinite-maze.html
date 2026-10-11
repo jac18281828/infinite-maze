@@ -758,12 +758,13 @@ return { BW, BH, NCELL, MAX_REROLL, MAX_SWAPS, MAX_BLOCKS, BLOCK_DRAWS, CARVE_CE
 // src/world/band.mjs
 const __m3 = (() => {
 const { sfc32, u32 } = __m1;
-// Band maze (spec section 3): a tomb's 6x4 boards form a tree of a trunk from
-// its first entry to its exit board, tributaries joining every other entry,
-// and dead-end branches at most two boards deep. Board index i = 6 * row + x.
+// Band maze (spec section 3): a tomb's W x H boards form a tree of a trunk
+// from its first entry to its exit board, tributaries joining every other
+// entry, and dead-end branches at most two boards deep. Board index
+// i = W * row + column.
 
 
-/** Tomb size per difficulty, in boards; `hard` is the original 6x4 world. */
+/** Tomb size per difficulty, in boards. */
 const DIFFICULTY = {
   easy: { w: 3, h: 2 },
   medium: { w: 4, h: 3 },
@@ -772,7 +773,7 @@ const DIFFICULTY = {
 const DIFFICULTIES = Object.keys(DIFFICULTY);
 const MAX_DEPTH = 2;
 
-/** The route's minimum length: half the tomb's boards. */
+/** The trunk's minimum length: half the tomb's boards. */
 function minRoute(size) {
   return (size.w * size.h) >> 1;
 }
@@ -781,7 +782,7 @@ function minRoute(size) {
 const BDX = [1, 0, -1, 0];
 const BDY = [0, 1, 0, -1];
 
-function boardNeighbor(i, d, size = DIFFICULTY.hard) {
+function boardNeighbor(i, d, size) {
   const x = (i % size.w) + BDX[d], y = ((i / size.w) | 0) + BDY[d];
   if (x < 0 || x >= size.w || y < 0 || y >= size.h) return -1;
   return y * size.w + x;
@@ -841,8 +842,8 @@ function attachDeadEnds(rng, depth, parent, size) {
  * and the board joined. The unused component holding `from` touches the
  * tree, so the search always ends.
  */
-function dfsJoin(rng, from, inTree) {
-  const seen = new Uint8Array(NBOARD);
+function dfsJoin(rng, from, inTree, size) {
+  const seen = new Uint8Array(size.w * size.h);
   const stack = [from];
   seen[from] = 1;
   const open = [];
@@ -850,7 +851,7 @@ function dfsJoin(rng, from, inTree) {
     const top = stack[stack.length - 1];
     open.length = 0;
     for (let d = 0; d < 4; d++) {
-      const n = boardNeighbor(top, d);
+      const n = boardNeighbor(top, d, size);
       if (n >= 0 && !seen[n]) open.push(n);
     }
     if (open.length === 0) { stack.pop(); continue; }
@@ -862,11 +863,11 @@ function dfsJoin(rng, from, inTree) {
 }
 
 /**
- * The band tree of tomb (u, v). `walls` lists its wall doors, the exit
- * first, as `createFlow` gives them. The entries are the in-door boards in
- * wall order, or for a source tomb its single board S. The trunk runs from
- * the first entry to the exit board X; each later entry outside the tree
- * joins it by a tributary; dead ends hang off both.
+ * The band tree of tomb (u, v) of `size` boards. `walls` lists its wall
+ * doors, the exit first, as `createFlow` gives them. The entries are the
+ * in-door boards in wall order, or for a source tomb its single board S. The
+ * trunk runs from the first entry to the exit board X; each later entry
+ * outside the tree joins it by a tributary; dead ends hang off both.
  *
  * Per board i: `routeIndex[i]` is the index along its own route or -1,
  * `depth[i]` is 0 on a route, 1..2 on a dead end, -1 for rock, and
@@ -875,21 +876,22 @@ function dfsJoin(rng, from, inTree) {
  * the in-door direction, or -1 for S. `dropTributary` leaves each tributary
  * unjoined, a broken world.
  */
-function buildTombTree(H, u, v, walls, { dropTributary = false } = {}) {
+function buildTombTree(H, u, v, walls, size, { dropTributary = false } = {}) {
+  const n = size.w * size.h, min = minRoute(size);
   const exit = walls[0].dir, X = walls[0].i;
   const ins = walls.slice(1);
   const source = ins.length === 0;
-  const entries = source ? [u32(H('source', u, v)) % NBOARD] : ins.map((w) => w.i);
+  const entries = source ? [u32(H('source', u, v)) % n] : ins.map((w) => w.i);
   for (let k = 0; ; k++) {
     const rng = sfc32(H('band', u, v, k));
-    const trunk = dfsRoute(rng, entries[0], X);
+    const trunk = dfsRoute(rng, entries[0], X, size);
     // A trunk of the one board X is exempt: no reroll lengthens it.
-    if (trunk.length < MIN_ROUTE && entries[0] !== X) continue;
-    const routeIndex = new Int8Array(NBOARD).fill(-1);
-    const depth = new Int8Array(NBOARD).fill(-1);
-    const next = new Int8Array(NBOARD).fill(-1);
-    const routeOf = new Int8Array(NBOARD).fill(-1);
-    const inTree = new Uint8Array(NBOARD);
+    if (trunk.length < min && entries[0] !== X) continue;
+    const routeIndex = new Int8Array(n).fill(-1);
+    const depth = new Int8Array(n).fill(-1);
+    const next = new Int8Array(n).fill(-1);
+    const routeOf = new Int8Array(n).fill(-1);
+    const inTree = new Uint8Array(n);
     const routes = [trunk];
     const routeEntry = [source ? -1 : ins[0].dir];
     const lay = (route, r, last) => {
@@ -901,14 +903,14 @@ function buildTombTree(H, u, v, walls, { dropTributary = false } = {}) {
     lay(trunk, 0, -1);
     for (let j = 1; j < entries.length; j++) {
       if (inTree[entries[j]]) continue;
-      const { stack, join } = dfsJoin(rng, entries[j], inTree);
+      const { stack, join } = dfsJoin(rng, entries[j], inTree, size);
       routes.push(stack);
       routeEntry.push(ins[j].dir);
       lay(stack, routes.length - 1, dropTributary ? -1 : join);
     }
-    const parent = new Int8Array(NBOARD).fill(-1);
-    attachDeadEnds(rng, depth, parent);
-    for (let i = 0; i < NBOARD; i++) if (depth[i] > 0) next[i] = parent[i];
+    const parent = new Int8Array(n).fill(-1);
+    attachDeadEnds(rng, depth, parent, size);
+    for (let i = 0; i < n; i++) if (depth[i] > 0) next[i] = parent[i];
     return { u, v, k, exit, X, walls, source, entries, routes, routeEntry, routeOf, routeIndex, depth, next };
   }
 }
@@ -918,12 +920,11 @@ return { DIFFICULTY, DIFFICULTIES, MAX_DEPTH, minRoute, BDX, BDY, boardNeighbor,
 // src/world/flow.mjs
 const __m4 = (() => {
 const { u32 } = __m1;
-const { BANDW, BANDH } = __m3;
 // The tomb plane's flow: each tomb (u, v) leaves up, left or right, never
 // down. Every side wall points one way, so two side neighbours never exit
 // into each other, and with nothing leaving down no way on can loop.
-// Directions match board directions: 0 right, 1 up, 2 left, 3 down.
-
+// Directions match board directions: 0 right, 1 up, 2 left, 3 down. Exits
+// never read the tomb size, so every difficulty shares one flow.
 
 
 const RIGHT = 0;
@@ -954,24 +955,26 @@ function exitDir(H, u, v, ignoreWalls = false) {
   return canR ? RIGHT : LEFT;
 }
 
-/** Board column of the door between tombs (u, v) and (u, v + 1). */
-function floorColumn(H, u, v) {
-  return u32(H('tfloor', u, v)) % BANDW;
+/** Board column of the door between tombs (u, v) and (u, v + 1), for tombs of `size` boards. */
+function floorColumn(H, u, v, size) {
+  return u32(H('tfloor', u, v)) % size.w;
 }
 
-/** Board row of the door between tombs (u, v) and (u + 1, v). */
-function sideRow(H, u, v) {
-  return u32(H('tside', u, v)) % BANDH;
+/** Board row of the door between tombs (u, v) and (u + 1, v), for tombs of `size` boards. */
+function sideRow(H, u, v, size) {
+  return u32(H('tside', u, v)) % size.h;
 }
 
 /**
- * The tomb plane's flow with memoized exits. `exit(u, v)` is the exit
- * direction; `walls(u, v)` lists the tomb's wall doors as { dir, i }, i the
- * board index, the exit first, then the in-doors in wall order floor, left,
- * right. A broken world with `ignoreWalls` keys each side door by the tomb
- * that exits through it, so a pair exiting into each other holds two doors.
+ * The tomb plane's flow with memoized exits, for tombs of `size` boards.
+ * `exit(u, v)` is the exit direction; `walls(u, v)` lists the tomb's wall
+ * doors as { dir, i }, i the board index, the exit first, then the in-doors
+ * in wall order floor, left, right. A broken world with `ignoreWalls` keys
+ * each side door by the tomb that exits through it, so a pair exiting into
+ * each other holds two doors.
  */
-function createFlow(H, { ignoreWalls = false } = {}) {
+function createFlow(H, size, { ignoreWalls = false } = {}) {
+  const { w, h } = size;
   const exits = new Map();
   const key = (u, v) => `${u},${v}`;
 
@@ -984,23 +987,23 @@ function createFlow(H, { ignoreWalls = false } = {}) {
 
   /** Board row of the side door tomb (u, v) exits through toward d. */
   function exitRow(u, v, d) {
-    if (ignoreWalls) return sideRow(H, u, v);
-    return sideRow(H, d === RIGHT ? u : u - 1, v);
+    if (ignoreWalls) return sideRow(H, u, v, size);
+    return sideRow(H, d === RIGHT ? u : u - 1, v, size);
   }
 
   /** Board index, within tomb (u, v), of the door it exits through. */
   function exitIndex(u, v) {
     const d = exit(u, v);
-    if (d === UP) return (BANDH - 1) * BANDW + floorColumn(H, u, v);
+    if (d === UP) return (h - 1) * w + floorColumn(H, u, v, size);
     const row = exitRow(u, v, d);
-    return row * BANDW + (d === RIGHT ? BANDW - 1 : 0);
+    return row * w + (d === RIGHT ? w - 1 : 0);
   }
 
   function walls(u, v) {
     const out = [{ dir: exit(u, v), i: exitIndex(u, v) }];
-    if (exit(u, v - 1) === UP) out.push({ dir: DOWN, i: floorColumn(H, u, v - 1) });
-    if (exit(u - 1, v) === RIGHT) out.push({ dir: LEFT, i: exitRow(u - 1, v, RIGHT) * BANDW });
-    if (exit(u + 1, v) === LEFT) out.push({ dir: RIGHT, i: exitRow(u + 1, v, LEFT) * BANDW + BANDW - 1 });
+    if (exit(u, v - 1) === UP) out.push({ dir: DOWN, i: floorColumn(H, u, v - 1, size) });
+    if (exit(u - 1, v) === RIGHT) out.push({ dir: LEFT, i: exitRow(u - 1, v, RIGHT) * w });
+    if (exit(u + 1, v) === LEFT) out.push({ dir: RIGHT, i: exitRow(u + 1, v, LEFT) * w + w - 1 });
     return out;
   }
 
@@ -1022,7 +1025,7 @@ const __m5 = (() => {
 const { makeHasher, worldKey, u32, toHex, writeInt64BE } = __m1;
 const { sha3_256 } = __m0;
 const { BW, BH, NCELL, COST, CARVE_CELLS, buildBoardMaze, cellNeighbor, flameCell } = __m2;
-const { DIFFICULTY, BANDW, BANDH, NBOARD, BDX, BDY, buildTombTree } = __m3;
+const { DIFFICULTY, BDX, BDY, buildTombTree } = __m3;
 const { createFlow, TDX, TDY } = __m4;
 // The world: tombs tiling the plane, their band trees, boards with doors,
 // flames and the cell graph across seams. Everything derives from H; caches
@@ -1037,9 +1040,9 @@ const GAP_LIMIT_MS = 150000;
 // Saves hold |x| and |y| below 2^25, where p stays an exact integer.
 const SAVE_LIMIT = 33554432;
 
-/** Tomb (u, v) holding board (x, y). */
-function tombOf(x, y) {
-  return { u: Math.floor(x / BANDW), v: Math.floor(y / BANDH) };
+/** Tomb (u, v) holding board (x, y), for tombs of `size` boards. */
+function tombOf(x, y, size) {
+  return { u: Math.floor(x / size.w), v: Math.floor(y / size.h) };
 }
 
 const zig = (n) => (n >= 0 ? 2 * n : -2 * n - 1);
@@ -1068,15 +1071,15 @@ function boardOfPos(p) {
   return r < s ? { x: unzig(r), y: unzig(s) } : { x: unzig(s), y: unzig(r - s) };
 }
 
-/** Board (x, y) at index i = 6 * row + column within tomb (u, v). */
-function boardCoords(u, v, i) {
-  return { x: BANDW * u + (i % BANDW), y: BANDH * v + ((i / BANDW) | 0) };
+/** Board (x, y) at index i = W * row + column within tomb (u, v) of `size` boards. */
+function boardCoords(u, v, i, size) {
+  return { x: size.w * u + (i % size.w), y: size.h * v + ((i / size.w) | 0) };
 }
 
-/** Index of board (x, y) within its tomb. */
-function boardIndex(x, y) {
-  const { u, v } = tombOf(x, y);
-  return (y - BANDH * v) * BANDW + (x - BANDW * u);
+/** Index of board (x, y) within its tomb of `size` boards. */
+function boardIndex(x, y, size) {
+  const { u, v } = tombOf(x, y, size);
+  return (y - size.h * v) * size.w + (x - size.w * u);
 }
 
 /** Door cell on wall d (E N W S) of board (x, y); both sides read one key. */
@@ -1127,7 +1130,7 @@ function midpointIndex(cum, total) {
 function boardLinks(t, i) {
   const dirs = new Set();
   if (t.next[i] >= 0) dirs.add(dirBetween(i, t.next[i]));
-  for (let n = 0; n < NBOARD; n++) if (t.next[n] === i) dirs.add(dirBetween(i, n));
+  for (let n = 0; n < t.next.length; n++) if (t.next[n] === i) dirs.add(dirBetween(i, n));
   for (const w of t.walls) if (w.i === i) dirs.add(w.dir);
   const r = t.routeIndex[i];
   let aDir, bDir = -1;
@@ -1216,7 +1219,7 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
   if (!Object.hasOwn(DIFFICULTY, difficulty)) throw new Error(`unknown difficulty ${difficulty}`);
   const size = DIFFICULTY[difficulty];
   const H = makeHasher(worldKey(code));
-  const flow = createFlow(H, faults);
+  const flow = createFlow(H, size, faults);
   const tombs = new Map();
   const boards = new Map();
   const flameSets = new Map();
@@ -1226,28 +1229,21 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
   function tomb(u, v) {
     const k = tkey(u, v);
     let t = tombs.get(k);
-    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), faults); tombs.set(k, t); }
+    if (!t) { t = buildTombTree(H, u, v, flow.walls(u, v), size, faults); tombs.set(k, t); }
     return t;
   }
 
-  /** Board (x, y); a column outside [0, W) is rock, built fresh and never cached. */
   function board(x, y) {
-    if (x < 0 || x >= size.w) return outside(x, y);
-    const p = posOf(x, y, size);
+    const p = posOf(x, y);
     let bd = boards.get(p);
     if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); }
     return bd;
   }
 
-  // Its p is null: posOf there names a board inside the tomb.
-  function outside(x, y) {
-    return rock({ x, y, p: null, band: bandOf(y, size), index: -1, routeIndex: -1, depth: -1 });
-  }
-
   function buildBoard(x, y, p) {
-    const { u, v } = tombOf(x, y);
+    const { u, v } = tombOf(x, y, size);
     const t = tomb(u, v);
-    const i = boardIndex(x, y);
+    const i = boardIndex(x, y, size);
     const base = {
       x, y, p, u, v, index: i, routeIndex: t.routeIndex[i], depth: t.depth[i], entry: t.entries.includes(i),
     };
@@ -1268,7 +1264,7 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
   }
 
   function boardAt(t, i) {
-    const { x, y } = boardCoords(t.u, t.v, i);
+    const { x, y } = boardCoords(t.u, t.v, i, size);
     return board(x, y);
   }
 
@@ -1333,7 +1329,7 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
     if (fs) return fs;
     const t = tomb(u, v);
     const placed = [];
-    for (let i = 0; i < NBOARD; i++) {
+    for (let i = 0; i < t.depth.length; i++) {
       if (t.depth[i] < 0) continue;
       const bd = boardAt(t, i);
       if (t.routeIndex[i] >= 0) {
@@ -1377,13 +1373,12 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
    * entry board those the upstream tomb's chains place there.
    */
   function flamesAt(x, y) {
-    if (x < 0 || x >= size.w) return [];
-    const p = posOf(x, y, size);
+    const p = posOf(x, y);
     let cells = flameCells.get(p);
     if (cells) return cells;
-    const { u, v } = tombOf(x, y);
+    const { u, v } = tombOf(x, y, size);
     const t = tomb(u, v);
-    const i = boardIndex(x, y);
+    const i = boardIndex(x, y, size);
     const set = new Set();
     if (t.depth[i] >= 0) {
       const from = [tombFlames(u, v)];
@@ -1423,7 +1418,7 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
   /** Where a new run starts: tomb (0, 0)'s first entry. */
   function startPoint() {
     const t = tomb(0, 0);
-    const { x, y } = boardCoords(0, 0, t.entries[0]);
+    const { x, y } = boardCoords(0, 0, t.entries[0], size);
     return resumePoint(x, y);
   }
 
@@ -1435,7 +1430,7 @@ function createWorld(code, { difficulty = 'hard', gapLimitMs = GAP_LIMIT_MS, car
     for (const [p, bd] of boards) if (far(bd.u, bd.v)) boards.delete(p);
     for (const p of flameCells.keys()) {
       const { x, y } = boardOfPos(p);
-      const t = tombOf(x, y);
+      const t = tombOf(x, y, size);
       if (far(t.u, t.v)) flameCells.delete(p);
     }
     flow.retain(u, v, 2);
@@ -1496,8 +1491,8 @@ function digestTombs(world, u0, u1, v0, v1) {
         for (const f of chain) { w.i64(f.x); w.i64(f.y); w.u8(f.cell); }
       }
       parts.push(w.done());
-      for (let i = 0; i < NBOARD; i++) {
-        const { x, y } = boardCoords(u, v, i);
+      for (let i = 0; i < world.size.w * world.size.h; i++) {
+        const { x, y } = boardCoords(u, v, i, world.size);
         parts.push(serializeBoard(world, x, y));
       }
     }
@@ -2981,13 +2976,11 @@ return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, fixtureSets, 
 // src/game/map.mjs
 const __m11 = (() => {
 const { BW, BH, NCELL } = __m2;
-const { BANDW, BANDH } = __m3;
 const { tombOf } = __m5;
 // The pause-screen map: what the explorer's trail shows of one tomb. DOM-free.
 // The model holds the walked links, the openings of stood cells, the entered
 // boards, the flames at stood cells and the explorer; it never names a cell
 // the explorer did not stand on or a passage beyond a stub.
-
 
 
 
@@ -2999,9 +2992,9 @@ function mapCells(size) {
 // Each link is listed once, from the end whose direction is one of these.
 const LINE_DIRS = [0, 1, 4, 5];
 
-/** The tomb { u, v } that holds board `bd`. */
-function frameOf(bd) {
-  return tombOf(bd.x, bd.y);
+/** The tomb { u, v } that holds board `bd`, for tombs of `size` boards. */
+function frameOf(bd, size) {
+  return tombOf(bd.x, bd.y, size);
 }
 
 /** The frame one tomb on in the direction of pan key `dir`: 'l', 'r', 'u' or 'd'. */
@@ -3016,13 +3009,15 @@ function sameFrame(f, g) {
 
 /**
  * Lines, stubs, outlines, flames and the explorer of tomb `f`, in frame
- * cells: column (x - 6u) * 12 + cell % 12, row (y - 4v) * 7 + floor(cell /
- * 12), row 0 at the bottom. `at` is the explorer's { bd, cell }.
+ * cells: column (x - Wu) * 12 + cell % 12, row (y - Hv) * 7 + floor(cell /
+ * 12), row 0 at the bottom, for the world's tomb size W x H. `at` is the
+ * explorer's { bd, cell }.
  */
 function mapModel(world, trail, f, at) {
   const lines = [], stubs = [], outlines = [], flames = [];
-  const x0 = BANDW * f.u, y0 = BANDH * f.v;
-  const inFrame = (x, y) => x >= x0 && x < x0 + BANDW && y >= y0 && y < y0 + BANDH;
+  const { w, h } = world.size;
+  const x0 = w * f.u, y0 = h * f.v;
+  const inFrame = (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h;
   const cellAt = (bd, cell) => ({ col: (bd.x - x0) * BW + (cell % BW), row: (bd.y - y0) * BH + ((cell / BW) | 0) });
   const boards = [...trail.values()].filter((t) => inFrame(t.x, t.y)).sort((p, q) => p.y - q.y || p.x - q.x);
   for (const t of boards) {
@@ -3256,7 +3251,6 @@ function createRenderer(canvas, world) {
   }
 
   function boardArt(bx, by) {
-    if (bx < 0 || bx >= world.size.w) return null;
     const bd = world.board(bx, by);
     if (!bd.links) return null;
     let art = boards.get(bd.p);
@@ -3269,14 +3263,14 @@ function createRenderer(canvas, world) {
     const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - 1, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + 1;
     const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - 1, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + 1;
     for (let by = by0; by <= by1 && budget > 0; by++) {
-      for (let bx = Math.max(0, bx0); bx <= Math.min(world.size.w - 1, bx1) && budget > 0; bx++) {
+      for (let bx = bx0; bx <= bx1 && budget > 0; bx++) {
         const bd = world.board(bx, by);
         if (bd.links && !boards.has(bd.p)) { boardArt(bx, by); budget--; }
       }
     }
     if (boards.size > 48) {
       for (const p of boards.keys()) {
-        const { x, y } = boardOfPos(p, world.size);
+        const { x, y } = boardOfPos(p);
         if (Math.abs(x * BOARD_W - cam.x) > 3 * BOARD_W || Math.abs(y * BOARD_H - cam.y) > 3 * BOARD_H) boards.delete(p);
       }
     }
@@ -4636,7 +4630,8 @@ function selftest() {
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
-    planeLeg(world);
+    // The game's default level, MEDIUM, whose tomb (1, 0) starts at column 4.
+    planeLeg(createWorld(SELFTEST_CODE, { difficulty: 'medium' }));
     touchLeg();
     // The verdict waits one task, so queued error and rejection events count.
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
@@ -4647,23 +4642,24 @@ function selftest() {
 
 /**
  * Resumes at the first entry of tomb (1, 0), whose boards lie outside
- * columns 0-5, and throws unless the frame draws the explorer's room as
- * maze: its pixels must differ from the same frame drawn with the
+ * columns 0 to W - 1, and throws unless the frame draws the explorer's room
+ * as maze: its pixels must differ from the same frame drawn with the
  * explorer's board as rock. The explorer stands on its first primary cell,
  * which the carve keeps. Touches no storage and never boots.
  */
 function planeLeg(world) {
   const t = world.tomb(1, 0);
-  const at = boardCoords(1, 0, t.entries[0]);
+  const at = boardCoords(1, 0, t.entries[0], world.size);
   const sim = createSim(world, world.resumePoint(at.x, at.y));
-  if (sim.bd.x < 6) throw new Error(`plane leg: board (${sim.bd.x},${sim.bd.y}) lies in columns 0-5`);
+  const w = world.size.w;
+  if (sim.bd.x < w) throw new Error(`plane leg: board (${sim.bd.x},${sim.bd.y}) lies in columns 0-${w - 1}`);
   const cam = { x: 0, y: 0 };
   snapCam(cam, sim);
   // The inner 28x28 px of the explorer's 32 px room, in view pixels (y down).
   const [nx, ny] = nodeXY(sim.bd, sim.cell);
   const x0 = nx - 14 - Math.round(cam.x) + VIEW_W / 2, y0 = Math.round(cam.y) - (ny + 30) + VIEW_H / 2;
-  const room = (w) => {
-    createRenderer(view, w).scene(sim, cam, 0);
+  const room = (wd) => {
+    createRenderer(view, wd).scene(sim, cam, 0);
     return view.getContext('2d').getImageData(x0, y0, 28, 28).data;
   };
   const rockBoard = { ...sim.bd, kind: 'rock', links: null, doors: [], doorMask: null };
@@ -4729,7 +4725,7 @@ function driveTouch(copied) {
     const carry = { time: s.time, solved: s.solved, lastEntry: s.lastEntry };
     const { w, h } = g.world.size;
     for (let i = 0; i < w * h; i++) {
-      const { x, y } = boardCoords(s.bd.u, s.bd.v, i);
+      const { x, y } = boardCoords(s.bd.u, s.bd.v, i, g.world.size);
       const bd = g.world.board(x, y);
       if (!bd.links || bd.entry || bd === s.bd || bd.p === s.lastEntry) continue;
       g.sim = createSim(g.world, g.world.resumePoint(bd.x, bd.y), carry);
@@ -4842,7 +4838,7 @@ function driveTouch(copied) {
   offEntry();
   click('play', 'pause');
   need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
-  const home = frameOf(g.sim.bd);
+  const home = frameOf(g.sim.bd, g.world.size);
   const framed = (du, dv) => sameFrame(g.frame, { u: home.u + du, v: home.v + dv });
   need(framed(0, 0), 'PAUSE frames the explorer\'s tomb');
   need(load(KEY_SAVE_DIFFICULTY) === g.world.difficulty, 'PAUSE stores the save\'s difficulty');
@@ -4863,18 +4859,18 @@ function driveTouch(copied) {
   click('pause', 'resume');
   need(g.screen === 'play', 'RESUME returns to play');
   // Walk to another cell of the tomb, so a map kept from the last pause shows the old one.
-  const frame = frameOf(g.sim.bd), cell = g.sim.cell, bd = g.sim.bd;
+  const frame = frameOf(g.sim.bd, g.world.size), cell = g.sim.cell, bd = g.sim.bd;
   for (const [h, v] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     for (let i = 0; i < 600 && g.sim.cell === cell && g.sim.bd === bd; i++) step(g.sim, h, v);
     if (g.sim.cell !== cell || g.sim.bd !== bd) break;
   }
-  need(sameFrame(frameOf(g.sim.bd), frame) && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its tomb');
+  need(sameFrame(frameOf(g.sim.bd, g.world.size), frame) && (g.sim.cell !== cell || g.sim.bd !== bd), 'the explorer walks to another cell of its tomb');
   // A torch and clock that a rebuild from the save would reset.
   const run = g.sim, runWorld = g.world, runCode = g.code;
   run.burn = BURN_S / 2;
   run.time = 77;
   click('play', 'pause');
-  need(sameFrame(g.frame, frameOf(g.sim.bd)), 'PAUSE frames the explorer\'s tomb again');
+  need(sameFrame(g.frame, frameOf(g.sim.bd, g.world.size)), 'PAUSE frames the explorer\'s tomb again');
   const after = pauseModel(g).explorer;
   need(after && (!before || after.col !== before.col || after.row !== before.row), 'PAUSE draws the explorer where it now stands');
   click('pause', 'title');
@@ -4932,7 +4928,7 @@ function driveTouch(copied) {
   g.screen = 'play';
   g.keys.clear();
   press('Escape', 'Escape');
-  need(g.screen === 'pause' && sameFrame(g.frame, frameOf(g.sim.bd)), 'Esc pauses on the explorer\'s tomb');
+  need(g.screen === 'pause' && sameFrame(g.frame, frameOf(g.sim.bd, g.world.size)), 'Esc pauses on the explorer\'s tomb');
   // The first pause frame lands half a second into the page and shows the explorer's dot.
   draw(g, 0.5);
   const e = pauseModel(g).explorer, o = mapOrigin(g.world);
@@ -5015,7 +5011,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   // The best tomb is per seed and difficulty; HARD keeps the bare seed code.
   click('title', 'resume');
   store(KEY_BEST, '{}');
-  g.sim.maxBand = 7;
+  g.sim.solved = new Set(Array.from({ length: 7 }, (_, i) => `${i},0`));
   endRun(g);
   draw(g, 0);
   const bests = JSON.parse(load(KEY_BEST));

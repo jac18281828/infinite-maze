@@ -304,10 +304,11 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     }
   });
 
-test('the self-test plane leg fails when the renderer refuses board columns outside 0-5',
+test('the self-test plane leg fails when the renderer refuses board columns outside the tomb at x 0 to W - 1',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
-    const guarded = html.replace('  function boardArt(bx, by) {\n', '  function boardArt(bx, by) {\n    if (bx < 0 || bx >= 6) return null;\n');
-    assert.notEqual(guarded, html);
+    const from = '  function boardArt(bx, by) {\n';
+    assert.equal(html.split(from).length, 2);
+    const guarded = html.replace(from, `${from}    if (bx < 0 || bx >= world.size.w) return null;\n`);
     assert.match(verdict(guarded, '1280,720'), /^fail: plane leg/);
   });

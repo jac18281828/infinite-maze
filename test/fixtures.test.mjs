@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld } from '../src/world/world.mjs';
+import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import { createSim, nodeXY } from '../src/game/sim.mjs';
@@ -13,11 +13,12 @@ import { createRenderer } from '../src/game/render.mjs';
 const world = createWorld('00000000');
 const NE = 16, NW = 32;
 
-/** Tree boards of bands 0..9 with their masks and fixture sets. */
+/** Tree boards of tombs (0, 0)..(0, 9) with their masks and fixture sets. */
 const boards = [];
-for (let b = 0; b < 10; b++) {
-  for (let i = 0; i < 24; i++) {
-    const bd = world.board(i % 6, 4 * b + Math.floor(i / 6));
+for (let v = 0; v < 10; v++) {
+  for (let i = 0; i < world.size.w * world.size.h; i++) {
+    const { x, y } = boardCoords(0, v, i, world.size);
+    const bd = world.board(x, y);
     if (!bd.links) continue;
     const mask = boardMask(bd);
     boards.push({ bd, mask, fx: fixtureSets(bd, mask) });
@@ -32,7 +33,7 @@ const supportOf = (Y, t) => (t < 16 ? Y + 7 : Y + 8 + t);
 const colX = (X, t, dir) => (dir > 0 ? X + 24 + t : X + 23 - t);
 
 test('the sample holds the stairs the diagnosis counted', () => {
-  assert.equal(flights.length, 1158);
+  assert.equal(flights.length, 1183);
 });
 
 test('every stair pixel is mask air, at row Y+8 or above, inside its 48 columns and outside the side room', () => {
