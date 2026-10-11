@@ -291,6 +291,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 3) % 3', /^fail: touch ArrowRight steps the setting to HARD/],
       ["return difficulty === 'hard' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
       ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", "storedDifficulty(KEY_SAVE_DIFFICULTY, 'medium')", /^fail: touch RESUME plays a save with no stored difficulty at HARD/],
+      ["const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';", "const KEY_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';", /^fail: touch RESUME plays a save with no stored difficulty at HARD/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.key === 'Escape') { if (!e.repeat) resume(g); }", /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "(e.code === 'KeyP' && !e.repeat) || e.key === 'Escape') { resume(g); }", /^fail: touch the title ignores an auto-repeated Esc/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.code === 'KeyP' || (e.key === 'Escape' && !e.repeat)) { resume(g); }", /^fail: touch the title ignores an auto-repeated P/],

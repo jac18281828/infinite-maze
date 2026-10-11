@@ -4533,10 +4533,12 @@ const { RGB, idx } = __m8;
 const KEY_SAVE = 'infinite-maze.plane.save';
 // The difficulty of the run that wrote KEY_SAVE; absent means HARD, the
 // only size before difficulties.
-const KEY_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
+const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
 const KEY_BEST = 'infinite-maze.plane.best';
+// The stacked world's save difficulty, which a plane save never reads.
+const KEY_STACKED_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
 // A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
 const TYPED_MAX = 26;
 
@@ -4581,7 +4583,7 @@ function storedDifficulty(key, fallback) {
 /** The stored save read at the difficulty that wrote it, or null. */
 function readSave() {
   const difficulty = storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard');
-  const s = decodeSave(load(KEY_SAVE) || '', DIFFICULTY[difficulty]);
+  const s = decodeSave(load(KEY_SAVE) || '');
   return s && { ...s, difficulty };
 }
 
@@ -4691,9 +4693,9 @@ function planeLeg(world) {
  * `touch <what>` on the first miss.
  */
 function touchLeg() {
-  // The leg writes the save, its difficulty, the setting and the best score;
-  // it restores the player's own.
-  const kept = [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST].map((k) => [k, load(k)]);
+  // The leg writes the save, its difficulty, the setting, the best score and
+  // the stacked world's save difficulty; it restores the player's own.
+  const kept = [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_DIFFICULTY, KEY_BEST, KEY_STACKED_SAVE_DIFFICULTY].map((k) => [k, load(k)]);
   // COPY writes through a fake clipboard, gone again however the leg ends.
   const copied = [];
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { copied.push(t); } }, configurable: true });
@@ -4996,9 +4998,11 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
-  // A save from before difficulties, with none stored beside it, plays at HARD.
+  // A save from before difficulties, with none stored beside it, plays at HARD,
+  // whatever difficulty the stacked world's save left.
   const old = saveAt('hard');
   unstore(KEY_SAVE_DIFFICULTY);
+  store(KEY_STACKED_SAVE_DIFFICULTY, 'easy');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   need(sized('easy'), 'the setting moves to EASY over a save with no difficulty');
@@ -5153,16 +5157,16 @@ function resume(g) {
 }
 
 function hereCode(g) {
-  return encodeSave(g.code, g.sim.bd.x, g.sim.bd.y, g.world.size);
+  return encodeSave(g.code, g.sim.bd.x, g.sim.bd.y);
 }
 
 function entryCode(g) {
-  const { x, y } = boardOfPos(g.sim.lastEntry, g.world.size);
-  return encodeSave(g.code, x, y, g.world.size);
+  const { x, y } = boardOfPos(g.sim.lastEntry);
+  return encodeSave(g.code, x, y);
 }
 
 function submitTyped(g) {
-  const save = decodeSave(g.typing, g.world.size);
+  const save = decodeSave(g.typing);
   if (save) {
     if (save.code !== g.code) useCode(g, save.code);
     g.typing = null;
@@ -5383,7 +5387,7 @@ function drawPause(g, t = 0) {
   const r = g.renderer;
   r.panel(50, 2, 220, 176);
   r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
-  r.text(`TOMB ${g.frame.u} ${g.frame.v}`, 267, 16, 'a', { align: 'right' });
+  r.text(`TOMB ${g.sim.solved.size}`, 267, 16, 'a', { align: 'right' });
   if (g.pausedAt === null) g.pausedAt = t;
   const o = mapOrigin(g.world);
   r.drawMap(pauseModel(g), o.x, o.y, t - g.pausedAt);
