@@ -654,9 +654,10 @@ the explorer drawn at feet `f`, the whole-pixel camera is `round(f.x) −
 round(f.x − cam.x)` across and `round(f.y) + round(cam.y − f.y)` up. At the
 28.4 px lag a run holds, the explorer then stands at one screen position
 instead of alternating between two, and it stays on the world pixel
-`round(f)`, so its feet stay on floors and treads. With no explorer the camera
-rounds as is. It scrolls freely across board seams, and rock fills every
-position outside the band trees.
+`round(f)`, so its feet stay on floors and treads, except where `f.y` falls
+exactly on a half pixel, where the sprite sits one pixel lower on screen. With
+no explorer the camera rounds as is. It scrolls freely across board seams, and
+rock fills every position outside the band trees.
 
 **Frames between ticks.** In play, the explorer's feet and the camera centre
 draw between the last two ticks, linearly at the fraction of a tick elapsed
@@ -698,9 +699,9 @@ torch sputtering at low burn.
 ## 9. Runtime
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
-`requestAnimationFrame`, interpolated between ticks (§8). Building a board takes 0.7 ms on average and 17 ms
-at most, and a tomb's board tree 0.04 ms on average and under 1 ms at most,
-measured on node 26.7.0 and an Apple M3 Max.
+`requestAnimationFrame`, interpolated between ticks (§8). Building a board
+takes 0.7 ms on average and 17 ms at most, and a tomb's board tree 0.04 ms on
+average and under 1 ms at most, measured on node 26.7.0 and an Apple M3 Max.
 The audio context is built at boot, suspended, and the first key press or
 touch resumes it and starts the music, as browser autoplay policy requires;
 no sound plays before then, and a browser without WebAudio leaves the game

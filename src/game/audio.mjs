@@ -45,7 +45,9 @@ export function createAudio() {
       ac = new AC();
       graph();
     } catch {
-      ac = null;
+      const dead = ac;
+      ac = master = music = sfx = wobble = noise = null;
+      try { Promise.resolve(dead && dead.close()).catch(() => {}); } catch { /* nothing to close */ }
     }
   }
 

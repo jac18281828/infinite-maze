@@ -4290,7 +4290,9 @@ function createAudio() {
       ac = new AC();
       graph();
     } catch {
-      ac = null;
+      const dead = ac;
+      ac = master = music = sfx = wobble = noise = null;
+      try { Promise.resolve(dead && dead.close()).catch(() => {}); } catch { /* nothing to close */ }
     }
   }
 
@@ -6278,8 +6280,11 @@ function coinLeg(g, { need, click }) {
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
   const [fx, fy] = feet(g.sim);
   need(g.prev && (g.prev.x !== fx || g.prev.y !== fy), 'a tick stores the snapshot before it steps');
-  // Halfway between ticks, so the blended path draws in Chrome.
-  draw(g, 0, 0.5);
+  // Halfway between ticks, the frame draws strictly between the two ticks' feet on the axis that moved.
+  const drawn = draw(g, 0, 0.5);
+  const axis = g.prev.x !== fx ? 'x' : 'y';
+  const latest = axis === 'x' ? fx : fy;
+  need(drawn && (drawn[axis] - g.prev[axis]) * (latest - drawn[axis]) > 0, 'a frame between ticks draws between the two ticks');
   click('play', 'pause');
   tick(g);
   need(g.prev === null, 'a tick off the play screen clears the snapshot');
@@ -6863,8 +6868,19 @@ function drawSplash(g) {
   r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
 }
 
-// The #perf probe; null unless the page loaded with that hash.
+// The #perf probe, null unless the page loaded with that hash, and the time of
+// its last publication to the page.
 let probe = null;
+let published = 0;
+
+/** Records one frame in the probe and, about once a second, publishes its summary. */
+function recordFrame(now, interval, ticks, drawMs) {
+  probe.frame(interval, ticks, drawMs);
+  // Once a second at most, so the DOM write stays out of the frames measured.
+  if (now - published < 1000) return;
+  published = now;
+  document.body.dataset.perf = JSON.stringify(probe.summary());
+}
 
 /** The probe's overlay: interval bars, tick counts and draw cost, below the torch bar. */
 function drawProbe(r, s) {
@@ -6884,14 +6900,16 @@ function drawProbe(r, s) {
 /**
  * Draws one frame. In play, `alpha` in [0, 1] places the explorer and the
  * camera between the last two ticks; every other screen draws the latest state.
+ * Returns the feet and camera it drew in play, else null.
  */
 function draw(g, t, alpha = 1) {
+  let drawn = null;
   if (g.screen === 'title') {
     drawTitle(g, t);
   } else {
     if (g.screen === 'play') {
-      const b = blend(g.prev, snapshot(g.sim, g.cam), alpha);
-      g.renderer.scene(g.sim, { x: b.cx, y: b.cy }, t, [b.x, b.y]);
+      drawn = blend(g.prev, snapshot(g.sim, g.cam), alpha);
+      g.renderer.scene(g.sim, { x: drawn.cx, y: drawn.cy }, t, [drawn.x, drawn.y]);
     } else {
       g.renderer.scene(g.sim, g.cam, t);
     }
@@ -6903,12 +6921,13 @@ function draw(g, t, alpha = 1) {
   if (probe) drawProbe(g.renderer, probe.summary());
   present();
   if (touch) touch.refresh();
+  return drawn;
 }
 
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
   if (location.hash === '#perf') probe = createProbe();
-  let last = performance.now(), acc = 0, published = 0;
+  let last = performance.now(), acc = 0;
   function frame(now) {
     const interval = now - last;
     last = now;
@@ -6917,14 +6936,7 @@ function runLoop(g) {
     for (let i = 0; i < spent.ticks; i++) tick(g);
     const began = probe ? performance.now() : 0;
     draw(g, now / 1000, acc / TICK);
-    if (probe) {
-      probe.frame(interval, spent.ticks, performance.now() - began);
-      // About once a second, so the DOM write stays out of the frames measured.
-      if (now - published >= 1000) {
-        published = now;
-        document.body.dataset.perf = JSON.stringify(probe.summary());
-      }
-    }
+    if (probe) recordFrame(now, interval, spent.ticks, performance.now() - began);
     requestAnimationFrame(frame);
   }
   draw(g, 0);

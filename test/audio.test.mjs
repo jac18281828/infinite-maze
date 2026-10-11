@@ -14,7 +14,7 @@ function node(log) {
 
 /** Installs a fake `AudioContext` in `state`; `resume` answers with `resumed()`. */
 function fakeContext(state, resumed = () => Promise.resolve()) {
-  const log = { constructed: 0, resumes: 0, nodes: 0 };
+  const log = { constructed: 0, resumes: 0, nodes: 0, closes: 0 };
   globalThis.AudioContext = class {
     constructor() {
       log.constructed++;
@@ -24,8 +24,9 @@ function fakeContext(state, resumed = () => Promise.resolve()) {
       this.destination = node(log);
     }
     resume() { log.resumes++; return resumed(); }
+    close() { log.closes++; return Promise.resolve(); }
     createGain() { return node(log); }
-    createBiquadFilter() { return node(log); }
+    createBiquadFilter() { if (this.failAt === 'filter') throw new Error('no filter'); return node(log); }
     createWaveShaper() { return node(log); }
     createOscillator() { return node(log); }
     createBufferSource() { return node(log); }
@@ -118,4 +119,20 @@ test('with no AudioContext, or one whose constructor throws, every call is a no-
   // A context whose graph cannot be built.
   globalThis.AudioContext = class { constructor() { this.state = 'suspended'; } };
   await withAudio(calls);
+});
+
+test('a graph that fails after createGain closes its context and leaves mute and every call silent', async () => {
+  const log = fakeContext('suspended');
+  const Real = globalThis.AudioContext;
+  globalThis.AudioContext = class extends Real { constructor() { super(); this.failAt = 'filter'; } };
+  await withAudio((audio) => {
+    assert.ok(log.nodes > 0, 'the graph got as far as a gain');
+    assert.equal(log.constructed, 1);
+    assert.equal(log.closes, 1, 'the half-built context is closed');
+    assert.doesNotThrow(() => audio.toggleMute());
+    assert.equal(audio.muted, true);
+    audio.start();
+    audio.play('step');
+    assert.equal(log.resumes, 0, 'no context left to resume');
+  });
 });
