@@ -25,6 +25,9 @@ const BUTTONS = {
 // Axis 1 is positive down.
 const AXES = [[0, 'ArrowLeft', 'ArrowRight'], [1, 'ArrowUp', 'ArrowDown']];
 
+// The shared empty list: an idle poll returns it and allocates nothing.
+const NONE = Object.freeze([]);
+
 /** The side (-1, 0 or 1) an axis value holds, given the side it held before. */
 function stickSide(value, was) {
   if (value <= -STICK_ON) return -1;
@@ -44,11 +47,14 @@ export function createGamepad(getGamepads) {
   // Index in the list to { codes: the key codes it holds, sides: its stick's sides }.
   let pads = new Map();
 
+  // The list as the browser hands it, with no copy: Safari lists four null
+  // slots every frame.
   function read() {
     try {
-      return Array.from(getGamepads() || []);
+      const list = getGamepads() || NONE;
+      return typeof list.length === 'number' ? list : Array.from(list);
     } catch {
-      return [];
+      return NONE;
     }
   }
 
@@ -72,10 +78,15 @@ export function createGamepad(getGamepads) {
 
   return {
     poll() {
+      const list = read();
+      let standard = false;
+      for (let i = 0; i < list.length && !standard; i++) standard = !!list[i] && list[i].mapping === 'standard';
+      if (!standard && pads.size === 0) return NONE;
       const next = new Map();
-      read().forEach((pad, index) => {
+      for (let index = 0; index < list.length; index++) {
+        const pad = list[index];
         if (pad && pad.mapping === 'standard') next.set(index, look(pad, pads.get(index)));
-      });
+      }
       const before = union(pads), after = union(next);
       pads = next;
       return [

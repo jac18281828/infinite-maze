@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import v8 from 'node:v8';
 import { createGamepad, STICK_ON, STICK_OFF } from '../src/game/gamepad.mjs';
 
 // A standard gamepad as a browser snapshots it: 17 buttons and 4 axes.
@@ -157,4 +158,20 @@ test('runLoop\'s frame polls the gamepads before it ticks', () => {
   const body = frame[0].slice(frame[0].indexOf('function frame(now) {'));
   const poll = body.indexOf('pollGamepads()'), ticks = body.indexOf('tick(g)');
   assert.ok(poll >= 0 && ticks >= 0 && poll < ticks, 'frame calls pollGamepads() before tick(g)');
+});
+
+test('an idle poll over a list of null slots allocates under 64 bytes', () => {
+  const slots = [null, null, null, null];
+  const reader = createGamepad(() => slots);
+  assert.deepEqual(reader.poll(), []);
+  // The heap counter runs high while the JIT settles or the machine is busy,
+  // so the poll is the least of up to fifty windows after a long warm-up.
+  for (let i = 0; i < 20000; i++) reader.poll();
+  const per = [];
+  while (per.length < 50 && !(Math.min(...per) < 64)) {
+    const before = v8.getHeapStatistics().total_allocated_bytes;
+    for (let i = 0; i < 10000; i++) reader.poll();
+    per.push((v8.getHeapStatistics().total_allocated_bytes - before) / 10000);
+  }
+  assert.ok(Math.min(...per) < 64, `${per.map((b) => b.toFixed(1))} bytes a poll`);
 });
