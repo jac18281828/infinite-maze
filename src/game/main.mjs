@@ -483,6 +483,7 @@ function driveTouch(copied, fake) {
   need(g.code !== runCode, 'RESET changes the preview\'s seed');
   click('title', 'pad');
   click('title', 'resume');
+  need(g.confirm === null, 'RESUME of an open run continues without asking');
   need(g.screen === 'play' && g.sim === run && g.world === runWorld && g.code === runCode, 'pause, TITLE and RESUME return to the same run');
   need(run.burn === BURN_S / 2 && run.time === 77, 'the resumed run keeps its torch and time');
   need(g.difficulty === runWorld.difficulty, 'RESUME moves the setting to the run\'s');
@@ -525,7 +526,7 @@ function driveTouch(copied, fake) {
   twoGamesLeg(g, { need, click });
   splashLeg(g, { need, click, press });
   resumeLeg(g, { need, click });
-  slotLeg(g, { need, click });
+  slotLeg(g, { need, click, press });
   oilLeg(g, { need, click });
   gamepadLeg(g, { need, click, fake });
 
@@ -580,8 +581,15 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
     g.open = null;
     return where;
   };
+  // RESUME with no run open asks CONTINUE?, and the YES key restores the slot.
+  const yes = () => {
+    draw(g, 0);
+    click('confirm', 'yes');
+  };
   const resumesAt = (d, where) => {
     click('title', 'resume');
+    need(g.screen === 'title' && g.confirm !== null, `RESUME with no open run asks CONTINUE? at ${difficultyLabel(d)}`);
+    yes();
     need(g.screen === 'play' && sized(d), `RESUME rebuilds the save at ${difficultyLabel(d)} and moves the setting`);
     need(g.sim !== where.sim && g.sim.bd.x === where.x && g.sim.bd.y === where.y, `the ${difficultyLabel(d)} save resumes on its board`);
   };
@@ -602,13 +610,14 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   need(sized('easy'), 'the setting moves to EASY over an ULTIMATE save');
   // A held P or Esc repeats; the title ignores the repeat, as it does Space's.
   press('KeyP', 'p', true);
-  need(g.screen === 'title', 'the title ignores an auto-repeated P');
+  need(g.screen === 'title' && g.confirm === null, 'the title ignores an auto-repeated P');
   press('Escape', 'Escape', true);
-  need(g.screen === 'title', 'the title ignores an auto-repeated Esc');
+  need(g.screen === 'title' && g.confirm === null, 'the title ignores an auto-repeated Esc');
   const sideNow = g.side;
   press('KeyH', 'h', true);
   need(g.side === sideNow && load(KEY_PAD) === sideNow, 'the title ignores an auto-repeated H');
   click('title', 'resume');
+  yes();
   need(g.screen === 'play' && sized('ultimate') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays the ULTIMATE save on its board');
   click('play', 'pause');
   click('pause', 'title');
@@ -724,6 +733,11 @@ const slotNow = () => parseSlot(load(SLOT_KEY));
 /** True when the game's economy is clean: no slot, wallet 0, empty sets and no record. */
 const isClean = (g) => g.slotId === null && g.wallet === 0 && [...g.coins.values(), ...g.tombs.values()].every((set) => set.size === 0)
   && [...g.paid.values()].every((n) => n === 0);
+
+/** Sends game `h` a keydown, as the window would a key; `h` is a game made by `reload`, with no listener of its own. */
+function keyTo(h, code, key, repeat = false) {
+  onKeyDown(h, new KeyboardEvent('keydown', { code, key, repeat, bubbles: true, cancelable: true }));
+}
 
 /** A fresh game over the same storage, as after a page reload. */
 function reload() {
@@ -877,6 +891,34 @@ function gamepadLeg(g, { need, click, fake }) {
   g.press = 0;
   g.release = 0;
   g.jump = false;
+
+  // CONTINUE? by gamepad: Start asks; A and Start change nothing; Select answers no and B yes.
+  const board = g.world.startPoint().board;
+  putSlot({ save: encodeSave(SELFTEST_CODE, board.x, board.y), solved: fakeSolved(20), wallet: 300 });
+  cleanState(g);
+  g.open = null;
+  g.screen = 'title';
+  draw(g, 0);
+  hold(START);
+  hold();
+  need(g.screen === 'title' && g.confirm !== null, 'RESUME with no open run asks CONTINUE? by a gamepad\'s Start');
+  hold(A);
+  hold();
+  hold(START);
+  hold();
+  need(g.screen === 'title' && g.confirm !== null && isClean(g), 'a gamepad answers CONTINUE? A and Start change nothing');
+  hold(SELECT);
+  hold();
+  need(g.screen === 'title' && g.confirm === null && isClean(g), 'a gamepad answers CONTINUE? Select answers no');
+  hold(START);
+  hold();
+  hold(B);
+  hold();
+  need(g.screen === 'play' && g.wallet === 300 && tombCount(g.sim) === 20, 'a gamepad answers CONTINUE? B answers yes');
+  g.press = 0;
+  g.release = 0;
+  g.jump = false;
+  cleanState(g);
 }
 
 /** The coin steps of the touch leg, from the title with no run open. */
@@ -1074,6 +1116,7 @@ function resumeLeg(g, { need, click }) {
   // The count survives a reload through the slot.
   const resumed = reload();
   resume(resumed);
+  keyTo(resumed, 'KeyY', 'y');
   need(count >= 2 && resumed.screen === 'play' && tombCount(resumed.sim) === count, `RESUME after a reload continues at TOMB ${count}`);
   need(resumed.sim.start.u === 0 && resumed.sim.start.v === 0 && resumed.earned === 0, 'a resumed run keeps its start tomb and earns afresh');
 
@@ -1082,6 +1125,7 @@ function resumeLeg(g, { need, click }) {
     const h = reload();
     h.typing = text;
     submitTyped(h);
+    if (h.confirm) keyTo(h, 'KeyY', 'y');
     return tombCount(h.sim);
   };
   const elsewhere = encodeSave(SELFTEST_CODE, g.sim.bd.x + 1, g.sim.bd.y);
@@ -1093,6 +1137,7 @@ function resumeLeg(g, { need, click }) {
   putSlot({ save: at, solved: fakeSolved(99), record: 100 });
   const late = reload();
   resume(late);
+  keyTo(late, 'KeyY', 'y');
   need(tombCount(late.sim) === 99 && late.paid.get(key) === 100, 'RESUME after a reload continues at TOMB 99');
   const was = late.wallet;
   walkOut(late, 99);
@@ -1102,25 +1147,29 @@ function resumeLeg(g, { need, click }) {
 
 /**
  * The save slot steps of the touch leg, from the title with no run open: a
- * clean start, the slot restored by RESUME, and a new run taking the slot on
- * its first coin.
+ * clean start, CONTINUE? over the slot from RESUME and TYPE CODE, and a new run
+ * taking the slot on its first coin.
  */
-function slotLeg(g, { need, click }) {
+function slotLeg(g, { need, click, press }) {
   const level = 'medium', key = coinKey(SELFTEST_CODE, level);
   setDifficulty(g, level);
   useCode(g, SELFTEST_CODE);
   const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell), first = g.world.startPoint().board;
+  const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
   // The slot holds 300 coins, a collected coin and TOMB 20, at tomb (0, 0)'s first board.
-  const hold = () => putSlot({ save: encodeSave(SELFTEST_CODE, first.x, first.y), solved: fakeSolved(20), wallet: 300, coins: [id], tombs: ['0,0'], record: 20 });
+  const hold = () => putSlot({ save: serial, solved: fakeSolved(20), wallet: 300, coins: [id], tombs: ['0,0'], record: 20 });
   const toTitle = () => {
+    hold();
     cleanState(g);
     g.open = null;
+    g.confirm = null;
     g.typing = null;
     g.screen = 'title';
     draw(g, 0);
   };
   const typeIn = (text) => {
     const realPrompt = window.prompt;
+    draw(g, 0);
     try {
       window.prompt = () => text;
       click('title', 'type');
@@ -1128,40 +1177,99 @@ function slotLeg(g, { need, click }) {
       window.prompt = realPrompt;
     }
   };
+  const tap = (sid, which) => {
+    draw(g, 0);
+    click(sid, which);
+  };
+  // CONTINUE? stands on the title over the slot and has restored nothing.
+  const asks = () => g.screen === 'title' && g.confirm !== null && g.confirm.slot.wallet === 300 && g.confirm.slot.solved.length === 20
+    && isClean(g);
+  const restored = () => g.screen === 'play' && g.slotId === SLOT_BASE.id && g.wallet === 300 && tombCount(g.sim) === 20
+    && g.coins.get(key).has(id);
 
   // A typed serial on another seed starts clean.
-  hold();
   toTitle();
   typeIn('K7Q2-M9XA:13');
   need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'a new serial starts with no coins');
 
-  // RESUME restores the slot's coins and TOMB 20.
+  // RESUME with no run open asks CONTINUE?; N, from RESUME and from TYPE CODE, returns to a clean title and keeps the slot.
   toTitle();
-  click('title', 'resume');
-  need(g.screen === 'play' && g.wallet === 300 && tombCount(g.sim) === 20 && g.coins.get(key).has(id), 'Y restores the slot\'s coins and TOMB 20');
+  tap('title', 'resume');
+  need(asks(), 'RESUME with no open run asks CONTINUE? by the touch RESUME key');
+  press('KeyN', 'n');
+  need(g.screen === 'title' && g.confirm === null && g.open === null && isClean(g) && readSlot().wallet === 300,
+    'N returns to the title with no coins from RESUME');
+  press('KeyP', 'p');
+  need(asks(), 'RESUME with no open run asks CONTINUE? by P');
+  press('KeyN', 'n');
+  typeIn(serial);
+  press('Escape', 'Escape');
+  need(g.screen === 'title' && g.confirm === null, 'Esc answers no to CONTINUE?');
+  typeIn(serial);
+  need(asks(), 'TYPE CODE with the slot\'s serial asks CONTINUE?');
+  press('KeyQ', 'q');
+  need(g.screen === 'title' && g.confirm === null && isClean(g) && readSlot().wallet === 300, 'N returns to the title with no coins from TYPE CODE');
+
+  // CONTINUE? takes no repeated key and no key that answers neither way.
+  press('KeyP', 'p');
+  press('KeyY', 'y', true);
+  press('Enter', 'Enter', true);
+  press('KeyN', 'n', true);
+  press('Escape', 'Escape', true);
+  need(asks(), 'CONTINUE? ignores a repeated key');
+  press('Space', ' ');
+  press('KeyP', 'p');
+  press('KeyL', 'l');
+  need(asks(), 'CONTINUE? ignores a key that answers neither way');
+
+  // Y and Enter restore the slot's coins and TOMB 20.
+  press('KeyY', 'y');
+  need(restored(), 'Y restores the slot\'s coins and TOMB 20');
   walkToItem(g, coin);
   need(g.wallet === 300 && g.earned === 0, 'a coin the slot lists pays nothing again');
+  endRun(g);
+  draw(g, 0);
+  click('over', 'continue');
+  need(g.screen === 'play' && g.slotId === SLOT_BASE.id && g.wallet === 300 && slotNow().id === SLOT_BASE.id, 'Continue keeps the run\'s slot and coins');
+  toTitle();
+  typeIn(serial);
+  press('Enter', 'Enter');
+  need(restored(), 'Enter answers yes to CONTINUE? from TYPE CODE');
 
   // BEGIN after a restored run starts clean.
-  draw(g, 0);
-  click('play', 'pause');
-  click('pause', 'title');
-  click('title', 'begin');
+  endRun(g);
+  tap('over', 'title');
+  tap('title', 'begin');
   need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'BEGIN after a restored run starts with no coins at TOMB 0');
 
-  // A clean run leaves the slot as it was until its first coin.
+  // N, BEGIN and a PAUSE before any coin leave the slot standing.
+  toTitle();
+  tap('title', 'resume');
+  press('KeyN', 'n');
+  tap('title', 'begin');
   draw(g, 0);
   click('play', 'pause');
   const later = reload();
   resume(later);
-  need(later.wallet === 300 && tombCount(later.sim) === 20, 'the slot outlives a clean run until a new run earns');
+  need(later.confirm !== null && later.confirm.slot.wallet === 300 && later.confirm.slot.solved.length === 20,
+    'the slot outlives N until a new run earns');
 
-  // The run's first coin takes the slot, and its wallet counts from 0.
+  // The soft keys answer CONTINUE?.
   toTitle();
-  hold();
-  click('title', 'begin');
+  tap('title', 'resume');
+  tap('confirm', 'no');
+  need(g.screen === 'title' && g.confirm === null && isClean(g), 'the soft keys answer CONTINUE? NO');
+  tap('title', 'resume');
+  tap('confirm', 'yes');
+  need(restored(), 'the soft keys answer CONTINUE? YES');
+
+  // After N, a run on the slot's seed starts at 0, and its first coin takes the slot.
+  toTitle();
+  tap('title', 'resume');
+  press('KeyN', 'n');
+  tap('title', 'begin');
   walkToItem(g, coin);
-  need(g.wallet === 1, 'BEGIN on the slot\'s seed earns from 0');
+  need(g.wallet === 1, 'after N, BEGIN on the slot\'s seed earns from 0');
   const taken = slotNow();
   need(taken.id === g.slotId && taken.id !== SLOT_BASE.id && taken.wallet === 1 && taken.coins.length === 1 && taken.solved.length === 0
     && taken.tombs.length === 0 && taken.record === 0, 'a new run\'s first coin takes the slot');
@@ -1253,6 +1361,8 @@ function createGame() {
   return {
     // A game starts clean: wallet 0, no collected coins, solved tombs or record, and no slot.
     slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map(),
+    // CONTINUE? on the title: { slot }, the stored slot a Y restores; null when not asked.
+    confirm: null,
     // The coins the wallet has gained since the run began; Continue carries them.
     earned: 0,
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
@@ -1355,8 +1465,8 @@ function restore(g, slot) {
 }
 
 /**
- * RESUME: back to the open run unchanged, or with none open, the stored slot
- * restored. Either way the setting follows the run.
+ * RESUME: back to the open run unchanged, or with none open, CONTINUE? over the
+ * stored slot. Either way the setting follows the run once restored.
  */
 function resume(g) {
   const o = g.open;
@@ -1368,7 +1478,21 @@ function resume(g) {
     return;
   }
   const slot = readSlot();
-  if (slot) restore(g, slot);
+  if (slot) g.confirm = { slot };
+}
+
+/** Answers CONTINUE?: yes restores the slot it names, no starts the title clean. */
+function confirmKey(g, e) {
+  if (e.repeat) return;
+  if (e.code === 'KeyY' || e.key === 'Enter') {
+    const { slot } = g.confirm;
+    g.confirm = null;
+    restore(g, slot);
+  } else if (e.code === 'KeyN' || e.code === 'KeyQ' || e.key === 'Escape') {
+    g.confirm = null;
+    cleanState(g);
+    useCode(g, g.code);
+  }
 }
 
 function hereCode(g) {
@@ -1386,7 +1510,11 @@ function submitTyped(g) {
     g.typing = null;
     // A code carries no count or coins: only the slot's own serial restores the slot.
     const slot = readSlot(), kept = slot && decodeSave(slot.save);
-    if (kept && kept.code === save.code && kept.p === save.p) { restore(g, slot); return; }
+    if (kept && kept.code === save.code && kept.p === save.p) {
+      if (save.code !== g.code) useCode(g, save.code);
+      g.confirm = { slot };
+      return;
+    }
     cleanState(g);
     if (save.code !== g.code) useCode(g, save.code);
     beginSaved(g, save.p, null);
@@ -1405,6 +1533,7 @@ function typingKey(g, e) {
 }
 
 function titleKey(g, e) {
+  if (g.confirm) { confirmKey(g, e); return; }
   if (g.typing !== null) { typingKey(g, e); return; }
   const at = DIFFICULTIES.indexOf(g.difficulty);
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) beginClean(g);
@@ -1591,9 +1720,16 @@ function drawTitle(g, t) {
   r.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   r.text('INFINITE MAZE', VIEW_W / 2, 18, 'm', { align: 'center', scale: 2 });
   r.text('A TOMB WITHOUT END', VIEW_W / 2, 38, 'a', { align: 'center' });
-  r.panel(62, 50, 196, saved || g.typing !== null ? 100 : 88);
-  r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 58, 'i', { align: 'center' });
-  if (g.typing !== null) {
+  r.panel(62, 50, 196, g.confirm || saved || g.typing !== null ? 100 : 88);
+  if (!g.confirm) r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 58, 'i', { align: 'center' });
+  if (g.confirm) {
+    const { save, level, solved, wallet } = g.confirm.slot;
+    r.text('CONTINUE?', VIEW_W / 2, 58, 'i', { align: 'center' });
+    r.text(save, 72, 74, 'c');
+    r.text(`${difficultyLabel(level)}  TOMB ${solved.length}`, 72, 86, 'b');
+    r.text(`COINS  ${wallet}`, 72, 98, 'b');
+    r.text('Y YES  N NO', 72, 114, 'p');
+  } else if (g.typing !== null) {
     // No label, so TYPED_MAX characters and the cursor fit the panel.
     r.text(`${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 74, 'c');
     r.text('ENTER  ACCEPT', 72, 90, 'b');
@@ -1748,7 +1884,7 @@ function boot() {
   };
   touch = createTouch({
     state: () => ({
-      screen: g.screen, typing: g.typing !== null, muted: g.audio.muted, difficulty: g.difficulty, side: g.side,
+      screen: g.screen, typing: g.typing !== null, confirm: g.confirm !== null, muted: g.audio.muted, difficulty: g.difficulty, side: g.side,
       resume: g.screen === 'title' && (g.open !== null || readSave() !== null),
     }),
     onMode: refit,

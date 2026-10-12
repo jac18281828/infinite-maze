@@ -150,7 +150,7 @@ test('every soft key names a key its screen handler accepts', () => {
     assert.ok(m, `${name} found`);
     return m[0];
   };
-  const handler = { title: 'titleKey', typing: 'typingKey', play: 'playKey', pause: 'pauseKey', over: 'overKey', splash: 'splashKey' };
+  const handler = { title: 'titleKey', typing: 'typingKey', confirm: 'confirmKey', play: 'playKey', pause: 'pauseKey', over: 'overKey', splash: 'splashKey' };
   for (const [sid, list] of Object.entries(SOFT)) {
     for (const k of list) {
       if (k.act === 'type') { assert.match(body('titleKey'), /'KeyT'/); continue; }
@@ -177,6 +177,7 @@ test('PANEL_X matches the panels main.mjs draws', () => {
   };
   assert.deepEqual(PANEL_X.title, extent('drawTitle'));
   assert.deepEqual(PANEL_X.typing, extent('drawTitle'));
+  assert.deepEqual(PANEL_X.confirm, extent('drawTitle'));
   assert.deepEqual(PANEL_X.pause, extent('drawPause'));
   assert.deepEqual(PANEL_X.over, extent('drawOver'));
   assert.deepEqual(PANEL_X.splash, extent('drawSplash'));
@@ -213,6 +214,8 @@ test('soft keys follow the game state', () => {
   assert.deepEqual(ids({ screen: 'title', typing: false, resume: false }), ['begin', 'reset', 'type', 'difficulty', 'copy', 'sound', 'pad']);
   assert.deepEqual(ids({ screen: 'title', typing: false, resume: true }), ['resume', 'begin', 'reset', 'type', 'difficulty', 'copy', 'sound', 'pad']);
   assert.deepEqual(ids({ screen: 'title', typing: true, resume: true }), ['accept', 'cancel']);
+  assert.deepEqual(ids({ screen: 'title', typing: false, confirm: true, resume: true }), ['yes', 'no']);
+  assert.deepEqual(softKeys({ screen: 'title', confirm: true }).map((k) => [k.text, k.code, k.key]), [['YES', 'KeyY', 'y'], ['NO', 'KeyN', 'n']]);
   assert.deepEqual(ids({ screen: 'play' }), ['pause']);
   assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'copy', 'sound', 'title']);
   assert.deepEqual(ids({ screen: 'over' }), ['continue', 'copy', 'title']);
@@ -238,8 +241,8 @@ const inside = (r, o) => r.x >= o.x - 1e-9 && r.y >= o.y - 1e-9 && r.x + r.w <= 
 test('soft keys are at least 44 px, in the safe area, and clear of the panel in overlay mode', () => {
   for (const spec of [PORTRAIT, LANDSCAPE, LAND_375, DESKTOP, SHORT, BIG, WIDE_320]) {
     const lay = layout(spec);
-    for (const sid of ['title', 'typing', 'pause', 'over', 'splash', 'play']) {
-      const state = { screen: sid === 'typing' ? 'title' : sid, typing: sid === 'typing', resume: true, difficulty: 'medium' };
+    for (const sid of ['title', 'typing', 'confirm', 'pause', 'over', 'splash', 'play']) {
+      const state = { screen: sid === 'typing' || sid === 'confirm' ? 'title' : sid, typing: sid === 'typing', confirm: sid === 'confirm', resume: true, difficulty: 'medium' };
       const labels = softKeys(state).map((k) => k.text);
       const rects = keyRects(lay, sid, labels);
       assert.equal(rects.length, labels.length);
@@ -471,7 +474,6 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
     // Each difficulty, pause-key, coin, splash, oil, pad-side, fire and gamepad rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
-      ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
       ['  keepSetting(g, slot.level);\n', '  void slot;\n', /^fail: touch RESUME rebuilds the save at HARD/],
       ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 4) % 4', /^fail: touch ArrowRight steps the setting to ULTIMATE/],
       ["return difficulty === 'ultimate' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
@@ -483,8 +485,12 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
       ["    slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map(),\n", "    slotId: null, serial: '', wallet: (readSlot() || { wallet: 0 }).wallet, coins: new Map(), tombs: new Map(), paid: new Map(),\n", /^fail: touch boot starts clean/],
       ['function beginClean(g) {\n  cleanState(g);\n', 'function beginClean(g) {\n', /^fail: touch BEGIN after a restored run starts with no coins/],
-      ['  if (g.slotId === null) return;\n  g.serial = text;', '  g.serial = text;', /^fail: touch the slot outlives a clean run until a new run earns/],
-      ['const same = held !== null && held.id === state.id;', 'const same = held !== null && held.save.slice(0, 9) === state.save.slice(0, 9) && held.level === state.level;', /^fail: touch BEGIN on the slot's seed earns from 0/],
+      ['  if (g.slotId === null) return;\n  g.serial = text;', '  g.serial = text;', /^fail: touch the slot outlives N until a new run earns/],
+      ['const same = held !== null && held.id === state.id;', 'const same = held !== null && held.save.slice(0, 9) === state.save.slice(0, 9) && held.level === state.level;', /^fail: touch after N, BEGIN on the slot's seed earns from 0/],
+      ['  if (slot) g.confirm = { slot };\n', '  if (slot) restore(g, slot);\n', /^fail: touch RESUME with no open run asks CONTINUE\?/],
+      ['  if (o) {\n', '  if (o) {\n    g.confirm = { slot: readSlot() };\n    return;\n', /^fail: touch RESUME of an open run continues without asking/],
+      ["if (e.code === 'KeyY' || e.key === 'Enter') {", "if (e.code === 'KeyY' || e.code === 'KeyN' || e.key === 'Enter') {", /^fail: touch N returns to the title with no coins/],
+      ['function confirmKey(g, e) {\n  if (e.repeat) return;\n', 'function confirmKey(g, e) {\n', /^fail: touch CONTINUE\? ignores a repeated key/],
       ['if (taken.length) collectCoin(g, taken);', 'if (false) collectCoin(g, taken);', /^fail: touch touching the first coin adds one to the wallet/],
       ['const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1, ultimate: 10 };', /^fail: touch a tomb solved first on this device pays 5 at HARD/],
       ['      if (!tombs.has(id)) {', '      if (true) {', /^fail: touch a replay of a solved tomb pays nothing at EASY/],
@@ -508,7 +514,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['for (const o of gamepad.poll()) {', 'for (const o of []) {', /^fail: touch gamepad d-pad left holds Left/],
       ['  if (same) {\n    state.wallet = Math.max(state.wallet, was.wallet);\n    for (const id of was.coins) state.coins.add(id);\n    for (const id of was.tombs) state.tombs.add(id);\n    state.record = Math.max(state.record, was.record);\n  }\n', '', /^fail: touch two games on one slot keep both coins/],
       ['beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v } });', 'beginSaved(g, at.p, null);', /^fail: touch RESUME after a reload continues at TOMB/],
-      ['if (kept && kept.code === save.code && kept.p === save.p) { restore(g, slot); return; }', 'if (kept) { restore(g, slot); return; }', /^fail: touch another save code starts at TOMB 0/],
+      ['if (kept && kept.code === save.code && kept.p === save.p) {', 'if (kept) {', /^fail: touch another save code starts at TOMB 0/],
       ['const memory = SELFTEST ? new Map() : null;', 'const memory = null;', /^fail: touch the self-test leaves the real wallet untouched/],
     ]) {
       const broken = html.replace(from, to);

@@ -213,6 +213,10 @@ export const SOFT = {
     { id: 'accept', label: 'ACCEPT', ...K('Enter', 'Enter') },
     { id: 'cancel', label: 'CANCEL', ...K('Escape', 'Escape') },
   ],
+  confirm: [
+    { id: 'yes', label: 'YES', ...K('KeyY', 'y') },
+    { id: 'no', label: 'NO', ...K('KeyN', 'n') },
+  ],
   play: [
     { id: 'pause', label: 'PAUSE', ...K('KeyP', 'p') },
   ],
@@ -233,9 +237,10 @@ export const SOFT = {
   ],
 };
 
-/** The table row for the game's state: 'typing' is the title with its field open. */
-export function screenId({ screen, typing }) {
-  return screen === 'title' && typing ? 'typing' : screen;
+/** The table row for the game's state: 'typing' and 'confirm' are the title with its field or CONTINUE? open. */
+export function screenId({ screen, typing, confirm }) {
+  if (screen !== 'title') return screen;
+  return confirm ? 'confirm' : typing ? 'typing' : screen;
 }
 
 /** The on-screen name of a difficulty: 'easy' reads EASY. */
@@ -262,7 +267,7 @@ export function textWidth(str) {
 // Horizontal extent of each screen's panel in view pixels (the r.panel calls
 // in main.mjs). Overlay-mode keys stay in the strips outside it, so they
 // never cover the panel, the title's note line or its footer.
-export const PANEL_X = { title: [62, 258], typing: [62, 258], pause: [50, 270], over: [40, 280], splash: [50, 270] };
+export const PANEL_X = { title: [62, 258], typing: [62, 258], confirm: [62, 258], pause: [50, 270], over: [40, 280], splash: [50, 270] };
 
 // The PAUSE key stands at the bottom centre, between the controls like a
 // console's START. Where that comes within GAP of the pad or the fire button
@@ -413,7 +418,7 @@ function stopDoubleTapZoom() {
 
 /**
  * The controls. `state()` reports what the game shows: { screen, typing,
- * resume, muted, difficulty, side }, `side` being the d-pad's. `onMode()` runs
+ * confirm, resume, muted, difficulty, side }, `side` being the d-pad's. `onMode()` runs
  * when touch mode changes, so the caller can refit the canvas through
  * `relayout`.
  */
