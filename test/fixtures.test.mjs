@@ -7,7 +7,7 @@ import { createSim, step, nodeXY, torchRadius } from '../src/game/sim.mjs';
 import { RGB, idx, ARROWS, SKELETONS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
 import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import {
-  fixtureSets, ladderPixels, sconcePixels, arrowPixels, arrowSpot, skeletonPixels, skeletonSpot, dustMotes, maskRow, ROLE, SWAY_X, SWAY_Y,
+  fixtureSets, ladderPixels, sconcePixels, arrowPixels, arrowSpot, skeletonPixels, skeletonSpot, dustMotes, maskRow, SWAY_X, SWAY_Y,
 } from '../src/game/fixtures.mjs';
 import { junctions, arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../src/world/signs.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
@@ -30,98 +30,101 @@ for (let v = 0; v < 10; v++) {
 const px = (x, y) => maskRow(y) * MASK_W + x;
 const cellXY = (c) => [(c % BW) * 48, ((c / BW) | 0) * 48];
 const flights = boards.flatMap(({ bd, mask, fx }) => fx.flights.map((f) => ({ bd, mask, fx, ...f })));
-// The rows of column t of a flight, from the spec: tread down to above the support.
-const treadOf = (Y, t) => Y + 11 + 4 * (t >> 2);
-const supportOf = (Y, t) => (t < 16 ? Y + 7 : Y + 8 + t);
+// The tread row of column t of a flight, from the spec: 8 x 8 steps, risers at t = 0, 8, ..., 40.
+const treadOf = (Y, t) => Y + 15 + 8 * (t >> 3);
 const colX = (X, t, dir) => (dir > 0 ? X + 24 + t : X + 23 - t);
-// The band rule's last row of column t >= 16: down from the support to Y+t-8, stopping at air.
-const bandBottom = (mask, Y, x, t) => {
-  let y = supportOf(Y, t);
-  while (y >= Y + t - 8 && mask[px(x, y)] === 1) y--;
-  return y + 1;
+/** The rows of column t that a flight draws: mask air from the tread down to the first rock, never below Y + 8. */
+const columnRows = (mask, Y, x, t) => {
+  const want = [];
+  for (let y = treadOf(Y, t); y >= Y + 8 && mask[px(x, y)] === 0; y--) want.push(y);
+  return want.reverse();
+};
+/** Rows of column x that the stairs map holds, over a flight's rows. */
+const stairRows = (fx, Y, x) => {
+  const got = [];
+  for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(x, y)]) got.push(y);
+  return got;
 };
 
 test('the sample holds the stairs the diagnosis counted', () => {
   assert.equal(flights.length, 1183);
 });
 
-test('every stair pixel is mask air above its support or band rock at or below it, inside its 48 columns and off the side room', () => {
-  let rock = 0;
+test('every stair pixel is mask air, inside its flight\'s 48 columns and never in a carved side room\'s air, and the stairs map holds those pixels and no others', () => {
+  let pixels = 0;
   for (const { bd, mask, X, Y, dir, runs } of flights) {
     assert.equal(runs.length > 0, true);
     for (const { t, x, top, bot } of runs) {
       assert.equal(x, colX(X, t, dir), 'inside its columns');
+      assert.ok(t >= 0 && t < 48);
       assert.ok(bot >= Y + 8, 'no row under the room floor');
       for (let y = bot; y <= top; y++) {
-        if (y > supportOf(Y, t)) { assert.equal(mask[px(x, y)], 0, `board ${bd.p}: column ${t} row ${y} is rock`); continue; }
-        // At or below the support only the band occurs: rock of a column t >= 16, down to row Y+t-8.
-        assert.ok(t >= 16 && y >= Y + t - 8, `board ${bd.p}: column ${t} row ${y} is below the band`);
-        assert.equal(mask[px(x, y)], 1, `board ${bd.p}: column ${t} row ${y} is air`);
-        rock++;
+        assert.equal(mask[px(x, y)], 0, `board ${bd.p}: column ${t} row ${y} is rock`);
+        // The side room's columns are t >= 32; its air on rows Y + 8 to Y + 39 holds no stair pixel.
+        if (t >= 32) assert.ok(y < Y + 8 || y >= Y + 40, `board ${bd.p}: column ${t} row ${y} is side-room air`);
+        pixels++;
       }
-      // The side room's columns are t >= 32; its air holds no stair pixel.
-      if (t >= 32) for (let y = bot; y <= top; y++) if (y >= Y + 8 && y < Y + 40) assert.equal(mask[px(x, y)], 1, `board ${bd.p}: column ${t} row ${y} is side-room air`);
     }
   }
-  assert.ok(rock > 100000, `${rock} band pixels`);
-  // The role map holds those pixels and no others.
+  assert.ok(pixels > 100000, `${pixels} stair pixels`);
   for (const { fx } of boards) {
     const want = new Set(fx.flights.flatMap(({ runs }) => runs.flatMap(({ x, top, bot }) => Array.from({ length: top - bot + 1 }, (_, i) => px(x, bot + i)))));
     let n = 0;
-    for (let k = 0; k < fx.stairs.length; k++) if (fx.stairs[k]) { n++; assert.ok(want.has(k)); }
+    for (let k = 0; k < fx.stairs.length; k++) if (fx.stairs[k]) { n++; assert.equal(fx.stairs[k], 1); assert.ok(want.has(k)); }
     assert.equal(n, want.size);
   }
 });
 
-test('every stair column is contiguous from its tread down to row Y+8, or for t >= 16 to the band rule\'s last row', () => {
+test('each stair column holds exactly the mask air from its tread down to the first rock, never below Y+8, and nothing when its tread row is rock', () => {
+  let empty = 0;
   for (const { mask, fx, X, Y, dir } of flights) {
     for (let t = 0; t < 48; t++) {
-      const x = colX(X, t, dir), top = treadOf(Y, t);
-      const last = t < 16 ? Y + 8 : bandBottom(mask, Y, x, t);
-      const want = [];
-      for (let y = last; y <= top; y++) want.push(y);
-      const got = [];
-      for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(x, y)]) got.push(y);
-      // Each pixel's ROLE label: a tread on top, a riser face in a step's first column, else body.
-      for (const y of want) {
-        assert.equal(fx.stairs[px(x, y)], y === top ? ROLE.tread : t % 4 === 0 ? ROLE.riser : ROLE.body, `label at column ${t} row ${y - Y}`);
-      }
-      assert.deepEqual(got, want, `column ${t} of the flight at (${X}, ${Y}) dir ${dir}`);
+      const x = colX(X, t, dir);
+      const want = columnRows(mask, Y, x, t);
+      if (mask[px(x, treadOf(Y, t))] === 1) { assert.deepEqual(want, []); empty++; }
+      assert.deepEqual(stairRows(fx, Y, x), want, `column ${t} of the flight at (${X}, ${Y}) dir ${dir}`);
     }
   }
+  assert.ok(empty > 1000, `${empty} columns under a rock tread`);
 });
 
-test('the first tread sits 4 px over the floor and the last is flush with the upper floor', () => {
-  for (const { fx, X, Y, dir } of flights) {
-    const c0 = colX(X, 0, dir), c47 = colX(X, 47, dir);
-    let top0 = -1;
-    for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(c0, y)]) top0 = y;
-    assert.equal(top0 - (Y + 7), 4);
-    assert.equal(fx.stairs[px(c0, top0)], ROLE.tread);
-    // The last step's four columns share one tread on the upper floor's top row, Y+55.
-    let top44 = -1;
-    for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(colX(X, 44, dir), y)]) top44 = y;
-    assert.equal(top44, Y + 55);
-    // Column 47 holds stone under that tread.
-    let top47 = -1, n47 = 0;
-    for (let y = Y + 8; y <= Y + 60; y++) if (fx.stairs[px(c47, y)]) { top47 = y; n47++; }
-    assert.equal(top47, Y + 55);
-    assert.equal(fx.stairs[px(c47, top47)], ROLE.tread);
-    assert.ok(n47 > 1, 'column 47 holds stone under its tread');
-    assert.equal(treadOf(Y, 47), Y + 55);
+test('the steps are square: 8 px over the floor at the first, rising 8 rows each, the last on the upper floor', () => {
+  for (const { mask, fx, X, Y, dir } of flights) {
+    const top = (t) => { const rows = stairRows(fx, Y, colX(X, t, dir)); return rows.length ? rows[rows.length - 1] : null; };
+    // Column 0 stands 8 px over the lower floor's top row, Y + 7.
+    assert.equal(top(0), Y + 15);
+    assert.equal(top(0) - (Y + 7), 8);
+    // Each step's non-empty columns share one tread row, and its first column is never empty.
+    for (let k = 0; k < 6; k++) {
+      assert.ok(top(8 * k) !== null, `step ${k} column ${8 * k}`);
+      for (let t = 8 * k; t < 8 * k + 8; t++) {
+        const got = top(t);
+        if (got !== null) assert.equal(got, Y + 15 + 8 * k, `column ${t}`);
+      }
+      if (k > 0) assert.equal(top(8 * k) - top(8 * k - 8), 8, `tread rise at column ${8 * k}`);
+    }
+    // Column 40 tops out on the upper floor's top row, Y + 55; column 47 holds nothing, over rock at Y + 55 under upper-room air.
+    assert.equal(top(40), Y + 55);
+    const c47 = colX(X, 47, dir);
+    assert.deepEqual(stairRows(fx, Y, c47), []);
+    assert.equal(mask[px(c47, Y + 55)], 1);
+    assert.equal(mask[px(c47, Y + 56)], 0);
   }
 });
 
-test('a stair leaves rock the mask holds bare, whatever the flight would cover', () => {
+test('a stair stops at rock the mask holds bare, whatever the flight would cover', () => {
   const { bd, mask, fx } = boards.find(({ fx }) => fx.flights.length > 0);
   const { X, Y, dir } = fx.flights[0];
   const punched = mask.slice();
-  for (const [t, y] of [[2, Y + 9], [20, Y + 30]]) punched[px(colX(X, t, dir), y)] = 1;
+  const holes = [[2, Y + 9], [20, Y + 30]];
+  for (const [t, y] of holes) punched[px(colX(X, t, dir), y)] = 1;
   const out = fixtureSets(bd, punched).stairs;
-  for (const [t, y] of [[2, Y + 9], [20, Y + 30]]) {
+  for (const [t, y] of holes) {
     const x = colX(X, t, dir);
-    assert.equal(out[px(x, y)], 0, 'the rock stays bare');
-    assert.ok(out[px(x, y + 1)] && out[px(x, y - 1)] && fx.stairs[px(x, y)], 'its neighbours keep the stair');
+    assert.ok(fx.stairs[px(x, y)], 'the flight holds the pixel before the punch');
+    for (let yy = Y + 8; yy <= y; yy++) assert.equal(out[px(x, yy)], 0, `column ${t} row ${yy} under the rock`);
+    assert.equal(out[px(x, y + 1)], 1, 'the row above the rock keeps its stair pixel');
+    assert.equal(out[px(x, treadOf(Y, t))], 1, 'the tread keeps its stair pixel');
   }
 });
 
@@ -256,11 +259,6 @@ function renderBoard(bd, sim = null, cam = { x: bd.x * 576 + 288, y: bd.y * 336 
   return { art, ctx };
 }
 
-const isStairColour = (d, i) => ['b', 'a', '8', '6'].some((ch) => {
-  const c = RGB[idx(ch)];
-  return d[i] === c[0] && d[i + 1] === c[1] && d[i + 2] === c[2];
-});
-const ROLE_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 const isColour = (d, i, ch) => {
   const c = RGB[idx(ch)];
   return d[i] === c[0] && d[i + 1] === c[1] && d[i + 2] === c[2];
@@ -298,9 +296,9 @@ function skeletonGlyphs(bd) {
   return out;
 }
 
-test('the renderer paints each stair pixel its role colour (tread b, riser a, body 8) and every ladder and sconce pixel inside its box, nothing else', () => {
+test('the board art shades each stair pixel opaque and never paints one, and every ladder and sconce pixel lies inside its box, nothing else', () => {
   // "Nothing else" admits the arrow and tier-1 skeleton pixels by name, each in its palette colour.
-  let signed = 0;
+  let signed = 0, stair = 0;
   for (const { bd, fx } of boards.filter((_, i) => i % 3 === 0)) {
     const { art } = renderBoard(bd);
     assert.ok(art, 'board art drawn');
@@ -310,17 +308,16 @@ test('the renderer paints each stair pixel its role colour (tread b, riser a, bo
     const bad = [];
     for (let k = 0; k < MASK_W * MASK_H && bad.length < 5; k++) {
       const drawn = art.touched[k] === 1;
-      // Each stair pixel takes the colour of its ROLE label.
-      const ok = fx.stairs[k] ? drawn && isColour(art.data, k * 4, ROLE_COLOUR[fx.stairs[k]])
+      const ok = fx.stairs[k] ? !drawn && art.shaded[k * 4 + 3] === 255 && (stair++, true)
         : ladders.has(k) ? drawn
-          : sconces.has(k) ? drawn && !isStairColour(art.data, k * 4)
+          : sconces.has(k) ? drawn
             : carved.has(k) ? drawn && isColour(art.data, k * 4, carved.get(k))
               : !drawn;
       if (!ok) bad.push(`(${k % MASK_W}, ${MASK_H - 1 - ((k / MASK_W) | 0)})`);
     }
     assert.deepEqual(bad, [], `board ${bd.p}`);
   }
-  assert.ok(signed >= 3, 'the sample holds boards with arrows or skeletons');
+  assert.ok(signed >= 3 && stair > 10000, `${signed} boards with signs, ${stair} stair pixels`);
 });
 
 test('a sign junction shows its arrow exactly when it carries one, in its direction and its corner of the room', () => {
@@ -663,28 +660,49 @@ test('rock shading counts the stair as solid: no highlight under a flight, and a
 const fixture = boards.find(({ bd }) => bd.x === 4 && bd.y === 0);
 const fixtureFlight = fixture.fx.flights.find(({ c }) => c === 57);
 
-test('the fixture flight draws column 24 as stone on rows 208 to 227 and column 27 from its tread down to row 211', () => {
-  const { mask, fx, bd } = fixture;
+test('the fixture flight holds rows 225 to 231 in column 24 and none in column 31, and shades its tread b, its second row a and its riser 8', () => {
+  const { fx, bd } = fixture;
   assert.deepEqual([fixtureFlight.X, fixtureFlight.Y, fixtureFlight.dir], [432, 192, 1]);
   const { art } = renderBoard(bd);
   const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
   // The flight spans rows 200 to 252; the cell below holds its own flight in the same columns.
   const rows = (x) => range(200, 252).filter((y) => fx.stairs[px(x, y)]);
-  // Column 24 (riser face): tread on 227 over air, rock on 208 to 224 under the support at 224.
-  assert.deepEqual(rows(480), range(208, 227));
-  assert.equal(fx.stairs[px(480, 227)], ROLE.tread);
-  for (const y of range(208, 224)) assert.equal(mask[px(480, y)], 1, `row ${y} is rock`);
-  // Column 27: the tread is the support row, so the stair starts on rock.
-  assert.deepEqual(rows(483), range(211, 227));
-  assert.equal(fx.stairs[px(483, 227)], ROLE.tread);
-  assert.equal(mask[px(483, 227)], 1);
-  for (const [x, role] of [[480, 'a'], [483, '8']]) {
-    for (const y of rows(x)) {
-      const want = fx.stairs[px(x, y)] === ROLE.tread ? 'b' : role;
-      assert.equal(art.touched[px(x, y)], 1);
-      assert.ok(isColour(art.data, px(x, y) * 4, want), `(${x}, ${y}) paints ${want}`);
+  assert.deepEqual(rows(480), range(225, 231));
+  assert.deepEqual(rows(487), []);
+  for (let x = 480; x < 488; x++) {
+    assert.ok(isColour(art.shaded, px(x, 231) * 4, 'b'), `(${x}, 231) shades b`);
+    assert.ok(isColour(art.shaded, px(x, 230) * 4, 'a'), `(${x}, 230) shades a`);
+  }
+  for (const y of range(224, 229)) assert.ok(isColour(art.shaded, px(480, y) * 4, '8'), `(480, ${y}) shades 8`);
+});
+
+test('on every flight, either direction, each tread shades b with a under it and each riser 8, bar the riser over a carved side room', () => {
+  let ne = 0, nw = 0, treads = 0, risers = 0, ceilings = 0;
+  for (const { bd, fx } of boards.filter((_, i) => i % 3 === 0)) {
+    const { art } = renderBoard(bd);
+    const at = (x, y, ch) => isColour(art.shaded, px(x, y) * 4, ch);
+    for (const { c, X, Y, dir } of fx.flights) {
+      if (dir > 0) ne++; else nw++;
+      // The riser at t = 32 stands over the side cell, c + 1 or c - 1 on the same board row.
+      const side = c + dir, carved = (c % BW) + dir >= 0 && (c % BW) + dir < BW && (bd.links[side] !== 0 || bd.doorMask[side] !== 0);
+      for (let t = 0; t < 48; t++) {
+        const x = colX(X, t, dir), tread = treadOf(Y, t);
+        assert.ok(at(x, tread, 'b'), `board ${bd.p} column ${t}: tread row ${tread - Y}`);
+        assert.ok(at(x, tread - 1, 'a'), `board ${bd.p} column ${t}: second row ${tread - 1 - Y}`);
+        treads++;
+        if (t % 8 !== 0) continue;
+        for (let y = tread - 7; y <= tread - 2; y++) {
+          // The side room's ceiling underside, rows Y + 40 and Y + 41, outranks the riser's edge.
+          const ceiling = t === 32 && carved && (y === Y + 40 || y === Y + 41);
+          const want = ceiling ? (y === Y + 40 ? '6' : '7') : '8';
+          assert.ok(at(x, y, want), `board ${bd.p} riser ${t / 8}: row ${y - Y} shades ${want}`);
+          if (ceiling) ceilings++; else risers++;
+        }
+      }
     }
   }
+  assert.ok(ne >= 100 && nw >= 100, `${ne} north-east and ${nw} north-west flights`);
+  assert.deepEqual([ne, nw, treads, risers, ceilings], [213, 185, 19104, 13970, 358]);
 });
 
 test('the fixture ledge shades rows 196 to 199 of columns 456 to 463 as rock, and the ladder draws over it', () => {
@@ -748,20 +766,6 @@ test('along every flight in the sample, either direction, the explorer\'s upper 
     if (dir > 0) ne++; else nw++;
   }
   assert.ok(ne > 100 && nw > 100, `${ne} north-east and ${nw} north-west flights`);
-});
-
-test('a flight\'s band reaches row Y+t-8 in every column, or stops at a carved side room', () => {
-  let full = 0, stopped = 0;
-  for (const { mask, fx, X, Y, dir } of flights) {
-    let all = true;
-    for (let t = 16; t < 48; t++) {
-      let low = Y + 60;
-      for (let y = Y + 60; y >= Y + 8; y--) if (fx.stairs[px(colX(X, t, dir), y)]) low = y;
-      if (low !== Y + t - 8) all = false;
-    }
-    if (all) full++; else stopped++;
-  }
-  assert.deepEqual([full, stopped], [718, 465]);
 });
 
 test('every ledge pixel is mask air on rows Y+4 to Y+7 of a column t < 16 over air, and each such column holds all four rows', () => {

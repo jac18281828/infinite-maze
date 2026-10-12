@@ -11,8 +11,8 @@ import { boardOfPos } from '../world/world.mjs';
 import { floorItems, itemSpot } from '../world/floor.mjs';
 import { windDir } from '../world/wind.mjs';
 import { coinId } from './wallet.mjs';
-import { boardMask, MASK_W } from './mask.mjs';
-import { fixtureSets, dustMotes, maskRow, arrowSpot, skeletonSpot, skeletonPose, ROLE } from './fixtures.mjs';
+import { boardMask } from './mask.mjs';
+import { fixtureSets, dustMotes, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
 
 export const VIEW_W = 320;
@@ -21,8 +21,6 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
-// Palette character of each stair role.
-const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 export const MAP_SCALE = 3;
 // Seconds of burn below half over which tier-2 skeletons fade in.
 export const BOOST_FADE_S = 10;
@@ -153,10 +151,10 @@ export function createRenderer(canvas, world) {
 
   /**
    * Rock and shadow pixels from the mask, so every opening drawn is a tree
-   * link or a door. `p` picks the rock tile variants. The `ledge` pixels
-   * shade as rock, and rock shading counts them and the `stairs` pixels as
-   * solid, which leaves no highlight under a flight; air shadows read the
-   * mask alone.
+   * link or a door. `p` picks the rock tile variants. The `stairs` and
+   * `ledge` pixels shade as rock, so a tread takes the floor's highlight and
+   * a riser the side edge; air shadows read the mask alone, so none falls
+   * from a stair or ledge.
    */
   function shadeMask(g, mask, p, stairs, ledge) {
     const W = BOARD_W, H = BOARD_H;
@@ -169,7 +167,7 @@ export function createRenderer(canvas, world) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const o = (y * W + x) * 4;
-        if (mask[y * W + x] || (ledge && ledge[y * W + x])) {
+        if (filled(x, y)) {
           const tile = ROCK[hash3(x >> 4, y >> 4, p) % ROCK.length];
           let ch = tile[y & 15][x & 15];
           if (!filled(x, y - 1)) ch = 'b';
@@ -213,19 +211,6 @@ export function createRenderer(canvas, world) {
       for (let y = y0; y < y1; y += 8) {
         const h = Math.min(8, y1 - y);
         g.drawImage(ladder, 0, 0, 16, h, x, toY(y + h), 16, h);
-      }
-    }
-    // Each run paints by its pixels' ROLE labels: tread, riser face, body.
-    for (const { runs } of fx.flights) {
-      for (const { x, top, bot } of runs) {
-        for (let y = top; y >= bot;) {
-          const role = fx.stairs[maskRow(y) * MASK_W + x];
-          let low = y;
-          while (low > bot && fx.stairs[maskRow(low - 1) * MASK_W + x] === role) low--;
-          g.fillStyle = pal(STAIR_COLOUR[role]);
-          g.fillRect(x, toY(y + 1), 1, y - low + 1);
-          y = low - 1;
-        }
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));

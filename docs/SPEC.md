@@ -648,16 +648,25 @@ within a second, and a turn bends. It advances by the wall time between frames,
 at most 0.25 s a frame and never backward. The torch flame stays upright, and
 the dust hangs still on the way on and in a windless branch.
 
-**Stairs.** A stair draws as one solid flight in stone, flush with the lower
-floor and the upper floor. Over the cut air it fills each column from its
-tread down; from the lower room's wall on it also fills the rock under that
-air, down to a flat underside on the lower floor that rises at 45° from the
-wall, and stops at any air. Steps that overhang a ladder shaft or a bottom
-door rest on a 4-row rock ledge, which the ladder draws over. The lower
-room's ceiling corner gives way under the gallery's ceiling line, so a
-climbing explorer's head stays in air. Where a gallery starts in a cell, a
-ladder in that cell ends at the floor, and a bottom door's sconce stands
-clear of the flight.
+**Stairs.** A stair draws side-on as six 8×8 steps in solid stone, flush
+with the lower floor and the upper floor. Column `t` of a flight, 0 to 47,
+holds the cut air from its tread row down to the first rock and never below
+the room floor's first air row, `Y + 8`. The tread over column `t` is row
+`Y + 15 + 8·⌊t/8⌋`: the first tread stands 8 px over the lower floor, each
+tread's inner corner, `t = 8k + 7`, sits on the feet row `Y + 8 + t`, and
+the last tread is the upper floor. Where a tread row is rock, the column holds no
+stair pixel and the rock's own top edge draws the tread; likewise the rock's
+side edge draws the bottom row of a riser face from `t = 16` on. A stair
+pixel shades as rock, taking the rock tile: each tread takes the floor's
+highlight on its top row and the row under it, each riser face the side edge.
+The stair paints nothing of its own and casts no shadow on the air beside
+it. Where the side cell of the riser at `t = 32` is carved, that room's
+ceiling underside shades the riser's rows `Y + 40` and `Y + 41`. Steps that overhang
+a ladder shaft or a bottom door rest on a 4-row rock ledge, which the ladder
+draws over. The lower room's ceiling corner gives way under the gallery's
+ceiling line, so a climbing explorer's head stays in air. Where a gallery
+starts in a cell, a ladder in that cell ends at the floor, and a bottom
+door's sconce stands clear of the flight.
 
 **Arrows.** An arrow is a carved glyph, at most 7×7 px, in one of eight glyphs,
 one per link direction (E N W S NE NW SW SE). It sits in an upper corner of its
@@ -702,10 +711,11 @@ the room's side edge is a doorway, the skeleton sits beside it.
 - **Palette.** Palette `5` to `9`, umber to sandstone, so a skeleton sits
   darker than the stair treads and the bone white.
 - **Tiers.** Tier 1 draws on the board layer after the mask's shading, as the
-  stair and the ladder do, at every burn. Tier 2 draws in the scene after the
-  boards and the floor items and before the flames and the light map, at the
-  opacity §7 gives, and draws nothing with no explorer. The light map lights
-  both as it lights the walls, the sconces and flames included.
+  ladder does, at every burn; the stair draws in that shading. Tier 2 draws in
+  the scene after the boards and the floor items and before the flames and the
+  light map, at the opacity §7 gives, and draws nothing with no explorer. The
+  light map lights both as it lights the walls, the sconces and flames
+  included.
 
 Arrows and skeletons are a deliberate, always-on exception to the rule that
 aids record and never point: they ship with no setting.

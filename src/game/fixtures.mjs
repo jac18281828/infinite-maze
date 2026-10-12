@@ -6,22 +6,20 @@ import { BW, NCELL } from '../world/board.mjs';
 import { boardMask, MASK_W, MASK_H, CELL_PX } from './mask.mjs';
 import { LADDER, SCONCE, ARROWS, SKELETONS, idx } from './art.mjs';
 
-export const STEPS = 12;
-export const STEP_W = 4;
-// Stair pixel roles: a column's top pixel, a step's left face, the rest.
-export const ROLE = { tread: 1, riser: 2, body: 3 };
+export const STEPS = 6;
+export const STEP_W = 8;
 // The rock ledge under steps over a shaft: its top row above the cell's Y, and its height.
 const LEDGE_TOP = 7;
 const LEDGE_H = 4;
 
-/** First row of step k's tread: 4 px over the lower floor, flush at the top. */
-function treadRow(Y, k) {
-  return Y + 11 + STEP_W * k;
-}
-
-/** Top row of the rock under column t of a flight: the room floor, then the gallery's edge. */
-function supportRow(Y, t) {
-  return t < 16 ? Y + 7 : Y + 8 + t;
+/**
+ * Tread row over column t: square steps with risers at t = STEP_W * k. Each
+ * tread's inner corner, t = STEP_W * k + STEP_W - 1, sits on the feet row
+ * Y + 8 + t; the first tread stands 8 px over the lower floor, the last is
+ * the upper floor.
+ */
+function treadRow(Y, t) {
+  return Y + 7 + STEP_W * (Math.floor(t / STEP_W) + 1);
 }
 
 /** Board x of column t of a flight from cell origin X, rising toward `dir`. */
@@ -35,27 +33,19 @@ export function maskRow(y) {
 }
 
 /**
- * Runs of one flight: each column's mask air from its tread down to the row
- * above its support. A column t >= 16 adds the mask rock from its support row
- * down to row Y + t - 8, stopping at the first air pixel, so the flight's
- * underside is flat on the lower floor, then rises at 45 degrees.
+ * Runs of one flight: each column's mask air from its tread down to the first
+ * rock, never below row Y + 8. A tread row that is itself rock leaves the
+ * column empty.
  */
 function flightRuns(X, Y, dir, mask) {
   const runs = [];
   for (let t = 0; t < STEPS * STEP_W; t++) {
     const x = stairX(X, t, dir);
-    const treadTop = treadRow(Y, (t / STEP_W) | 0), sup = supportRow(Y, t);
+    const top = treadRow(Y, t);
     const air = (y) => x >= 0 && x < MASK_W && y >= 0 && y < MASK_H && !mask[maskRow(y) * MASK_W + x];
-    const rock = (y) => x >= 0 && x < MASK_W && y >= 0 && y < MASK_H && mask[maskRow(y) * MASK_W + x] === 1;
-    const ys = [];
-    for (let y = treadTop; y > sup; y--) if (air(y)) ys.push(y);
-    if (t >= 16) for (let y = sup; y >= Y + t - 8 && rock(y); y--) ys.push(y);
-    for (let i = 0; i < ys.length;) {
-      let j = i;
-      while (j + 1 < ys.length && ys[j + 1] === ys[j] - 1) j++;
-      runs.push({ t, x, top: ys[i], bot: ys[j], tread: ys[i] === treadTop });
-      i = j + 1;
-    }
+    let bot = top;
+    while (bot >= Y + 8 && air(bot)) bot--;
+    if (bot < top) runs.push({ t, x, top, bot: bot + 1 });
   }
   return runs;
 }
@@ -159,8 +149,8 @@ function cellSconce(bd, c) {
 /**
  * Stairs, ladders and sconces of board `bd`:
  * - flights: each stair's cell, origin and direction, with its pixel runs: a
- *   column t at board x holds rows bot..top, `tread` when top is the tread;
- * - stairs: role per mask pixel (ROLE), 0 elsewhere;
+ *   column t at board x holds rows bot..top;
+ * - stairs: 1 per mask-air pixel of a flight, 0 elsewhere;
  * - ledge: 1 per mask-air pixel of the rock ledge under the steps that
  *   overhang a shaft or bottom door, 0 elsewhere;
  * - ladders: [x, y0, y1) boxes;
@@ -187,10 +177,8 @@ export function fixtureSets(bd, mask = boardMask(bd)) {
           if (!mask[maskRow(y) * MASK_W + x]) ledge[maskRow(y) * MASK_W + x] = 1;
         }
       }
-      for (const { t, x, top, bot, tread } of runs) {
-        for (let y = bot; y <= top; y++) {
-          stairs[maskRow(y) * MASK_W + x] = tread && y === top ? ROLE.tread : t % STEP_W === 0 ? ROLE.riser : ROLE.body;
-        }
+      for (const { x, top, bot } of runs) {
+        for (let y = bot; y <= top; y++) stairs[maskRow(y) * MASK_W + x] = 1;
       }
     }
   }

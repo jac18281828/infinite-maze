@@ -3708,22 +3708,20 @@ const { LADDER, SCONCE, ARROWS, SKELETONS, idx } = __m11;
 
 
 
-const STEPS = 12;
-const STEP_W = 4;
-// Stair pixel roles: a column's top pixel, a step's left face, the rest.
-const ROLE = { tread: 1, riser: 2, body: 3 };
+const STEPS = 6;
+const STEP_W = 8;
 // The rock ledge under steps over a shaft: its top row above the cell's Y, and its height.
 const LEDGE_TOP = 7;
 const LEDGE_H = 4;
 
-/** First row of step k's tread: 4 px over the lower floor, flush at the top. */
-function treadRow(Y, k) {
-  return Y + 11 + STEP_W * k;
-}
-
-/** Top row of the rock under column t of a flight: the room floor, then the gallery's edge. */
-function supportRow(Y, t) {
-  return t < 16 ? Y + 7 : Y + 8 + t;
+/**
+ * Tread row over column t: square steps with risers at t = STEP_W * k. Each
+ * tread's inner corner, t = STEP_W * k + STEP_W - 1, sits on the feet row
+ * Y + 8 + t; the first tread stands 8 px over the lower floor, the last is
+ * the upper floor.
+ */
+function treadRow(Y, t) {
+  return Y + 7 + STEP_W * (Math.floor(t / STEP_W) + 1);
 }
 
 /** Board x of column t of a flight from cell origin X, rising toward `dir`. */
@@ -3737,27 +3735,19 @@ function maskRow(y) {
 }
 
 /**
- * Runs of one flight: each column's mask air from its tread down to the row
- * above its support. A column t >= 16 adds the mask rock from its support row
- * down to row Y + t - 8, stopping at the first air pixel, so the flight's
- * underside is flat on the lower floor, then rises at 45 degrees.
+ * Runs of one flight: each column's mask air from its tread down to the first
+ * rock, never below row Y + 8. A tread row that is itself rock leaves the
+ * column empty.
  */
 function flightRuns(X, Y, dir, mask) {
   const runs = [];
   for (let t = 0; t < STEPS * STEP_W; t++) {
     const x = stairX(X, t, dir);
-    const treadTop = treadRow(Y, (t / STEP_W) | 0), sup = supportRow(Y, t);
+    const top = treadRow(Y, t);
     const air = (y) => x >= 0 && x < MASK_W && y >= 0 && y < MASK_H && !mask[maskRow(y) * MASK_W + x];
-    const rock = (y) => x >= 0 && x < MASK_W && y >= 0 && y < MASK_H && mask[maskRow(y) * MASK_W + x] === 1;
-    const ys = [];
-    for (let y = treadTop; y > sup; y--) if (air(y)) ys.push(y);
-    if (t >= 16) for (let y = sup; y >= Y + t - 8 && rock(y); y--) ys.push(y);
-    for (let i = 0; i < ys.length;) {
-      let j = i;
-      while (j + 1 < ys.length && ys[j + 1] === ys[j] - 1) j++;
-      runs.push({ t, x, top: ys[i], bot: ys[j], tread: ys[i] === treadTop });
-      i = j + 1;
-    }
+    let bot = top;
+    while (bot >= Y + 8 && air(bot)) bot--;
+    if (bot < top) runs.push({ t, x, top, bot: bot + 1 });
   }
   return runs;
 }
@@ -3861,8 +3851,8 @@ function cellSconce(bd, c) {
 /**
  * Stairs, ladders and sconces of board `bd`:
  * - flights: each stair's cell, origin and direction, with its pixel runs: a
- *   column t at board x holds rows bot..top, `tread` when top is the tread;
- * - stairs: role per mask pixel (ROLE), 0 elsewhere;
+ *   column t at board x holds rows bot..top;
+ * - stairs: 1 per mask-air pixel of a flight, 0 elsewhere;
  * - ledge: 1 per mask-air pixel of the rock ledge under the steps that
  *   overhang a shaft or bottom door, 0 elsewhere;
  * - ladders: [x, y0, y1) boxes;
@@ -3889,10 +3879,8 @@ function fixtureSets(bd, mask = boardMask(bd)) {
           if (!mask[maskRow(y) * MASK_W + x]) ledge[maskRow(y) * MASK_W + x] = 1;
         }
       }
-      for (const { t, x, top, bot, tread } of runs) {
-        for (let y = bot; y <= top; y++) {
-          stairs[maskRow(y) * MASK_W + x] = tread && y === top ? ROLE.tread : t % STEP_W === 0 ? ROLE.riser : ROLE.body;
-        }
+      for (const { x, top, bot } of runs) {
+        for (let y = bot; y <= top; y++) stairs[maskRow(y) * MASK_W + x] = 1;
       }
     }
   }
@@ -3931,7 +3919,7 @@ function dustMotes(x0, y0, x1, y1, t, ox = 0, oy = 0) {
   }
   return out;
 }
-return { STEPS, STEP_W, ROLE, maskRow, ladderPixels, sconcePixels, arrowSpot, arrowPixels, skeletonPose, skeletonSpot, skeletonPixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
+return { STEPS, STEP_W, maskRow, ladderPixels, sconcePixels, arrowSpot, arrowPixels, skeletonPose, skeletonSpot, skeletonPixels, fixtureSets, MOTE_W, MOTE_H, SWAY_X, SWAY_Y, dustMotes };
 })();
 
 // src/game/map.mjs
@@ -4018,8 +4006,8 @@ const { boardOfPos } = __m5;
 const { floorItems, itemSpot } = __m7;
 const { windDir } = __m13;
 const { coinId } = __m9;
-const { boardMask, MASK_W } = __m14;
-const { fixtureSets, dustMotes, maskRow, arrowSpot, skeletonSpot, skeletonPose, ROLE } = __m15;
+const { boardMask } = __m14;
+const { fixtureSets, dustMotes, arrowSpot, skeletonSpot, skeletonPose } = __m15;
 const { mapCells } = __m16;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
@@ -4041,8 +4029,6 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
-// Palette character of each stair role.
-const STAIR_COLOUR = { [ROLE.tread]: 'b', [ROLE.riser]: 'a', [ROLE.body]: '8' };
 const MAP_SCALE = 3;
 // Seconds of burn below half over which tier-2 skeletons fade in.
 const BOOST_FADE_S = 10;
@@ -4173,10 +4159,10 @@ function createRenderer(canvas, world) {
 
   /**
    * Rock and shadow pixels from the mask, so every opening drawn is a tree
-   * link or a door. `p` picks the rock tile variants. The `ledge` pixels
-   * shade as rock, and rock shading counts them and the `stairs` pixels as
-   * solid, which leaves no highlight under a flight; air shadows read the
-   * mask alone.
+   * link or a door. `p` picks the rock tile variants. The `stairs` and
+   * `ledge` pixels shade as rock, so a tread takes the floor's highlight and
+   * a riser the side edge; air shadows read the mask alone, so none falls
+   * from a stair or ledge.
    */
   function shadeMask(g, mask, p, stairs, ledge) {
     const W = BOARD_W, H = BOARD_H;
@@ -4189,7 +4175,7 @@ function createRenderer(canvas, world) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const o = (y * W + x) * 4;
-        if (mask[y * W + x] || (ledge && ledge[y * W + x])) {
+        if (filled(x, y)) {
           const tile = ROCK[hash3(x >> 4, y >> 4, p) % ROCK.length];
           let ch = tile[y & 15][x & 15];
           if (!filled(x, y - 1)) ch = 'b';
@@ -4233,19 +4219,6 @@ function createRenderer(canvas, world) {
       for (let y = y0; y < y1; y += 8) {
         const h = Math.min(8, y1 - y);
         g.drawImage(ladder, 0, 0, 16, h, x, toY(y + h), 16, h);
-      }
-    }
-    // Each run paints by its pixels' ROLE labels: tread, riser face, body.
-    for (const { runs } of fx.flights) {
-      for (const { x, top, bot } of runs) {
-        for (let y = top; y >= bot;) {
-          const role = fx.stairs[maskRow(y) * MASK_W + x];
-          let low = y;
-          while (low > bot && fx.stairs[maskRow(low - 1) * MASK_W + x] === role) low--;
-          g.fillStyle = pal(STAIR_COLOUR[role]);
-          g.fillRect(x, toY(y + 1), 1, y - low + 1);
-          y = low - 1;
-        }
       }
     }
     for (const [x, y] of fx.sconces) g.drawImage(sconce, x - 4, toY(y));
