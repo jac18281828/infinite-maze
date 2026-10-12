@@ -6011,8 +6011,64 @@ function saveLabel(status) {
 return { copyText, copyWithStatus, saveLabel };
 })();
 
-// src/game/main.mjs
+// src/game/loop.mjs
 const __m23 = (() => {
+
+// The frame guard. One frame's exception never stops the loop: the next frame
+// is requested whatever the frame's work does. DOM-free, so node drives it
+// with a fake request.
+
+/** The ERROR line: the run's save code, or its seed while the run holds none. */
+function errorLine(serial, seed) {
+  return serial ? `ERROR  SAVE CODE ${serial}` : `ERROR  SEED ${seed}`;
+}
+
+/**
+ * Guards the frame loop and keeps its tick accumulator. `request(next)` asks
+ * for the next frame, `screen()` names the screen shown, `step` is the tick in
+ * seconds and `start` the clock's first reading in ms. After a failure `shown()`
+ * holds until the screen changes or `release()` runs.
+ */
+function createGuard({ request, screen, step, start, log = (e) => console.error(e), onFail = () => {} }) {
+  let acc = 0, last = start, logged = false, held = null;
+  // True while a tick is due, consuming it.
+  const due = () => {
+    if (acc < step) return false;
+    acc -= step;
+    return true;
+  };
+  return {
+    /** Runs `work(due)` for the frame at `now` ms, then requests `next`. */
+    run(next, now, work) {
+      let failed = false;
+      try {
+        acc += Math.min(0.25, (now - last) / 1000);
+        last = now;
+        work(due);
+      } catch (e) {
+        failed = true;
+        // A burst of ticks must not follow the failure.
+        acc = 0;
+        held = { screen: screen() };
+        if (!logged) { logged = true; log(e); }
+      } finally {
+        request(next);
+      }
+      if (failed) onFail();
+    },
+    release() { held = null; },
+    /** Whether the ERROR line shows: from a failure until the screen changes or `release()`. */
+    shown() {
+      if (held !== null && held.screen !== screen()) held = null;
+      return held !== null;
+    },
+  };
+}
+return { errorLine, createGuard };
+})();
+
+// src/game/main.mjs
+const __m24 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
@@ -6027,10 +6083,12 @@ const { createGamepad } = __m20;
 const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m21;
 const { MILESTONE, rankName } = __m8;
 const { copyWithStatus, saveLabel } = __m22;
+const { createGuard, errorLine } = __m23;
 const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m16;
 const { RGB, idx } = __m11;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
 // milestone splash screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -8008,6 +8066,7 @@ function draw(g, t) {
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
   }
+  if (guard && guard.shown()) paintError(g);
   present();
   if (touch) touch.refresh();
 }
@@ -8022,16 +8081,36 @@ function pollGamepads() {
   }
 }
 
+// The frame guard `runLoop` sets; null before it runs.
+let guard = null;
+
+// A dark strip across the middle of the view, whatever the frame drew.
+const ERROR_STRIP = { y: 78, h: 24 };
+
+/** Paints the ERROR line over the frame in the view. */
+function paintError(g) {
+  const r = g.renderer;
+  r.ctx.fillStyle = shade(1);
+  r.ctx.fillRect(0, ERROR_STRIP.y, VIEW_W, ERROR_STRIP.h);
+  r.text(errorLine(g.serial, formatCode(g.code)), VIEW_W / 2, ERROR_STRIP.y + 8, 'o', { align: 'center' });
+}
+
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
-  let last = performance.now(), acc = 0;
+  guard = createGuard({
+    request: (next) => requestAnimationFrame(next),
+    screen: () => g.screen,
+    step: TICK,
+    start: performance.now(),
+    onFail: () => { paintError(g); present(); },
+  });
+  window.addEventListener('keydown', (e) => { if (!e.repeat) guard.release(); });
   function frame(now) {
-    acc += Math.min(0.25, (now - last) / 1000);
-    last = now;
-    pollGamepads();
-    while (acc >= TICK) { tick(g); acc -= TICK; }
-    draw(g, now / 1000);
-    requestAnimationFrame(frame);
+    guard.run(frame, now, (due) => {
+      pollGamepads();
+      while (due()) tick(g);
+      draw(g, now / 1000);
+    });
   }
   draw(g, 0);
   requestAnimationFrame(frame);

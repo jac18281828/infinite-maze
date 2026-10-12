@@ -906,7 +906,11 @@ which takes 1.4 ms at the median on the same node and chip; a board in view
 with no art builds it at once. A run's first frame, a resume, a code entry
 and the title preview's first frame build what they show at once.
 Audio starts on the first key press or touch, as browser autoplay policy
-requires.
+requires. A frame that throws logs its first error to the console, shows
+`ERROR  SAVE CODE` and the run's save code over a dark strip across the middle
+of the view (`ERROR  SEED` and the seed while the run holds no save), and the
+next frame still runs, with no tick backlog. The line stays until the screen
+changes or a key is pressed, and an auto-repeat does not count.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
 mute and P to pause and show the save code. P returns the player to where

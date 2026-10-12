@@ -18,6 +18,7 @@ import { createGamepad } from './gamepad.mjs';
 import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
+import { createGuard, errorLine } from './loop.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
 import { RGB, idx } from './art.mjs';
 
@@ -1981,6 +1982,7 @@ function draw(g, t) {
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
   }
+  if (guard && guard.shown()) paintError(g);
   present();
   if (touch) touch.refresh();
 }
@@ -1995,16 +1997,36 @@ function pollGamepads() {
   }
 }
 
+// The frame guard `runLoop` sets; null before it runs.
+let guard = null;
+
+// A dark strip across the middle of the view, whatever the frame drew.
+const ERROR_STRIP = { y: 78, h: 24 };
+
+/** Paints the ERROR line over the frame in the view. */
+function paintError(g) {
+  const r = g.renderer;
+  r.ctx.fillStyle = shade(1);
+  r.ctx.fillRect(0, ERROR_STRIP.y, VIEW_W, ERROR_STRIP.h);
+  r.text(errorLine(g.serial, formatCode(g.code)), VIEW_W / 2, ERROR_STRIP.y + 8, 'o', { align: 'center' });
+}
+
 /** Fixed 60 Hz ticks, rendering once per animation frame. */
 function runLoop(g) {
-  let last = performance.now(), acc = 0;
+  guard = createGuard({
+    request: (next) => requestAnimationFrame(next),
+    screen: () => g.screen,
+    step: TICK,
+    start: performance.now(),
+    onFail: () => { paintError(g); present(); },
+  });
+  window.addEventListener('keydown', (e) => { if (!e.repeat) guard.release(); });
   function frame(now) {
-    acc += Math.min(0.25, (now - last) / 1000);
-    last = now;
-    pollGamepads();
-    while (acc >= TICK) { tick(g); acc -= TICK; }
-    draw(g, now / 1000);
-    requestAnimationFrame(frame);
+    guard.run(frame, now, (due) => {
+      pollGamepads();
+      while (due()) tick(g);
+      draw(g, now / 1000);
+    });
   }
   draw(g, 0);
   requestAnimationFrame(frame);
