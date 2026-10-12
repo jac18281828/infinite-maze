@@ -898,13 +898,13 @@ equals. Each frame does two units of world work: building a board, building
 one tree board of a tomb whose flames the board reads (its own and, on an
 entry board, each upstream tomb's), computing one such tomb's flames,
 computing the board's flames, or, on a route board, computing its wind. A
-unit builds one board, except that a flames or wind unit can build up to
-three more beyond its tomb, so a frame builds at most six. A board enters the
-warm window one board of travel before the art window: 6 s running, 7 s
-climbing. The frame then builds one board's art, which takes 1.4 ms at the
-median on the same node and chip; a board in view with no art builds it at
-once. A run's first frame, a resume, a code entry and the title preview's
-first frame build what they show at once.
+board unit builds one board. A flames or wind unit builds none of its own,
+but its walks can build up to three beyond the tomb, so a frame builds at
+most six. A board enters the warm window one board of travel before the art
+window: 6 s running, 7 s climbing. The frame then builds one board's art,
+which takes 1.4 ms at the median on the same node and chip; a board in view
+with no art builds it at once. A run's first frame, a resume, a code entry
+and the title preview's first frame build what they show at once.
 Audio starts on the first key press or touch, as browser autoplay policy
 requires.
 
