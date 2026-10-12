@@ -12,7 +12,7 @@ import { floorItems, itemSpot } from '../world/floor.mjs';
 import { windDir, windBranches } from '../world/wind.mjs';
 import { coinId } from './wallet.mjs';
 import { boardMask } from './mask.mjs';
-import { fixtureSets, dustMotes, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
+import { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
 
 export const VIEW_W = 320;
@@ -26,6 +26,8 @@ const AMBIENT = [12, 9, 22];
 const WARM_REACH = 2;
 const WARM_UNITS = 2;
 const WARM_MAX = 64;
+// Dust fill styles by thousandth of opacity; a mote is at most 0.7 opaque.
+const DUST_STYLE = Array.from({ length: 701 }, (_, k) => `rgba(255,226,170,${(k / 1000).toFixed(3)})`);
 export const MAP_SCALE = 3;
 // Seconds of burn below half over which tier-2 skeletons fade in.
 export const BOOST_FADE_S = 10;
@@ -533,17 +535,25 @@ export function createRenderer(canvas, world) {
 
   // Motes hang in the world and show only inside the torch radius. One drift
   // carries them all, set by the explorer's cell.
+  let dustTip = null, dustR = 0, dustSx = null, dustSy = null;
+
+  /** Draws the mote at world (mx, my) when the torch lights it; allocates nothing. */
+  function drawMote(mx, my) {
+    const x = dustSx(mx), y = dustSy(my);
+    const a = 1 - Math.hypot(x - dustTip[0], y - dustTip[1]) / (dustR * 0.9);
+    if (a <= 0) return;
+    const v = a * 0.7 * 1000, n = Math.round(v);
+    // The table holds toFixed(3) away from a rounding tie, where the double decides.
+    ctx.fillStyle = DUST_STYLE[n] !== undefined && Math.abs(v - n) < 0.4999 ? DUST_STYLE[n] : `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
+    ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+  }
+
   function drawDust(sim, tip, t, sx, sy, unsx, unsy) {
     stepDrift(windDir(world, sim.bd, sim.cell), t);
     const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
     const x0 = unsx(tip[0]), y0 = unsy(tip[1]);
-    for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, drift.ox, drift.oy)) {
-      const x = sx(m.x), y = sy(m.y);
-      const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
-      if (a <= 0) continue;
-      ctx.fillStyle = `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
-      ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
-    }
+    dustTip = tip; dustR = r; dustSx = sx; dustSy = sy;
+    eachMote(x0 - r, y0 - r, x0 + r, y0 + r, t, drift.ox, drift.oy, drawMote);
   }
 
   /** The torch bar, TOMB n, and under it the wallet: the coin sprite, then the count growing leftward. */

@@ -7,10 +7,10 @@ import v8 from 'node:v8';
 import { createWorld, boardCoords, tombOf } from '../src/world/world.mjs';
 import { windDir } from '../src/world/wind.mjs';
 import { boardMask } from '../src/game/mask.mjs';
-import { fixtureSets } from '../src/game/fixtures.mjs';
+import { fixtureSets, dustMotes } from '../src/game/fixtures.mjs';
 import { createRenderer } from '../src/game/render.mjs';
 import { RGB, idx, ROCK } from '../src/game/art.mjs';
-import { BOARD_W, BOARD_H } from '../src/game/sim.mjs';
+import { BOARD_W, BOARD_H, createSim, feet, torchRadius } from '../src/game/sim.mjs';
 
 const CODE = '00000000';
 const LEVELS = ['easy', 'medium', 'hard', 'ultimate'];
@@ -75,12 +75,16 @@ function withDocument(make, body) {
 // Board shadings put so far, one per art build.
 let shades = 0;
 
-/** A canvas that does no pixel work; with `copy` it keeps the last `putImageData` pixels on `canvas.shaded`. */
-function nullCanvas(copy = false) {
+/**
+ * A canvas that does no pixel work; with `copy` it keeps the last
+ * `putImageData` pixels on `canvas.shaded`, with `fills` it logs each fillRect.
+ */
+function nullCanvas(copy = false, fills = null) {
   const canvas = { width: 0, height: 0, shaded: null };
   const ctx = {
     canvas, fillStyle: '', globalAlpha: 1, globalCompositeOperation: 'source-over', imageSmoothingEnabled: false,
-    save() {}, restore() {}, fillRect() {}, drawImage() {},
+    save() {}, restore() {}, drawImage() {},
+    fillRect(x, y, w, h) { if (fills) fills.push([x, y, w, h, ctx.fillStyle]); },
     createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
     putImageData(img) {
       shades++;
@@ -261,5 +265,57 @@ test('an idle prepare allocates under 256 bytes', () => {
     assert.equal(world.boardsBuilt(), built, 'the window was warm');
     assert.equal(shades, put, 'the art was built');
     assert.ok(Math.min(...per) < 256, `${per.map((b) => b.toFixed(0))} bytes a call`);
+  });
+});
+
+/** A sim standing at the world's start point with `burn` seconds of torch, and a camera on it. */
+function explorer(world, burn) {
+  const sim = createSim(world, world.startPoint());
+  sim.burn = burn;
+  const [x, y] = feet(sim);
+  return { sim, cam: { x, y } };
+}
+
+test('a steady play frame allocates under 8 KB', () => {
+  withDocument(() => nullCanvas(), () => {
+    const world = createWorld(CODE, { difficulty: 'medium' });
+    const renderer = createRenderer(nullCanvas(), world);
+    const { sim, cam } = explorer(world, 300);
+    for (let f = 0; f < 5000; f++) renderer.scene(sim, cam, f / 60);
+    const before = allocated();
+    for (let f = 5000; f < 10000; f++) renderer.scene(sim, cam, f / 60);
+    const per = (allocated() - before) / 5000;
+    assert.ok(per < 8192, `${per.toFixed(0)} bytes a frame`);
+  });
+});
+
+test('the dust draws the motes dustMotes lists, each with the toFixed(3) fill', () => {
+  withDocument(() => nullCanvas(), () => {
+    const world = createWorld(CODE, { difficulty: 'medium' });
+    for (const burn of [300, 150, 40]) {
+      const fills = [];
+      const renderer = createRenderer(nullCanvas(false, fills), world);
+      const { sim, cam } = explorer(world, burn);
+      assert.equal(windDir(world, sim.bd, sim.cell), -1, 'no wind, so the dust does not drift');
+      const cx = Math.round(cam.x), cy = Math.round(cam.y);
+      let drawn = 0;
+      for (let f = 0; f < 600; f++) {
+        const t = f / 60;
+        fills.length = 0;
+        const tip = renderer.scene(sim, cam, t);
+        const r = torchRadius(burn);
+        const x0 = tip[0] + cx - 160, y0 = cy - tip[1] + 90;
+        const want = [];
+        for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, 0, 0)) {
+          const x = m.x - cx + 160, y = cy - m.y + 90;
+          const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
+          if (a > 0) want.push([Math.round(x), Math.round(y), 1, 1, `rgba(255,226,170,${(a * 0.7).toFixed(3)})`]);
+        }
+        const got = fills.filter((fill) => fill[4].startsWith('rgba(255,226,170,'));
+        assert.deepEqual(got, want, `burn ${burn}, frame ${f}`);
+        drawn += want.length;
+      }
+      assert.ok(drawn > 600, `burn ${burn} draws ${drawn} motes`);
+    }
   });
 });

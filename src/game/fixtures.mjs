@@ -217,3 +217,20 @@ export function dustMotes(x0, y0, x1, y1, t, ox = 0, oy = 0) {
   }
   return out;
 }
+
+/**
+ * Calls `visit(x, y)` for each mote `dustMotes` lists, in its order, and
+ * builds no list: the frame's dust draw allocates nothing per mote.
+ */
+export function eachMote(x0, y0, x1, y1, t, ox, oy, visit) {
+  const i0 = Math.floor((x0 - ox - SWAY_X) / MOTE_W), i1 = Math.floor((x1 - ox + SWAY_X) / MOTE_W);
+  const j0 = Math.floor((y0 - oy - SWAY_Y) / MOTE_H), j1 = Math.floor((y1 - oy + SWAY_Y) / MOTE_H);
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const ph = (mix(i, j, 3) % 628) / 100, v = 2 + (mix(i, j, 4) % 7);
+      const x = i * MOTE_W + (mix(i, j, 1) % MOTE_W) + ox + Math.sin(t * 0.7 + ph) * SWAY_X;
+      const y = j * MOTE_H + (mix(i, j, 2) % MOTE_H) + oy + Math.sin(t * v * 0.15 + ph * 1.7) * SWAY_Y;
+      if (x >= x0 && x < x1 && y >= y0 && y < y1) visit(x, y);
+    }
+  }
+}
