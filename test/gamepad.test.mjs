@@ -162,13 +162,18 @@ test('runLoop\'s frame polls the gamepads before it ticks', () => {
 
 test('an idle poll over a list of null slots allocates under 64 bytes', () => {
   const slots = [null, null, null, null];
-  const reader = createGamepad(() => slots);
+  let pads = [];
+  const reader = createGamepad(() => pads);
+  // A pad that was once active gives the active path type feedback; the idle path must still allocate nothing.
+  pads = [pad({ pressed: [A] })];
+  reader.poll();
+  pads = slots;
+  assert.deepEqual(reader.poll().map((o) => o.type), ['keyup']);
   assert.deepEqual(reader.poll(), []);
-  // The heap counter runs high while the JIT settles or the machine is busy,
-  // so the poll is the least of up to fifty windows after a long warm-up.
+  // The heap counter reads high until the JIT settles, so the poll is the least of three windows after a long warm-up.
   for (let i = 0; i < 20000; i++) reader.poll();
   const per = [];
-  while (per.length < 50 && !(Math.min(...per) < 64)) {
+  for (let w = 0; w < 3; w++) {
     const before = v8.getHeapStatistics().total_allocated_bytes;
     for (let i = 0; i < 10000; i++) reader.poll();
     per.push((v8.getHeapStatistics().total_allocated_bytes - before) / 10000);

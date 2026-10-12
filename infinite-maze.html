@@ -5277,23 +5277,29 @@ function createGamepad(getGamepads) {
 
   const union = (map) => new Set([...map.values()].flatMap((p) => [...p.codes]));
 
+  /** Takes the gamepads in `list` as the new state; returns the key events due. */
+  function advance(list) {
+    const next = new Map();
+    for (let index = 0; index < list.length; index++) {
+      const pad = list[index];
+      if (pad && pad.mapping === 'standard') next.set(index, look(pad, pads.get(index)));
+    }
+    const before = union(pads), after = union(next);
+    pads = next;
+    return [
+      ...KEYS.filter((k) => before.has(k.code) && !after.has(k.code)).map((k) => ({ type: 'keyup', ...k })),
+      ...KEYS.filter((k) => after.has(k.code) && !before.has(k.code)).map((k) => ({ type: 'keydown', ...k })),
+    ];
+  }
+
+  // poll holds no closure over its locals: V8 allocates a function's context
+  // on entry once any closure in it has run, which an idle poll must not pay.
   return {
     poll() {
       const list = read();
       let standard = false;
       for (let i = 0; i < list.length && !standard; i++) standard = !!list[i] && list[i].mapping === 'standard';
-      if (!standard && pads.size === 0) return NONE;
-      const next = new Map();
-      for (let index = 0; index < list.length; index++) {
-        const pad = list[index];
-        if (pad && pad.mapping === 'standard') next.set(index, look(pad, pads.get(index)));
-      }
-      const before = union(pads), after = union(next);
-      pads = next;
-      return [
-        ...KEYS.filter((k) => before.has(k.code) && !after.has(k.code)).map((k) => ({ type: 'keyup', ...k })),
-        ...KEYS.filter((k) => after.has(k.code) && !before.has(k.code)).map((k) => ({ type: 'keydown', ...k })),
-      ];
+      return standard || pads.size > 0 ? advance(list) : NONE;
     },
   };
 }
