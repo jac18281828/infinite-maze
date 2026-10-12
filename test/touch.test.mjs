@@ -303,12 +303,12 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
   }
 });
 
-test('in band mode the pad centre sits a quarter of the way down the band, its top at least MARGIN below the view', () => {
+test('in band mode the pad centre sits a third of the way down the band, its top at least MARGIN below the view', () => {
   for (const spec of [PORTRAIT, IPAD, PHONE]) {
     const { pad, band } = layout(spec);
-    assert.ok(Math.abs(pad.y + pad.s / 2 - (band.y + band.h / 4)) <= 1, `${spec.w}x${spec.h}: a quarter down`);
+    assert.ok(Math.abs(pad.y + pad.s / 2 - (band.y + band.h / 3)) <= 1, `${spec.w}x${spec.h}: a third down`);
   }
-  assert.ok(Math.abs(layout(PORTRAIT).pad.y + 80 - 414.5) <= 1e-9, 'the iPhone centre rises from 549 to 414.5');
+  assert.ok(Math.abs(layout(PORTRAIT).pad.y + 80 - (280 + 538 / 3)) <= 1e-9, 'the iPhone centre falls from 414.5 to 459.33');
   for (const spec of [BIG, DESKTOP]) {
     const lay = layout(spec);
     assert.equal(lay.mode, 'band');

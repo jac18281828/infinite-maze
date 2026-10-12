@@ -958,7 +958,7 @@ on `window`, so the key handlers serve touch unchanged. The page never
 scrolls, zooms or selects.
 - **D-pad.** In play, a 4-way pad sits at the bottom left in overlay mode. In
   the band its centre lies a quarter of the safe width in, never closer than
-  the margin to the left edge, and a quarter of the way down the band, never
+  the margin to the left edge, and a third of the way down the band, never
   closer than the margin to the view. Its centre is neutral: a pointer there
   holds no direction and sends nothing, and a slide from an arm into it
   releases the arm. An arm holds its arrow key while a pointer is on it, a
