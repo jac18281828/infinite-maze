@@ -597,6 +597,8 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['      if (!tombs.has(id)) {', '      if (!tombs.has(id) && count > record) {', /^fail: touch a new tomb pays under the record at EASY/],
       ['const MAP_FRAME = Object.values(DIFFICULTY).map(mapCells)\n  .reduce((m, c) => ({ cols: Math.max(m.cols, c.cols), rows: Math.max(m.rows, c.rows) }));', 'const MAP_FRAME = mapCells(DIFFICULTY.hard);', /^fail: touch the pause map centres in ULTIMATE's 72x28-cell frame/],
       ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
+      ['    g.pausedAt = null;\n    writeSave(g, hereCode(g));', '    writeSave(g, hereCode(g));', /^fail: touch a second pause restarts the pause map clock/],
+      ["} else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", "} else if (e.code === 'KeyQ' || e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", /^fail: touch P on the end screen leaves it showing/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'else if (false) showSplash(g, hit.k, hit.paid);', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'if (hit) showSplash(g, hit.k, hit.paid);', /^fail: touch a run that ends on the crossing of tomb 100 shows the end screen/],
       ['  g.splash = { k, paid };\n  writeSave(g, hereCode(g));', '  g.splash = { k, paid };', /^fail: touch the EASY splash stores the save/],

@@ -6457,7 +6457,7 @@ function driveTouch(copied, fake) {
   // pause screen's save code and the end screen's entry code differ.
   const offEntry = () => {
     const s = g.sim;
-    const carry = { time: s.time, solved: s.solved, lastEntry: s.lastEntry };
+    const carry = runCarry(s);
     const { w, h } = g.world.size;
     for (let i = 0; i < w * h; i++) {
       const { x, y } = boardCoords(s.bd.u, s.bd.v, i, g.world.size);
@@ -6646,6 +6646,15 @@ function driveTouch(copied, fake) {
   need(g.screen === 'pause', 'Esc still pauses in play');
   press('Escape', 'Escape');
   need(g.screen === 'play' && g.sim === run, 'Esc still resumes from pause');
+  // A pause drawn, then a resume and a second P: the pause map's clock starts over.
+  press('KeyP', 'p');
+  draw(g, 0.25);
+  need(g.pausedAt === 0.25, 'a drawn pause stamps its clock');
+  press('KeyP', 'p');
+  press('KeyP', 'p');
+  need(g.screen === 'pause' && g.pausedAt === null, 'a second pause restarts the pause map clock');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === run, 'P resumes from the second pause');
   for (const [code, key, name] of [['KeyP', 'p', 'P'], ['Escape', 'Escape', 'Esc']]) {
     draw(g, 0);
     click('play', 'pause');
@@ -6659,6 +6668,8 @@ function driveTouch(copied, fake) {
   offEntry();
   endRun(g);
   draw(g, 0);
+  press('KeyP', 'p');
+  need(g.screen === 'over', 'P on the end screen leaves it showing');
   copies('over', entryCode(g));
   const trail = g.sim.trail;
   click('over', 'continue');
