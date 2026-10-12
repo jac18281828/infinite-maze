@@ -599,6 +599,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
       ['    g.pausedAt = null;\n    writeSave(g, hereCode(g));', '    writeSave(g, hereCode(g));', /^fail: touch a second pause restarts the pause map clock/],
       ["} else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", "} else if (e.code === 'KeyQ' || e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", /^fail: touch P on the end screen leaves it showing/],
+      ['      draw(g, now / 1000);', "      draw(g, now / 1000); throw new Error('frame');", /^fail: .*frame/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'else if (false) showSplash(g, hit.k, hit.paid);', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'if (hit) showSplash(g, hit.k, hit.paid);', /^fail: touch a run that ends on the crossing of tomb 100 shows the end screen/],
       ['  g.splash = { k, paid };\n  writeSave(g, hereCode(g));', '  g.splash = { k, paid };', /^fail: touch the EASY splash stores the save/],

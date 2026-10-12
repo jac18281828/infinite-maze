@@ -8174,6 +8174,8 @@ function runLoop(g) {
     screen: () => g.screen,
     step: TICK,
     start: performance.now(),
+    // The self-test fails on the first frame exception, as an uncaught one did.
+    log: (e) => { console.error(e); if (SELFTEST) reportError(e); },
     onFail: () => { paintError(g); present(); },
   });
   window.addEventListener('keydown', (e) => { if (!e.repeat) guard.release(); });
