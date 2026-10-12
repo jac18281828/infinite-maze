@@ -9,7 +9,7 @@ import { BW, BH, DX, DY } from '../world/board.mjs';
 import { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
 import { floorItems, itemSpot } from '../world/floor.mjs';
-import { windDir } from '../world/wind.mjs';
+import { windDir, windBranches } from '../world/wind.mjs';
 import { coinId } from './wallet.mjs';
 import { boardMask } from './mask.mjs';
 import { fixtureSets, dustMotes, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
@@ -21,6 +21,11 @@ const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
 const AMBIENT = [12, 9, 22];
+// The warm step reaches this many boards past the view, one more than the art
+// window, and does this many units of world work a frame (spec section 9).
+const WARM_REACH = 2;
+const WARM_UNITS = 2;
+const WARM_MAX = 64;
 export const MAP_SCALE = 3;
 // Seconds of burn below half over which tier-2 skeletons fade in.
 export const BOOST_FADE_S = 10;
@@ -273,8 +278,44 @@ export function createRenderer(canvas, world) {
     return art;
   }
 
-  /** Builds boards within one board of the view; drops distant ones. */
+  // The warm window sorted nearest the camera first, in preallocated arrays:
+  // an idle frame allocates nothing.
+  const warmX = new Int32Array(WARM_MAX), warmY = new Int32Array(WARM_MAX), warmD = new Float64Array(WARM_MAX);
+  const windDone = new WeakSet();
+
+  /**
+   * Spends WARM_UNITS of world work on the boards within WARM_REACH of the
+   * view, nearest the camera first and by row then column among equals: each
+   * board's units, then its wind if it is a route board.
+   */
+  function warmAhead(cam) {
+    const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - WARM_REACH, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + WARM_REACH;
+    const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - WARM_REACH, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + WARM_REACH;
+    let n = 0;
+    for (let by = by0; by <= by1; by++) {
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const d = Math.abs((bx + 0.5) * BOARD_W - cam.x) + Math.abs((by + 0.5) * BOARD_H - cam.y);
+        let k = n++;
+        for (; k > 0 && warmD[k - 1] > d; k--) { warmX[k] = warmX[k - 1]; warmY[k] = warmY[k - 1]; warmD[k] = warmD[k - 1]; }
+        warmX[k] = bx; warmY[k] = by; warmD[k] = d;
+      }
+    }
+    let units = WARM_UNITS;
+    for (let k = 0; k < n; k++) {
+      const bx = warmX[k], by = warmY[k];
+      while (!world.warm(bx, by)) if (--units <= 0) return;
+      const bd = world.board(bx, by);
+      if (bd.kind === 'route' && !windDone.has(bd)) {
+        windBranches(world, bd);
+        windDone.add(bd);
+        if (--units <= 0) return;
+      }
+    }
+  }
+
+  /** Warms the world ahead, builds one board's art within one board of the view, and drops distant art. */
   function prepare(cam, budget = 1) {
+    warmAhead(cam);
     const bx0 = Math.floor((cam.x - VIEW_W / 2) / BOARD_W) - 1, bx1 = Math.floor((cam.x + VIEW_W / 2) / BOARD_W) + 1;
     const by0 = Math.floor((cam.y - VIEW_H / 2) / BOARD_H) - 1, by1 = Math.floor((cam.y + VIEW_H / 2) / BOARD_H) + 1;
     for (let by = by0; by <= by1 && budget > 0; by++) {

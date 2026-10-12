@@ -209,6 +209,7 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
   const flameSets = new Map();
   const flameCells = new Map();
   const tkey = (u, v) => `${u},${v}`;
+  let built = 0;
 
   function tomb(u, v) {
     const k = tkey(u, v);
@@ -220,7 +221,7 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
   function board(x, y) {
     const p = posOf(x, y);
     let bd = boards.get(p);
-    if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); }
+    if (!bd) { bd = buildBoard(x, y, p); boards.set(p, bd); built++; }
     return bd;
   }
 
@@ -464,8 +465,44 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
     flow.retain(u, v, 2);
   }
 
+  /**
+   * One unit of cold work toward board (x, y) and its flames, or true,
+   * building nothing, when both are cached. The first of: build the board;
+   * build one unbuilt tree board of a tomb `flamesAt` reads (the board's own
+   * and, on an entry board, each upstream tomb's); compute one such tomb's
+   * flames; compute `flamesAt`. A flames unit can still build the few
+   * boards its walks reach past the tomb.
+   */
+  function warm(x, y) {
+    const p = posOf(x, y);
+    const have = boards.has(p);
+    if (have && flameCells.has(p)) return true;
+    if (!have) { board(x, y); return false; }
+    const { u, v } = tombOf(x, y, size);
+    const t = tomb(u, v), i = boardIndex(x, y, size);
+    if (t.depth[i] >= 0) {
+      const from = [[u, v]];
+      for (const w of t.walls.slice(1)) if (w.i === i) from.push([u + TDX[w.dir], v + TDY[w.dir]]);
+      const todo = from.filter(([fu, fv]) => !flameSets.has(tkey(fu, fv)));
+      // tombFlames reads tree boards only: a rock board has no door to walk through.
+      for (const [fu, fv] of todo) {
+        const ft = tomb(fu, fv);
+        for (let j = 0; j < ft.depth.length; j++) {
+          const at = boardCoords(fu, fv, j, size);
+          if (ft.depth[j] >= 0 && !boards.has(posOf(at.x, at.y))) { board(at.x, at.y); return false; }
+        }
+      }
+      if (todo.length) { tombFlames(todo[0][0], todo[0][1]); return false; }
+    }
+    flamesAt(x, y);
+    return false;
+  }
+
   // `exit(u, v)` reads the flow alone: no tomb tree or board is built.
-  return { code, difficulty, size, H, exit: flow.exit, tomb, board, tombFlames, flamesAt, step, resumePoint, startPoint, retain };
+  return {
+    code, difficulty, size, H, exit: flow.exit, tomb, board, tombFlames, flamesAt, step, resumePoint, startPoint, retain,
+    warm, boardsBuilt: () => built,
+  };
 }
 
 class Bytes {

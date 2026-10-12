@@ -3,7 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createWorld, boardCoords } from '../src/world/world.mjs';
+import v8 from 'node:v8';
+import { createWorld, boardCoords, tombOf } from '../src/world/world.mjs';
+import { windDir } from '../src/world/wind.mjs';
 import { boardMask } from '../src/game/mask.mjs';
 import { fixtureSets } from '../src/game/fixtures.mjs';
 import { createRenderer } from '../src/game/render.mjs';
@@ -167,4 +169,97 @@ test('a board-art build takes at most a quarter of the reference shading time', 
   assert.ok(builds.length > 296, `${builds.length} builds`);
   const art = median(builds), ref = median(reference);
   assert.ok(art <= ref / 4, `art build ${art.toFixed(2)} ms against reference ${ref.toFixed(2)} ms`);
+});
+
+/** The most boards a frame builds over five walks across a seam at `difficulty`, and the seams crossed. */
+function seamWalks(difficulty) {
+  let peak = 0, seams = 0;
+  const walks = [
+    ['east', 1, 0, 96, 'w'], ['west', -1, 0, 96, 'w'], ['north', 0, 1, 48, 'h'], ['south', 0, -1, 48, 'h'], ['fall', 0, -1, 300, 'h'],
+  ];
+  withDocument(() => nullCanvas(), () => {
+    for (const [, dx, dy, speed, span] of walks) {
+      const world = createWorld(CODE, { difficulty });
+      const renderer = createRenderer(nullCanvas(), world);
+      const tombW = world.size.w * BOARD_W, tombH = world.size.h * BOARD_H;
+      const cam = { x: tombW / 2, y: 2 * tombH + tombH / 2 };
+      const tombAt = () => tombOf(Math.floor(cam.x / BOARD_W), Math.floor(cam.y / BOARD_H), world.size);
+      let at = tombAt();
+      world.retain(at.u, at.v);
+      const frame = (t) => {
+        const before = world.boardsBuilt();
+        const now = tombAt();
+        if (now.u !== at.u || now.v !== at.v) { at = now; world.retain(at.u, at.v); seams++; }
+        renderer.scene(null, cam, t);
+        const bd = world.board(Math.floor(cam.x / BOARD_W), Math.floor(cam.y / BOARD_H));
+        windDir(world, bd, 0);
+        return world.boardsBuilt() - before;
+      };
+      let t = 0;
+      for (let f = 0; f < 900; f++, t += 1 / 60) frame(t);
+      seams = 0;
+      const frames = Math.ceil((1.5 * (span === 'w' ? tombW : tombH)) / (speed / 60));
+      for (let f = 0; f < frames; f++, t += 1 / 60) {
+        cam.x += dx * speed / 60;
+        cam.y += dy * speed / 60;
+        peak = Math.max(peak, frame(t));
+      }
+      assert.ok(seams > 0, `the ${difficulty} walk crosses a seam`);
+    }
+  });
+  return peak;
+}
+
+for (const difficulty of LEVELS) {
+  test(`no frame of the ${difficulty} seam walks builds more than six boards`, () => {
+    const peak = seamWalks(difficulty);
+    assert.ok(peak <= 6, `peak ${peak} boards in a frame`);
+  });
+}
+
+test('warm finishes a board and its flames in a few units without changing any result', () => {
+  const world = createWorld(CODE, { difficulty: 'ultimate' }), twin = createWorld(CODE, { difficulty: 'ultimate' });
+  for (let i = 0; i < world.size.w * world.size.h; i++) {
+    const { x, y } = boardCoords(0, 2, i, world.size);
+    let calls = 0;
+    while (!world.warm(x, y)) assert.ok(++calls <= 200, `board ${x},${y} still cold after ${calls} units`);
+    const built = world.boardsBuilt();
+    assert.deepEqual(world.flamesAt(x, y), twin.flamesAt(x, y), `flames of ${x},${y}`);
+    assert.equal(world.boardsBuilt(), built, 'flamesAt builds nothing after warm');
+    assert.equal(world.warm(x, y), true);
+    assert.equal(world.boardsBuilt(), built, 'a warm board builds nothing');
+  }
+});
+
+test('boardsBuilt counts a board again after retain drops it', () => {
+  const world = createWorld(CODE, { difficulty: 'easy' });
+  assert.equal(world.boardsBuilt(), 0);
+  world.board(0, 0);
+  world.board(0, 0);
+  assert.equal(world.boardsBuilt(), 1);
+  world.retain(5, 5);
+  world.board(0, 0);
+  assert.equal(world.boardsBuilt(), 2);
+});
+
+const allocated = () => v8.getHeapStatistics().total_allocated_bytes;
+
+test('an idle prepare allocates under 256 bytes', () => {
+  withDocument(() => nullCanvas(), () => {
+    const world = createWorld(CODE, { difficulty: 'ultimate' });
+    const renderer = createRenderer(nullCanvas(), world);
+    const bd = world.startPoint().board;
+    const cam = centre(bd);
+    for (let i = 0; i < 5000; i++) renderer.prepare(cam);
+    const built = world.boardsBuilt(), put = shades;
+    const per = [];
+    for (let w = 0; w < 3; w++) {
+      const before = allocated();
+      for (let i = 0; i < 5000; i++) renderer.prepare(cam);
+      per.push((allocated() - before) / 5000);
+    }
+    assert.equal(world.boardsBuilt(), built, 'the window was warm');
+    assert.equal(shades, put, 'the art was built');
+    assert.ok(Math.min(...per) < 256, `${per.map((b) => b.toFixed(0))} bytes a call`);
+  });
 });
