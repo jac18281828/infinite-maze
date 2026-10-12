@@ -4976,30 +4976,34 @@ function createAudio() {
     o.stop(t + 0.2);
   }
 
+  // The tune follows the wall clock. A note whose time has passed (after a
+  // stall) or that falls while muted is skipped, not built: time and phrase
+  // advance as if it had sounded.
   function schedule() {
     if (!ac) return;
     eased += (intensity - eased) * 0.08;
     const bpm = 110 + 18 * eased;
     const s16 = 60 / bpm / 4;
-    while (nextTime < ac.currentTime + 0.12) {
+    const now = ac.currentTime;
+    while (nextTime < now + 0.12) {
       const t = nextTime, i = step % 32;
-      if (i % 2 === 0) {
-        const e = i / 2;
-        bass(t, deg(BASS[e]), s16 * 1.8, eased > 0.75);
-        const hit = DRUM[e];
-        if (hit === 'D') doum(t);
-        else if (hit === 'T') tek(t, 0.22);
-      } else if (eased > 0.5) {
-        tek(t, 0.07 + 0.06 * eased);
+      if (i === 0 && step % 64 === 0) phrase = (phrase + 1) % PHRASES.length;
+      if (!muted && t >= now) {
+        if (i % 2 === 0) {
+          const e = i / 2;
+          bass(t, deg(BASS[e]), s16 * 1.8, eased > 0.75);
+          const hit = DRUM[e];
+          if (hit === 'D') doum(t);
+          else if (hit === 'T') tek(t, 0.22);
+        } else if (eased > 0.5) {
+          tek(t, 0.07 + 0.06 * eased);
+        }
+        if (i === 0 && eased > 0.25) drone(t, s16 * 32);
+        for (const [at, d, len] of PHRASES[phrase]) {
+          if (at === i) ney(t, deg(d, 1), len * s16, 0.16);
+        }
+        if (eased > 0.75 && i % 2 === 1) pluck(t, deg(ARP[(i >> 1) % 8], 3));
       }
-      if (i === 0) {
-        if (eased > 0.25) drone(t, s16 * 32);
-        if (step % 64 === 0) phrase = (phrase + 1) % PHRASES.length;
-      }
-      for (const [at, d, len] of PHRASES[phrase]) {
-        if (at === i) ney(t, deg(d, 1), len * s16, 0.16);
-      }
-      if (eased > 0.75 && i % 2 === 1) pluck(t, deg(ARP[(i >> 1) % 8], 3));
       nextTime += s16;
       step++;
     }
