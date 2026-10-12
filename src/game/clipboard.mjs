@@ -11,9 +11,14 @@ export async function copyText(clipboard, text) {
   }
 }
 
-/** Copies `text`, then hands `show` the status a screen reads: COPIED or COPY FAILED. */
-export async function copyWithStatus(clipboard, text, show) {
-  show((await copyText(clipboard, text)) ? 'COPIED' : 'COPY FAILED');
+/**
+ * Copies `text`, then hands `show` the status a screen reads: COPIED or COPY
+ * FAILED. `live()` says whether the screen visit that asked is still on; once
+ * it is over at resolution, `show` gets nothing.
+ */
+export async function copyWithStatus(clipboard, text, show, live = () => true) {
+  const status = (await copyText(clipboard, text)) ? 'COPIED' : 'COPY FAILED';
+  if (live()) show(status);
 }
 
 /** The SAVE CODE label, followed by the copy status when there is one. */

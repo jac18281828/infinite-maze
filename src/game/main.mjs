@@ -1489,7 +1489,12 @@ function payTombs(g, solvedNow) {
 
 /** State shared by input, tick and draw. */
 function createGame() {
+  // A visit ends whenever the screen is written, even back to the same one.
+  let screen = 'title', visit = 0;
   return {
+    get screen() { return screen; },
+    set screen(next) { screen = next; visit++; },
+    get visit() { return visit; },
     // A game starts clean: wallet 0, no collected coins, solved tombs or record, and no slot.
     slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map(),
     // CONTINUE? on the title: { slot }, the stored slot a Y restores; null when not asked.
@@ -1509,7 +1514,7 @@ function createGame() {
     open: null,
     // The milestone the splash shows: { k, paid }, where paid is whether this crossing paid.
     splash: null,
-    screen: 'title', typing: null, note: '', footFrame: -1, climbFrame: -1,
+    typing: null, note: '', footFrame: -1, climbFrame: -1,
     // The tomb { u, v } the pause map frames, and its model.
     frame: { u: 0, v: 0 }, pauseMap: null, pausedAt: null,
   };
@@ -1685,9 +1690,8 @@ function titleKey(g, e) {
     // The save code the title shows, or the seed code when it shows none.
     const s = readSave();
     const shown = s ? `${formatCode(s.code)}:${s.p}` : formatCode(g.code);
-    copyWithStatus(globalThis.navigator.clipboard, shown, (status) => {
-      if (g.screen === 'title') g.note = status;
-    });
+    const visit = g.visit;
+    copyWithStatus(globalThis.navigator.clipboard, shown, (status) => { g.note = status; }, () => g.visit === visit);
   }
 }
 
@@ -1721,9 +1725,8 @@ function pauseKey(g, e) {
     leaveOpen(g);
     g.copied = '';
   } else if (e.code === 'KeyC') {
-    copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => {
-      if (g.screen === 'pause') g.copied = status;
-    });
+    const visit = g.visit;
+    copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => { g.copied = status; }, () => g.visit === visit);
   } else if (DIRS[e.code] && !e.repeat) g.frame = panFrame(g.frame, DIRS[e.code]);
 }
 
@@ -1734,9 +1737,8 @@ function overKey(g, e) {
     begin(g, s.lastEntry, runCarry(s));
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
-    copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => {
-      if (g.screen === 'over') g.copied = status;
-    });
+    const visit = g.visit;
+    copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => { g.copied = status; }, () => g.visit === visit);
   }
 }
 

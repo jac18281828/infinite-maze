@@ -952,9 +952,11 @@ answers it (§8).
 C on the pause and end screens writes the save code shown to the clipboard.
 On the title K copies the save code it shows, or the seed code when it shows
 none; during code entry A, D, H, K, L and P type letters. Each screen then
-reads COPIED, or COPY FAILED when the clipboard is absent or refuses. The copy
-uses `navigator.clipboard.writeText`, which browsers allow from a key press
-in a secure context, https and `file://` alike.
+reads COPIED, or COPY FAILED when the clipboard is absent or refuses, on the
+screen visit that asked and nowhere once it ended. A visit ends whenever the
+screen changes, even back to the same one. The copy uses
+`navigator.clipboard.writeText`, which browsers allow from a key press in a
+secure context, https and `file://` alike.
 
 **Touch.** Touch mode is on at boot when the device reports a touch point or a
 coarse pointer, or when the URL hash is `#touch`. A touch `pointerdown` turns
