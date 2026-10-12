@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X, textWidth,
-  FIRE_FRAC, FIRE_MIN, padSide, titleFeet,
+  FIRE_FRAC, FIRE_MIN, padSide, titleFeet, createQuickTaps,
 } from '../src/game/touch.mjs';
 import { build } from '../tools/build.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
@@ -495,6 +495,33 @@ for (const [dpr, wider] of [[2, 'left'], [3, 'right']]) {
     });
   });
 }
+
+test('a touch starting within 350 ms of the last lift lifts quick, and a cancel forgets it', () => {
+  const q = createQuickTaps();
+  q.start(0, 1000);
+  assert.equal(q.lift(0, 1100), false, 'the first tap has no lift before it');
+  q.start(0, 1400);
+  assert.equal(q.lift(0, 1500), true, 'a start 300 ms after a lift lifts quick');
+  q.start(0, 1849);
+  q.cancel(0);
+  assert.equal(q.lift(0, 1900), false, 'a cancelled touch is no longer quick');
+  q.start(0, 2249);
+  assert.equal(q.lift(0, 2300), true, 'a start 349 ms after a lift is within the window');
+  q.start(0, 2650);
+  assert.equal(q.lift(0, 2700), false, 'a start 350 ms after a lift is outside it');
+});
+
+test('an id that started quick and never ended lifts as a plain tap once it starts outside the window', () => {
+  const q = createQuickTaps();
+  q.lift(5, 1000);
+  q.start(1, 1100);
+  // Android reuses id 1; the first touch never ended, then a slow tap takes it.
+  q.start(1, 3000);
+  assert.equal(q.lift(1, 3100), false);
+  // The id still goes quick when it starts in a window again.
+  q.start(1, 3200);
+  assert.equal(q.lift(1, 3300), true);
+});
 
 test('the title explorer keeps its spot in band and keyboard modes', () => {
   assert.deepEqual(titleFeet(layout(PORTRAIT)), [42, 108]);

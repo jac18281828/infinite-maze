@@ -5714,22 +5714,42 @@ function drawLabel(cv, text) {
 }
 
 /**
+ * Which touches began within DOUBLE_TAP_MS of the last lift: the quick ones,
+ * whose lift the zoom guard cancels. A touch outside the window drops its
+ * identifier, because Android reuses identifiers and one that never ended
+ * would make a later slow tap read as quick. Times are `timeStamp` ms.
+ */
+function createQuickTaps() {
+  let lastEnd = -Infinity;
+  const quick = new Set();
+  return {
+    start(id, at) {
+      const gap = at - lastEnd;
+      if (gap >= 0 && gap < DOUBLE_TAP_MS) quick.add(id); else quick.delete(id);
+    },
+    cancel(id) { quick.delete(id); },
+    /** Records the lift at `at`; true when the touch began quick. */
+    lift(id, at) {
+      lastEnd = at;
+      return quick.delete(id);
+    },
+  };
+}
+
+/**
  * Safari ignores user-scalable=no and zooms on a tap that starts within
  * DOUBLE_TAP_MS of the last lift. Cancelling that tap's touchend stops the
  * zoom and drops its click, so a soft key it starts and lifts on clicks
  * itself.
  */
 function stopDoubleTapZoom() {
-  let lastEnd = -Infinity;
-  const quick = new Set();
+  const taps = createQuickTaps();
   document.addEventListener('touchstart', (e) => {
-    const gap = e.timeStamp - lastEnd;
-    if (gap >= 0 && gap < DOUBLE_TAP_MS) for (const t of e.changedTouches) quick.add(t.identifier);
+    for (const t of e.changedTouches) taps.start(t.identifier, e.timeStamp);
   }, { passive: true });
-  document.addEventListener('touchcancel', (e) => { for (const t of e.changedTouches) quick.delete(t.identifier); });
+  document.addEventListener('touchcancel', (e) => { for (const t of e.changedTouches) taps.cancel(t.identifier); });
   document.addEventListener('touchend', (e) => {
-    lastEnd = e.timeStamp;
-    const lifted = [...e.changedTouches].filter((t) => quick.delete(t.identifier));
+    const lifted = [...e.changedTouches].filter((t) => taps.lift(t.identifier, e.timeStamp));
     if (lifted.length === 0 || !e.cancelable) return;
     e.preventDefault();
     for (const t of lifted) {
@@ -5980,7 +6000,7 @@ function createTouch({ state, onMode }) {
     soft: (sid, id) => buttons.get(`${sid}/${id}`).el,
   };
 }
-return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, layout, padSide, titleFeet, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, screenId, difficultyLabel, softKeys, textWidth, PANEL_X, keyRects, viewport, createTouch };
+return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, layout, padSide, titleFeet, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, screenId, difficultyLabel, softKeys, textWidth, PANEL_X, keyRects, viewport, createQuickTaps, createTouch };
 })();
 
 // src/game/clipboard.mjs
