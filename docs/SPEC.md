@@ -541,8 +541,10 @@ paid once, and neither loses the other's coins. A coin credits one only when
 the stored slot did not already list it, so blocked storage never credits a
 coin twice and never lowers the wallet. A tab shows its own last wallet until
 its next write, and there is no lock and no `storage` listener. Absent, blocked
-or malformed storage reads as empty, and the game plays on. The `#selftest`
-page keeps its storage in memory and never reads or writes the player's.
+or malformed storage reads as empty, and the game plays on. While the latest
+write failed, whatever its key, the title reads `SAVES OFF: COPY YOUR CODE`
+above its name until a write succeeds. The `#selftest` page keeps its storage
+in memory and never reads or writes the player's.
 
 ## 6. Movement
 

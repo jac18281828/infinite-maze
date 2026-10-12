@@ -19,6 +19,7 @@ import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PAN
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { createGuard, errorLine } from './loop.mjs';
+import { createStorage } from './storage.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
 import { RGB, idx } from './art.mjs';
 
@@ -37,19 +38,14 @@ const SELFTEST = location.hash === '#selftest';
 // never reads or writes the player's wallet, save or settings.
 const memory = SELFTEST ? new Map() : null;
 
+const memoryArea = memory && {
+  getItem: (key) => (memory.has(key) ? memory.get(key) : null),
+  setItem: (key, value) => { memory.set(key, String(value)); },
+  removeItem: (key) => { memory.delete(key); },
+};
 // Every storage access is guarded; the game runs without storage.
-function load(key) {
-  if (memory) return memory.has(key) ? memory.get(key) : null;
-  try { return globalThis.localStorage.getItem(key); } catch { return null; }
-}
-function store(key, value) {
-  if (memory) { memory.set(key, String(value)); return; }
-  try { globalThis.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
-}
-function unstore(key) {
-  if (memory) { memory.delete(key); return; }
-  try { globalThis.localStorage.removeItem(key); } catch { /* storage unavailable */ }
-}
+const storage = createStorage(() => memoryArea || globalThis.localStorage);
+const { load, store, unstore } = storage;
 
 /** The real localStorage's slot and legacy keys, as stored, for the self-test's guard. */
 function realKeys() {
@@ -1854,6 +1850,7 @@ function drawTitle(g, t) {
   const best = titleBest(g);
   r.ctx.fillStyle = shade(0.45);
   r.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  if (storage.failed()) r.text('SAVES OFF: COPY YOUR CODE', VIEW_W / 2, 4, 'o', { align: 'center' });
   r.text('INFINITE MAZE', VIEW_W / 2, 18, 'm', { align: 'center', scale: 2 });
   r.text('A TOMB WITHOUT END', VIEW_W / 2, 38, 'a', { align: 'center' });
   r.panel(62, 50, 196, g.confirm || saved || g.typing !== null ? 100 : 88);

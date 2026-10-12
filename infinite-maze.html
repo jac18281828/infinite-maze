@@ -6067,8 +6067,43 @@ function createGuard({ request, screen, step, start, log = (e) => console.error(
 return { errorLine, createGuard };
 })();
 
-// src/game/main.mjs
+// src/game/storage.mjs
 const __m24 = (() => {
+
+// Guarded storage over a backend the caller supplies. `area()` returns the
+// `getItem`, `setItem` and `removeItem` object, and runs inside each guard,
+// because reaching `localStorage` itself throws when storage is blocked.
+// DOM-free, so node tests it with a fake.
+
+/** `load`, `store` and `unstore` over `area`, and `failed()`, true while the latest `store` did not land. */
+function createStorage(area) {
+  let failed = false;
+  return {
+    /** The stored text, or null when absent or storage is unavailable. */
+    load(key) {
+      try { return area().getItem(key); } catch { return null; }
+    },
+    /** Writes `value`; true when it landed. Every call counts, whatever its key. */
+    store(key, value) {
+      try {
+        area().setItem(key, value);
+        failed = false;
+      } catch {
+        failed = true;
+      }
+      return !failed;
+    },
+    unstore(key) {
+      try { area().removeItem(key); } catch { /* storage unavailable */ }
+    },
+    failed: () => failed,
+  };
+}
+return { createStorage };
+})();
+
+// src/game/main.mjs
+const __m25 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
@@ -6084,10 +6119,12 @@ const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANE
 const { MILESTONE, rankName } = __m8;
 const { copyWithStatus, saveLabel } = __m22;
 const { createGuard, errorLine } = __m23;
+const { createStorage } = __m24;
 const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m16;
 const { RGB, idx } = __m11;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
 // milestone splash screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -6121,19 +6158,14 @@ const SELFTEST = location.hash === '#selftest';
 // never reads or writes the player's wallet, save or settings.
 const memory = SELFTEST ? new Map() : null;
 
+const memoryArea = memory && {
+  getItem: (key) => (memory.has(key) ? memory.get(key) : null),
+  setItem: (key, value) => { memory.set(key, String(value)); },
+  removeItem: (key) => { memory.delete(key); },
+};
 // Every storage access is guarded; the game runs without storage.
-function load(key) {
-  if (memory) return memory.has(key) ? memory.get(key) : null;
-  try { return globalThis.localStorage.getItem(key); } catch { return null; }
-}
-function store(key, value) {
-  if (memory) { memory.set(key, String(value)); return; }
-  try { globalThis.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
-}
-function unstore(key) {
-  if (memory) { memory.delete(key); return; }
-  try { globalThis.localStorage.removeItem(key); } catch { /* storage unavailable */ }
-}
+const storage = createStorage(() => memoryArea || globalThis.localStorage);
+const { load, store, unstore } = storage;
 
 /** The real localStorage's slot and legacy keys, as stored, for the self-test's guard. */
 function realKeys() {
@@ -7938,6 +7970,7 @@ function drawTitle(g, t) {
   const best = titleBest(g);
   r.ctx.fillStyle = shade(0.45);
   r.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  if (storage.failed()) r.text('SAVES OFF: COPY YOUR CODE', VIEW_W / 2, 4, 'o', { align: 'center' });
   r.text('INFINITE MAZE', VIEW_W / 2, 18, 'm', { align: 'center', scale: 2 });
   r.text('A TOMB WITHOUT END', VIEW_W / 2, 38, 'a', { align: 'center' });
   r.panel(62, 50, 196, g.confirm || saved || g.typing !== null ? 100 : 88);
