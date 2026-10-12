@@ -1435,6 +1435,13 @@ function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LIMIT_MS,
     return fs;
   }
 
+  /** The tombs [u, v] whose flames board i of tomb (u, v), tree `t`, reads: its own, then each upstream across an in-wall. */
+  function flameTombs(t, u, v, i) {
+    const from = [[u, v]];
+    for (const w of t.walls.slice(1)) if (w.i === i) from.push([u + TDX[w.dir], v + TDY[w.dir]]);
+    return from;
+  }
+
   /**
    * Flame cells on board (x, y), ascending: those its tomb places, and on an
    * entry board those the upstream tomb's chains place there.
@@ -1448,9 +1455,9 @@ function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LIMIT_MS,
     const i = boardIndex(x, y, size);
     const set = new Set();
     if (t.depth[i] >= 0) {
-      const from = [tombFlames(u, v)];
-      for (const w of t.walls.slice(1)) if (w.i === i) from.push(tombFlames(u + TDX[w.dir], v + TDY[w.dir]));
-      for (const fs of from) for (const f of fs.flames) if (f.x === x && f.y === y) set.add(f.cell);
+      for (const [fu, fv] of flameTombs(t, u, v, i)) {
+        for (const f of tombFlames(fu, fv).flames) if (f.x === x && f.y === y) set.add(f.cell);
+      }
     }
     cells = [...set].sort((p1, p2) => p1 - p2);
     flameCells.set(p, cells);
@@ -1519,9 +1526,7 @@ function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LIMIT_MS,
     const { u, v } = tombOf(x, y, size);
     const t = tomb(u, v), i = boardIndex(x, y, size);
     if (t.depth[i] >= 0) {
-      const from = [[u, v]];
-      for (const w of t.walls.slice(1)) if (w.i === i) from.push([u + TDX[w.dir], v + TDY[w.dir]]);
-      const todo = from.filter(([fu, fv]) => !flameSets.has(tkey(fu, fv)));
+      const todo = flameTombs(t, u, v, i).filter(([fu, fv]) => !flameSets.has(tkey(fu, fv)));
       // tombFlames reads tree boards only: a rock board has no door to walk through.
       for (const [fu, fv] of todo) {
         const ft = tomb(fu, fv);
