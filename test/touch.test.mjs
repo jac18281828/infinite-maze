@@ -194,6 +194,19 @@ test('the title\'s typing line fits its panel at TYPED_MAX characters', () => {
   assert.ok(end <= PANEL_X.typing[1] - 10, `the line ends at x ${end}`);
 });
 
+test('the title names the tomb\'s mouth when no best is stored', () => {
+  const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
+  const fn = src.match(/function drawTitle\([^)]*\) \{[\s\S]*?\n\}\n/);
+  assert.ok(fn, 'drawTitle found');
+  const line = fn[0].match(/r\.text\(best === null \? '([^']*)'/);
+  assert.ok(line, 'drawTitle draws the best-tomb line');
+  assert.equal(line[1], 'THE MOUTH OF THE TOMB');
+  assert.ok(!fn[0].includes('NO TOMB REACHED YET'));
+  const w = textWidth(line[1]), x0 = 160 - w / 2, x1 = 160 + w / 2;
+  assert.ok(x0 >= PANEL_X.title[0] + 10, `the line starts at x ${x0}`);
+  assert.ok(x1 <= PANEL_X.title[1] - 10, `the line ends at x ${x1}`);
+});
+
 test('the title\'s four level names lie right of L and inside the 248 text margin', () => {
   const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
   const fn = src.match(/function drawSettingRow\([^)]*\) \{[\s\S]*?\n\}\n/);
