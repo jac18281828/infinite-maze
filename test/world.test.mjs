@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   createWorld, digestTombs, serializeBoard, posOf, boardOfPos, tombOf, boardCoords, midpointIndex, SAVE_LIMIT,
 } from '../src/world/world.mjs';
@@ -531,4 +532,27 @@ test('the repair brings a tree that misses the targets to a spanning tree that m
     }
     assert.ok(owner.size > 0);
   }
+});
+
+// Without the throw the backtrack never ends and the heap balloons, so the
+// call runs in a child with a short timeout and a heap cap.
+test('cellPath throws an Error naming both cells when links leave the target unreachable', () => {
+  const world = new URL('../src/world/world.mjs', import.meta.url).href;
+  const script = `
+    import { cellPath } from ${JSON.stringify(world)};
+    try {
+      cellPath(new Uint8Array(84), 3, 70);
+      console.log(JSON.stringify({ threw: false }));
+    } catch (e) {
+      console.log(JSON.stringify({ threw: true, name: e.name, error: e instanceof Error, message: e.message }));
+    }`;
+  const run = spawnSync(process.execPath, ['--max-old-space-size=256', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000 });
+  assert.equal(run.error, undefined, `the call returns within 2 s: ${run.error && run.error.message}`);
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.threw, true);
+  assert.equal(out.name, 'Error');
+  assert.equal(out.error, true);
+  assert.match(out.message, /\b3\b/, 'names from');
+  assert.match(out.message, /\b70\b/, 'names to');
 });

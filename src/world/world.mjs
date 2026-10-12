@@ -163,7 +163,7 @@ function walkOrder(bd, inCell, outCell, cells) {
   return keyed.map((e) => e.c);
 }
 
-/** Cells and link directions of the tree path from `from` to `to`. */
+/** Cells and link directions of the tree path from `from` to `to`; throws when `to` is unreachable. */
 export function cellPath(links, from, to) {
   const parent = new Int16Array(NCELL).fill(-1);
   const pdir = new Int8Array(NCELL);
@@ -180,6 +180,7 @@ export function cellPath(links, from, to) {
       queue.push(t);
     }
   }
+  if (parent[to] < 0) throw new Error(`cellPath: cell ${to} is unreachable from cell ${from}`);
   const cells = [], dirs = [];
   for (let c = to; c !== from; c = parent[c]) { cells.push(c); dirs.push(pdir[c]); }
   cells.push(from);
