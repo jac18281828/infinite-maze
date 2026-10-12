@@ -204,13 +204,14 @@ export function legacySlot(load) {
 /**
  * Writes the run state `{ id, save, level, start, solved, wallet, coins, tombs,
  * record }` (coins and tombs are Sets) through `io` `{ load(key), store(key,
- * value) }` without losing what another tab wrote. A stored slot
+ * value), remove(key) }` without losing what another tab wrote. A stored slot
  * with the same id is the same run: its wallet and record merge by max and its
  * Sets by union, in place so a running sim sees them. Any other slot, or none,
  * is replaced whole, and `pay` sees an empty stored state. The run fields are
  * the writer's. `pay(state, stored)` returns the coins this write earns, with
  * `state` and `stored` holding the slot's sets as one-entry Maps keyed by
- * `coinKey(seed, level)`; they join the wallet. Returns the coins earned.
+ * `coinKey(seed, level)`; they join the wallet. The first write removes the
+ * legacy keys. Returns the coins earned.
  */
 export function commitSlot(io, state, pay) {
   const held = parseSlot(io.load(SLOT_KEY));
@@ -230,5 +231,6 @@ export function commitSlot(io, state, pay) {
   state.wallet += earned;
   state.record = now.paid.get(key);
   io.store(SLOT_KEY, serializeSlot(state));
+  for (const old of Object.values(LEGACY_KEYS)) io.remove(old);
   return earned;
 }

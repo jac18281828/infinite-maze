@@ -7,8 +7,8 @@ import { floorItems, itemSpot } from '../src/world/floor.mjs';
 import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
-  SLOT_KEY, COIN_RATE, COIN_ID, TOMB_ID, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot,
-  parseWallet, parseIdSets, parsePaid, serializeIdSets, serializePaid,
+  SLOT_KEY, LEGACY_KEYS, COIN_RATE, COIN_ID, TOMB_ID, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot,
+  legacySlot, parseWallet, parseIdSets, parsePaid, serializeIdSets, serializePaid,
 } from '../src/game/wallet.mjs';
 
 test('the level rates are 1, 2, 5 and 10', () => {
@@ -67,7 +67,7 @@ test('the slot key, and a slot reads absent or malformed text as null and round-
 /** A Map-backed storage. */
 const memoryIo = () => {
   const m = new Map();
-  return { m, load: (k) => (m.has(k) ? m.get(k) : null), store: (k, v) => { m.set(k, v); } };
+  return { m, load: (k) => (m.has(k) ? m.get(k) : null), store: (k, v) => { m.set(k, v); }, remove: (k) => { m.delete(k); } };
 };
 /** Stores `slot` and returns a game's run state read from it, with Sets as a running sim holds them. */
 function readRun(io) {
@@ -150,7 +150,7 @@ test('two games on one slot that cross the same milestone are paid once, and the
 });
 
 test('storage that holds nothing and takes nothing credits each coin once and never lowers the wallet', () => {
-  const io = { load: () => null, store: () => {} };
+  const io = { load: () => null, store: () => {}, remove: () => {} };
   const state = { ...slotOf({ wallet: 24 }), solved: new Set(), coins: new Set(), tombs: new Set() };
   assert.equal(takeCoin(io, state, 'c1'), 1);
   assert.equal(state.wallet, 25);
@@ -171,6 +171,67 @@ test('the merge keeps the coins another game took and the Set a running sim hold
   assert.deepEqual([...setA].sort(), ['0,0,1', '0,0,2', '0,0,3']);
   assert.equal(stored(io).wallet, 3);
   assert.equal(a.wallet, 3);
+});
+
+test('legacySlot reads the seven old keys of a MEDIUM save into a slot with a fresh id', () => {
+  assert.deepEqual(LEGACY_KEYS, {
+    save: 'infinite-maze.plane.save',
+    difficulty: 'infinite-maze.plane.save.difficulty',
+    run: 'infinite-maze.plane.save.run',
+    wallet: 'infinite-maze.wallet',
+    coins: 'infinite-maze.plane.coins',
+    paid: 'infinite-maze.plane.coins.paid',
+    tombs: 'infinite-maze.plane.coins.tombs',
+  });
+  const other = 'A1B2C3D4:MEDIUM';
+  const old = (over = {}) => {
+    const m = new Map(Object.entries({
+      'infinite-maze.plane.save': SAVE,
+      'infinite-maze.plane.save.difficulty': 'medium',
+      'infinite-maze.plane.save.run': JSON.stringify({ save: SAVE, start: '3,-2', solved: ['3,-2', '3,-1'] }),
+      'infinite-maze.wallet': '57',
+      'infinite-maze.plane.coins': JSON.stringify({ [KEY]: ['0,0,21', '-1,2,5'], [other]: ['9,9,9'] }),
+      'infinite-maze.plane.coins.tombs': JSON.stringify({ [KEY]: ['3,-2', '3,-1'], [other]: ['7,7'] }),
+      'infinite-maze.plane.coins.paid': JSON.stringify({ [KEY]: 12, [other]: 40 }),
+      ...over,
+    }));
+    for (const [k, v] of m) if (v === null) m.delete(k);
+    return (k) => (m.has(k) ? m.get(k) : null);
+  };
+  const slot = legacySlot(old());
+  assert.match(slot.id, /^[0-9A-HJKMNP-TV-Z]{8}$/);
+  assert.notEqual(legacySlot(old()).id, slot.id, 'each read mints a fresh id');
+  assert.deepEqual({ ...slot, id: 'AAAAAAAA' }, slotOf({
+    start: '3,-2', solved: ['3,-2', '3,-1'], wallet: 57, coins: ['0,0,21', '-1,2,5'], tombs: ['3,-2', '3,-1'], record: 12,
+  }));
+  assert.deepEqual(parseSlot(serializeSlot(slot)), slot);
+  // No old save: nothing to adopt, whatever else the old keys hold.
+  assert.equal(legacySlot(old({ 'infinite-maze.plane.save': null })), null);
+  assert.equal(legacySlot(old({ 'infinite-maze.plane.save': 'junk' })), null);
+  // A save with no difficulty beside it reads ULTIMATE, and so does an invalid one.
+  for (const bad of [null, 'impossible']) {
+    const got = legacySlot(old({ 'infinite-maze.plane.save.difficulty': bad }));
+    assert.equal(got.level, 'ultimate');
+    assert.deepEqual(got.coins, [], 'the ULTIMATE seed holds none of the MEDIUM entries');
+  }
+  // The run counts only when it names the save.
+  const runs = [null, '{not json', JSON.stringify({ save: 'K7Q2-M9XA:14', start: '3,-2', solved: ['3,-2'] }),
+    JSON.stringify({ save: SAVE, start: 'x', solved: [] }), JSON.stringify({ save: SAVE, start: '0,0', solved: ['x'] })];
+  for (const run of runs) {
+    const got = legacySlot(old({ 'infinite-maze.plane.save.run': run }));
+    assert.deepEqual([got.start, got.solved], ['0,0', []], String(run));
+  }
+});
+
+test('the first commitSlot write removes the seven old keys', () => {
+  const io = memoryIo();
+  for (const k of Object.values(LEGACY_KEYS)) io.m.set(k, 'x');
+  io.m.set('infinite-maze.plane.best', '{}');
+  const state = { ...slotOf({ id: 'BBBBBBBB' }), solved: new Set(), coins: new Set(), tombs: new Set() };
+  commitSlot(io, state, () => 0);
+  for (const k of Object.values(LEGACY_KEYS)) assert.equal(io.load(k), null, k);
+  assert.equal(io.load('infinite-maze.plane.best'), '{}', 'the best score stays');
+  assert.equal(stored(io).id, 'BBBBBBBB');
 });
 
 /** A run that has taken the slot: the id, an empty wallet and the sets of a clean state. */

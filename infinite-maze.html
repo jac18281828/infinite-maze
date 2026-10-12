@@ -1924,13 +1924,14 @@ function legacySlot(load) {
 /**
  * Writes the run state `{ id, save, level, start, solved, wallet, coins, tombs,
  * record }` (coins and tombs are Sets) through `io` `{ load(key), store(key,
- * value) }` without losing what another tab wrote. A stored slot
+ * value), remove(key) }` without losing what another tab wrote. A stored slot
  * with the same id is the same run: its wallet and record merge by max and its
  * Sets by union, in place so a running sim sees them. Any other slot, or none,
  * is replaced whole, and `pay` sees an empty stored state. The run fields are
  * the writer's. `pay(state, stored)` returns the coins this write earns, with
  * `state` and `stored` holding the slot's sets as one-entry Maps keyed by
- * `coinKey(seed, level)`; they join the wallet. Returns the coins earned.
+ * `coinKey(seed, level)`; they join the wallet. The first write removes the
+ * legacy keys. Returns the coins earned.
  */
 function commitSlot(io, state, pay) {
   const held = parseSlot(io.load(SLOT_KEY));
@@ -1950,6 +1951,7 @@ function commitSlot(io, state, pay) {
   state.wallet += earned;
   state.record = now.paid.get(key);
   io.store(SLOT_KEY, serializeSlot(state));
+  for (const old of Object.values(LEGACY_KEYS)) io.remove(old);
   return earned;
 }
 return { SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, COIN_ID, TOMB_ID, parseIdSets, serializeIdSets, parsePaid, serializePaid, coinPay, tombPay, newSlotId, parseSlot, serializeSlot, legacySlot, commitSlot };
@@ -5849,7 +5851,7 @@ const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCo
 const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m17;
 const { createAudio } = __m18;
 const { runScript, createAutopilot, SELFTEST_CODE } = __m19;
-const { SLOT_KEY, LEGACY_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot, newSlotId } = __m9;
+const { SLOT_KEY, LEGACY_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot, legacySlot, newSlotId } = __m9;
 const { createGamepad } = __m20;
 const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m21;
 const { MILESTONE, rankName } = __m8;
@@ -5940,15 +5942,23 @@ function storedDifficulty(key, fallback) {
   return DIFFICULTIES.includes(d) ? d : fallback;
 }
 
-// The slot as last parsed, keyed by the raw text it came from: the title reads
-// the slot every frame.
+// The slot as last parsed, and the legacy slot as last built, each keyed by the
+// raw text it came from: the title reads the slot every frame.
 let parsed = { raw: undefined, slot: null };
+let legacy = { raw: undefined, slot: null };
 
-/** The stored slot, or null. Callers never change it. */
+/**
+ * The stored slot; failing that, the legacy slot the old keys describe; else
+ * null. A malformed slot reads as absent until the next slot write replaces
+ * it. Callers never change the result.
+ */
 function readSlot() {
   const raw = load(SLOT_KEY);
   if (parsed.raw !== raw) parsed = { raw, slot: parseSlot(raw) };
-  return parsed.slot;
+  if (parsed.slot) return parsed.slot;
+  const old = Object.values(LEGACY_KEYS).map((k) => load(k)).join('\u0001');
+  if (legacy.raw !== old) legacy = { raw: old, slot: legacySlot(load) };
+  return legacy.slot;
 }
 
 /** The slot's serial decoded, with the slot's difficulty, or null. */
@@ -5958,7 +5968,7 @@ function readSave() {
   return s && { ...s, difficulty: slot.level };
 }
 
-const slotIo = { load, store };
+const slotIo = { load, store, remove: unstore };
 
 /** The slot state of the game's run, its serial being `g.serial`. */
 function slotState(g) {
@@ -6381,6 +6391,7 @@ function driveTouch(copied, fake) {
   splashLeg(g, { need, click, press });
   resumeLeg(g, { need, click });
   slotLeg(g, { need, click, press });
+  legacyLeg(g, { need, click, press });
   oilLeg(g, { need, click });
   gamepadLeg(g, { need, click, fake });
 
@@ -7129,6 +7140,93 @@ function slotLeg(g, { need, click, press }) {
     && taken.tombs.length === 0 && taken.record === 0, 'a new run\'s first coin takes the slot');
 }
 
+/**
+ * The migration steps of the touch leg, from the title with no run open. The
+ * seven old keys hold a HARD save, TOMB 20 and a wallet of 57; the first slot
+ * write removes them.
+ */
+function legacyLeg(g, { need, click, press }) {
+  // The stacked world's save difficulty, which a plane save never reads.
+  const STACKED = 'infinite-maze.save.difficulty';
+  const level = 'hard', key = coinKey(SELFTEST_CODE, level), stranger = coinKey('K7Q2M9XA', level);
+  setDifficulty(g, level);
+  useCode(g, SELFTEST_CODE);
+  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell), first = g.world.startPoint().board;
+  const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
+  // A device that played before the slot, with another seed's coins, tombs and record beside the save's.
+  const oldKeys = ({ difficulty = level, run = { save: serial, start: '0,0', solved: fakeSolved(20) } } = {}) => {
+    unstore(SLOT_KEY);
+    store(LEGACY_KEYS.save, serial);
+    if (difficulty) store(LEGACY_KEYS.difficulty, difficulty); else unstore(LEGACY_KEYS.difficulty);
+    if (run) store(LEGACY_KEYS.run, JSON.stringify(run)); else unstore(LEGACY_KEYS.run);
+    store(LEGACY_KEYS.wallet, '57');
+    store(LEGACY_KEYS.coins, JSON.stringify({ [key]: [id], [stranger]: ['1,1,1'] }));
+    store(LEGACY_KEYS.tombs, JSON.stringify({ [key]: ['0,0'], [stranger]: ['5,5'] }));
+    store(LEGACY_KEYS.paid, JSON.stringify({ [key]: 20, [stranger]: 9 }));
+  };
+  const gone = () => Object.values(LEGACY_KEYS).every((k) => load(k) === null);
+  const tap = (sid, which) => {
+    draw(g, 0);
+    click(sid, which);
+  };
+  // RESUME over the old keys, with nothing open.
+  const ask = () => {
+    cleanState(g);
+    g.open = null;
+    g.confirm = null;
+    g.screen = 'title';
+    tap('title', 'resume');
+    return g.confirm;
+  };
+
+  // Y adopts the device wallet and writes the slot at once, which removes the old keys.
+  oldKeys();
+  need(ask() !== null, 'RESUME over a legacy save asks CONTINUE?');
+  const slot = g.confirm.slot;
+  need(slot.wallet === 57 && slot.solved.length === 20 && slot.level === level, 'a legacy save keeps its wallet, TOMB and difficulty');
+  need(load(SLOT_KEY) === null && !gone(), 'a legacy slot waits for Y before it is stored');
+  press('KeyY', 'y');
+  need(g.screen === 'play' && g.wallet === 57 && tombCount(g.sim) === 20 && g.difficulty === level && g.coins.size === 1
+    && [...g.coins.get(key)].join() === id && [...g.tombs.get(key)].join() === '0,0' && g.paid.get(key) === 20, 'a legacy save restores only its own seed\'s sets');
+  need(slotNow() !== null && slotNow().id === g.slotId && slotNow().wallet === 57 && gone(), 'a legacy save adopts the device wallet once on Y');
+
+  // A new run's first coin takes the slot, and the legacy wallet is gone with it.
+  oldKeys();
+  ask();
+  press('KeyN', 'n');
+  need(g.confirm === null && slotNow() === null && !gone(), 'N leaves the legacy keys as they were');
+  tap('title', 'begin');
+  walkToItem(g, coin);
+  const later = reload();
+  resume(later);
+  need(g.wallet === 1 && gone() && later.confirm !== null && later.confirm.slot.wallet === 1, 'a legacy wallet is gone once a new run takes the slot');
+
+  // A save with no difficulty beside it plays at ULTIMATE, the 6x4 world, whatever the stacked world's save left.
+  oldKeys({ difficulty: null });
+  store(STACKED, 'easy');
+  ask();
+  need(g.confirm.slot.level === 'ultimate', 'a legacy save with no stored difficulty adopts at ULTIMATE');
+  press('KeyY', 'y');
+  need(g.screen === 'play' && g.difficulty === 'ultimate' && g.world.difficulty === 'ultimate', 'Y plays a legacy save with no stored difficulty at ULTIMATE');
+  unstore(STACKED);
+
+  // The run counts only when it names the save.
+  oldKeys({ run: null });
+  ask();
+  need(g.confirm.slot.solved.length === 0 && g.confirm.slot.start === '0,0', 'a legacy save without a run resumes at TOMB 0');
+  oldKeys({ run: { save: encodeSave(SELFTEST_CODE, first.x + 1, first.y), start: '0,0', solved: fakeSolved(20) } });
+  ask();
+  need(g.confirm.slot.solved.length === 0, 'a legacy run naming another save resumes at TOMB 0');
+
+  // A slot beside the old keys wins, and the old keys are not offered.
+  putSlot({ wallet: 3 });
+  need(readSlot().wallet === 3, 'a stored slot outranks the legacy keys');
+  cleanState(g);
+  g.confirm = null;
+  unstore(SLOT_KEY);
+  for (const k of Object.values(LEGACY_KEYS)) unstore(k);
+}
+
 const DIRS = {
   ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
 };
@@ -7304,7 +7402,7 @@ function beginClean(g) {
 /**
  * Restores `slot` into memory and begins its run at the serial's position, at
  * the slot's difficulty, with its start tomb, solved tombs and wallet. The
- * setting follows.
+ * setting follows. The write that follows adopts a legacy slot.
  */
 function restore(g, slot) {
   const at = decodeSave(slot.save), key = coinKey(at.code, slot.level);
@@ -7316,6 +7414,7 @@ function restore(g, slot) {
   });
   const [u, v] = slot.start.split(',').map(Number);
   beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v } });
+  commit(g, () => 0);
 }
 
 /**
