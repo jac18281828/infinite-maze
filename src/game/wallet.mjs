@@ -3,6 +3,8 @@
 // storage.
 import { MILESTONE } from './ranks.mjs';
 import { decodeSave } from '../world/save.mjs';
+import { tombOf } from '../world/world.mjs';
+import { DIFFICULTY } from '../world/band.mjs';
 import { formatCode, CROCKFORD } from '../world/hash.mjs';
 
 // The one key of the save slot: a JSON object, written whole.
@@ -76,21 +78,11 @@ export function parseIdSets(text, pattern) {
   return out;
 }
 
-export function serializeIdSets(sets) {
-  const out = {};
-  for (const [key, set] of sets) if (set.size) out[key] = [...set];
-  return JSON.stringify(out);
-}
-
 /** The payout record as Map(key -> highest tomb count paid); malformed input reads as empty. */
 export function parsePaid(text) {
   const out = new Map();
   for (const [key, n] of parseObject(text)) if (isCount(n)) out.set(key, n);
   return out;
-}
-
-export function serializePaid(paid) {
-  return JSON.stringify(Object.fromEntries(paid));
 }
 
 /**
@@ -176,7 +168,9 @@ export function serializeSlot(slot) {
 /**
  * The slot the seven old keys describe, under a fresh id, or null when they
  * hold no save. `load(key)` reads storage. The wallet is the device's; the
- * sets and the record are those of the save's seed and level.
+ * sets and the record are those of the save's seed and level. The run is the
+ * old run when it names the save; else it starts at the save's own tomb, as a
+ * typed save code does.
  */
 export function legacySlot(load) {
   const text = load(LEGACY_KEYS.save) || '';
@@ -185,6 +179,7 @@ export function legacySlot(load) {
   const d = load(LEGACY_KEYS.difficulty);
   const level = Object.hasOwn(COIN_RATE, d) ? d : 'ultimate';
   const key = coinKey(at.code, level);
+  const tomb = tombOf(at.x, at.y, DIFFICULTY[level]);
   let run = null;
   try { run = JSON.parse(load(LEGACY_KEYS.run)); } catch { /* no run */ }
   const named = run && typeof run === 'object' && run.save === text && TOMB_ID.test(run.start) && idList(run.solved, TOMB_ID);
@@ -192,7 +187,7 @@ export function legacySlot(load) {
     id: newSlotId(),
     save: `${formatCode(at.code)}:${at.p}`,
     level,
-    start: named ? run.start : '0,0',
+    start: named ? run.start : `${tomb.u},${tomb.v}`,
     solved: named ? run.solved : [],
     wallet: parseWallet(load(LEGACY_KEYS.wallet)),
     coins: [...(parseIdSets(load(LEGACY_KEYS.coins), COIN_ID).get(key) || [])],

@@ -442,7 +442,7 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty, pause-key, coin, slot, splash, oil, pad-side, fire and gamepad rule broken.
+// zoom guard dropped and each difficulty, pause-key, coin, slot, CONTINUE?, legacy-save, splash, oil, pad-side, fire and gamepad rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -459,7 +459,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, splash, oil, pad-side, fire or gamepad rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, slot, CONTINUE?, legacy-save, splash, oil, pad-side, fire or gamepad rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -486,6 +486,13 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["    slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map(),\n", "    slotId: null, serial: '', wallet: (readSlot() || { wallet: 0 }).wallet, coins: new Map(), tombs: new Map(), paid: new Map(),\n", /^fail: touch boot starts clean/],
       ['function beginClean(g) {\n  cleanState(g);\n', 'function beginClean(g) {\n', /^fail: touch BEGIN after a restored run starts with no coins/],
       ['  if (g.slotId === null) return;\n  g.serial = text;', '  g.serial = text;', /^fail: touch the slot outlives N until a new run earns/],
+      ["    cleanState(g);\n    if (save.code !== g.code) useCode(g, save.code);\n    beginSaved(g, save.p, null);", "    if (save.code !== g.code) useCode(g, save.code);\n    beginSaved(g, save.p, null);", /^fail: touch a typed serial other than the slot's starts clean/],
+      ['    cleanState(g);\n    useCode(g, g.code);\n  }\n}', '    useCode(g, g.code);\n  }\n}', /^fail: touch N returns to the title with no coins after a played run/],
+      ["else if (e.code === 'KeyR') { cleanState(g); useCode(g, rollCode());", "else if (e.code === 'KeyR') { useCode(g, rollCode());", /^fail: touch RESET starts clean/],
+      ['if (c) { cleanState(g); useCode(g, c);', 'if (c) { useCode(g, c);', /^fail: touch a typed seed starts clean/],
+      ['    const { slot } = g.confirm;\n', '    const slot = readSlot();\n', /^fail: touch Y restores the snapshot CONTINUE\? showed/],
+      ['wallet: slot.wallet, coins: new Map([[key, new Set(slot.coins)]]),\n    tombs: new Map([[key, new Set(slot.tombs)]]), paid: new Map([[key, slot.record]]),', 'wallet: 0, coins: new Map(),\n    tombs: new Map(), paid: new Map(),', /^fail: touch Y restores the snapshot CONTINUE\? showed/],
+      ["start: named ? run.start : `${tomb.u},${tomb.v}`,", "start: named ? run.start : '0,0',", /^fail: touch a legacy save without a run resumes at its own tomb/],
       ['  for (const old of Object.values(LEGACY_KEYS)) io.remove(old);\n', '', /^fail: touch a legacy save adopts the device wallet once/],
       ["difficulty: 'infinite-maze.plane.save.difficulty',", "difficulty: 'infinite-maze.save.difficulty',", /^fail: touch a legacy save with no stored difficulty adopts at ULTIMATE/],
       ["Object.hasOwn(COIN_RATE, d) ? d : 'ultimate'", "Object.hasOwn(COIN_RATE, d) ? d : 'hard'", /^fail: touch a legacy save with no stored difficulty adopts at ULTIMATE/],

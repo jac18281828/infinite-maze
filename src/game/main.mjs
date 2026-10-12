@@ -380,17 +380,14 @@ function driveTouch(copied, fake) {
   const saved = decodeSave(readSlot().save);
   need(formatCode(saved.code) !== formatCode(g.code), 'the title shows a save under another seed');
   copies('title', `${formatCode(saved.code)}:${saved.p}`);
-  const realPrompt = window.prompt;
-  try {
-    window.prompt = () => 'K7Q2-M9XA';
+  withPrompt('K7Q2-M9XA', () => {
     click('title', 'type');
     need(g.code === 'K7Q2M9XA' && g.typing === null, 'TYPE CODE takes the answer');
-    window.prompt = () => null;
+  });
+  withPrompt(null, () => {
     click('title', 'type');
     need(g.code === 'K7Q2M9XA' && g.typing === null, 'TYPE CODE cancel keeps the code and closes typing');
-  } finally {
-    window.prompt = realPrompt;
-  }
+  });
 
   // Typing.
   press('KeyT', 't');
@@ -591,10 +588,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
     return where;
   };
   // RESUME with no run open asks CONTINUE?, and the YES key restores the slot.
-  const yes = () => {
-    draw(g, 0);
-    click('confirm', 'yes');
-  };
+  const yes = () => softTap(g, click, 'confirm', 'yes');
   const resumesAt = (d, where) => {
     click('title', 'resume');
     need(g.screen === 'title' && g.confirm !== null, `RESUME with no open run asks CONTINUE? at ${difficultyLabel(d)}`);
@@ -748,6 +742,32 @@ function keyTo(h, code, key, repeat = false) {
   onKeyDown(h, new KeyboardEvent('keydown', { code, key, repeat, bubbles: true, cancelable: true }));
 }
 
+/** Draws a frame, so the touch layer places its keys, then clicks soft key `id` of screen `sid`. */
+function softTap(g, click, sid, id) {
+  draw(g, 0);
+  click(sid, id);
+}
+
+/** The title with no run open, as at startup. The economy stays as it is. */
+function openTitle(g) {
+  g.open = null;
+  g.confirm = null;
+  g.typing = null;
+  g.screen = 'title';
+  draw(g, 0);
+}
+
+/** Runs `fn` with `window.prompt` answering `answer`. */
+function withPrompt(answer, fn) {
+  const real = window.prompt;
+  try {
+    window.prompt = () => answer;
+    fn();
+  } finally {
+    window.prompt = real;
+  }
+}
+
 /** A fresh game over the same storage, as after a page reload. */
 function reload() {
   const h = createGame();
@@ -856,8 +876,7 @@ function gamepadLeg(g, { need, click, fake }) {
   const A = 0, B = 1, SELECT = 8, START = 9, LEFT = 14;
   setDifficulty(g, 'medium');
   useCode(g, SELFTEST_CODE);
-  g.screen = 'title';
-  draw(g, 0);
+  openTitle(g);
   click('title', 'begin');
   const run = g.sim;
 
@@ -905,9 +924,7 @@ function gamepadLeg(g, { need, click, fake }) {
   const board = g.world.startPoint().board;
   putSlot({ save: encodeSave(SELFTEST_CODE, board.x, board.y), solved: fakeSolved(20), wallet: 300 });
   cleanState(g);
-  g.open = null;
-  g.screen = 'title';
-  draw(g, 0);
+  openTitle(g);
   hold(START);
   hold();
   need(g.screen === 'title' && g.confirm !== null, 'RESUME with no open run asks CONTINUE? by a gamepad\'s Start');
@@ -942,8 +959,7 @@ function coinLeg(g, { need, click }) {
   cleanState(g);
   unstore(SLOT_KEY);
   onLevel('medium');
-  g.screen = 'title';
-  draw(g, 0);
+  openTitle(g);
   click('title', 'begin');
   need(g.screen === 'play' && g.earned === 0, 'BEGIN starts a run with no coins earned');
   const coin = firstCoin(g.world);
@@ -979,8 +995,7 @@ function coinLeg(g, { need, click }) {
   // Step 3: the coins earned this run equal the wallet's gain since BEGIN.
   cleanState(g);
   onLevel('medium');
-  g.screen = 'title';
-  draw(g, 0);
+  openTitle(g);
   click('title', 'begin');
   const start = g.wallet;
   walkToItem(g, firstCoin(g.world));
@@ -1113,8 +1128,7 @@ function resumeLeg(g, { need, click }) {
   const level = 'medium', key = coinKey(SELFTEST_CODE, level);
   setDifficulty(g, level);
   useCode(g, SELFTEST_CODE);
-  g.screen = 'title';
-  draw(g, 0);
+  openTitle(g);
   click('title', 'begin');
   oneTombOn(g, 1);
   const count = tombCount(g.sim);
@@ -1170,29 +1184,23 @@ function slotLeg(g, { need, click, press }) {
   const toTitle = () => {
     hold();
     cleanState(g);
-    g.open = null;
-    g.confirm = null;
-    g.typing = null;
-    g.screen = 'title';
-    draw(g, 0);
+    openTitle(g);
   };
-  const typeIn = (text) => {
-    const realPrompt = window.prompt;
-    draw(g, 0);
-    try {
-      window.prompt = () => text;
-      click('title', 'type');
-    } finally {
-      window.prompt = realPrompt;
-    }
+  const typeIn = (text) => withPrompt(text, () => softTap(g, click, 'title', 'type'));
+  const tap = (sid, which) => softTap(g, click, sid, which);
+  // CONTINUE? stands on the title over the slot.
+  const over = () => g.screen === 'title' && g.confirm !== null && g.confirm.slot.wallet === 300 && g.confirm.slot.solved.length === 20;
+  // ...and has restored nothing.
+  const asks = () => over() && isClean(g);
+  // The title after a played, restored run: wallet 300 under slot AAAAAAAA, not clean.
+  const played = () => {
+    toTitle();
+    tap('title', 'resume');
+    press('KeyY', 'y');
+    endRun(g);
+    tap('over', 'title');
+    need(g.screen === 'title' && g.slotId === SLOT_BASE.id && g.wallet === 300, 'a played run leaves the title with its wallet');
   };
-  const tap = (sid, which) => {
-    draw(g, 0);
-    click(sid, which);
-  };
-  // CONTINUE? stands on the title over the slot and has restored nothing.
-  const asks = () => g.screen === 'title' && g.confirm !== null && g.confirm.slot.wallet === 300 && g.confirm.slot.solved.length === 20
-    && isClean(g);
   const restored = () => g.screen === 'play' && g.slotId === SLOT_BASE.id && g.wallet === 300 && tombCount(g.sim) === 20
     && g.coins.get(key).has(id);
 
@@ -1216,8 +1224,11 @@ function slotLeg(g, { need, click, press }) {
   need(g.screen === 'title' && g.confirm === null, 'Esc answers no to CONTINUE?');
   typeIn(serial);
   need(asks(), 'TYPE CODE with the slot\'s serial asks CONTINUE?');
-  press('KeyQ', 'q');
+  press('KeyN', 'n');
   need(g.screen === 'title' && g.confirm === null && isClean(g) && readSlot().wallet === 300, 'N returns to the title with no coins from TYPE CODE');
+  press('KeyP', 'p');
+  press('KeyQ', 'q');
+  need(g.screen === 'title' && g.confirm === null, 'Q answers no to CONTINUE?');
 
   // CONTINUE? takes no repeated key and no key that answers neither way.
   press('KeyP', 'p');
@@ -1245,7 +1256,34 @@ function slotLeg(g, { need, click, press }) {
   press('Enter', 'Enter');
   need(restored(), 'Enter answers yes to CONTINUE? from TYPE CODE');
 
+  // Y restores the slot CONTINUE? showed, not whatever is stored when Y comes.
+  toTitle();
+  tap('title', 'resume');
+  need(asks(), 'RESUME with no open run asks CONTINUE? before the slot changes');
+  putSlot({ id: 'BBBBBBBB', save: encodeSave(SELFTEST_CODE, first.x + 1, first.y), wallet: 7 });
+  press('KeyY', 'y');
+  need(restored() && slotNow().id === SLOT_BASE.id, 'Y restores the snapshot CONTINUE? showed');
+
+  // Each way to a clean state cleans a title left by a played run, not only a clean one.
+  played();
+  tap('title', 'reset');
+  need(isClean(g) && g.screen === 'title', 'RESET starts clean');
+  played();
+  typeIn('K7Q2-M9XA');
+  need(isClean(g) && g.screen === 'title', 'a typed seed starts clean');
+  played();
+  typeIn('K7Q2-M9XA:13');
+  need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'a typed serial other than the slot\'s starts clean');
+  played();
+  tap('title', 'resume');
+  need(over(), 'RESUME with no open run asks CONTINUE? after a played run');
+  press('KeyN', 'n');
+  need(g.screen === 'title' && g.confirm === null && isClean(g), 'N returns to the title with no coins after a played run');
+
   // BEGIN after a restored run starts clean.
+  toTitle();
+  tap('title', 'resume');
+  press('KeyY', 'y');
   endRun(g);
   tap('over', 'title');
   tap('title', 'begin');
@@ -1298,9 +1336,9 @@ function legacyLeg(g, { need, click, press }) {
   const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell), first = g.world.startPoint().board;
   const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
   // A device that played before the slot, with another seed's coins, tombs and record beside the save's.
-  const oldKeys = ({ difficulty = level, run = { save: serial, start: '0,0', solved: fakeSolved(20) } } = {}) => {
+  const oldKeys = ({ save = serial, difficulty = level, run = { save: serial, start: '0,0', solved: fakeSolved(20) } } = {}) => {
     unstore(SLOT_KEY);
-    store(LEGACY_KEYS.save, serial);
+    store(LEGACY_KEYS.save, save);
     if (difficulty) store(LEGACY_KEYS.difficulty, difficulty); else unstore(LEGACY_KEYS.difficulty);
     if (run) store(LEGACY_KEYS.run, JSON.stringify(run)); else unstore(LEGACY_KEYS.run);
     store(LEGACY_KEYS.wallet, '57');
@@ -1309,16 +1347,11 @@ function legacyLeg(g, { need, click, press }) {
     store(LEGACY_KEYS.paid, JSON.stringify({ [key]: 20, [stranger]: 9 }));
   };
   const gone = () => Object.values(LEGACY_KEYS).every((k) => load(k) === null);
-  const tap = (sid, which) => {
-    draw(g, 0);
-    click(sid, which);
-  };
+  const tap = (sid, which) => softTap(g, click, sid, which);
   // RESUME over the old keys, with nothing open.
   const ask = () => {
     cleanState(g);
-    g.open = null;
-    g.confirm = null;
-    g.screen = 'title';
+    openTitle(g);
     tap('title', 'resume');
     return g.confirm;
   };
@@ -1355,9 +1388,14 @@ function legacyLeg(g, { need, click, press }) {
   unstore(STACKED);
 
   // The run counts only when it names the save.
-  oldKeys({ run: null });
+  // A save in tomb (1, 0) with no run starts there, as a typed save code does, so its tombs can count.
+  const board = boardCoords(1, 0, 0, g.world.size), elsewhere = encodeSave(SELFTEST_CODE, board.x, board.y);
+  oldKeys({ save: elsewhere, run: null });
   ask();
-  need(g.confirm.slot.solved.length === 0 && g.confirm.slot.start === '0,0', 'a legacy save without a run resumes at TOMB 0');
+  need(g.confirm.slot.solved.length === 0 && g.confirm.slot.start === '1,0', 'a legacy save without a run resumes at its own tomb');
+  press('KeyY', 'y');
+  need(g.screen === 'play' && tombCount(g.sim) === 0 && g.sim.start.u === 1 && g.sim.start.v === 0 && slotNow().start === '1,0',
+    'Y plays a legacy save without a run from its own tomb');
   oldKeys({ run: { save: encodeSave(SELFTEST_CODE, first.x + 1, first.y), start: '0,0', solved: fakeSolved(20) } });
   ask();
   need(g.confirm.slot.solved.length === 0, 'a legacy run naming another save resumes at TOMB 0');

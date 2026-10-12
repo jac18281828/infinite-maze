@@ -474,11 +474,12 @@ The slot obeys these rules:
   `….coins.tombs`. While the slot key is absent or malformed and the save key
   holds a save, the game builds a legacy slot from them under a fresh id: the
   old serial; its difficulty, ULTIMATE when none is stored; its run, when the
-  old run names that save and `TOMB 0` otherwise; the device's wallet; and the
-  coins, tombs and record of that seed and level. It asks CONTINUE? like any
-  slot, and Y adopts it and writes the slot at once, so the device wallet joins
-  the slot once. The first slot write of any kind removes the seven keys, so a
-  legacy wallet that no Y adopted is then gone.
+  old run names that save, and otherwise `TOMB 0` with the save's own tomb as
+  the start tomb, as for a typed save code, so that the run's tombs can count;
+  the device's wallet; and the coins, tombs and record of that seed and level.
+  It asks CONTINUE? like any slot, and Y adopts it and writes the slot at once,
+  so the device wallet joins the slot once. The first slot write of any kind
+  removes the seven keys, so a legacy wallet that no Y adopted is then gone.
 
 Resuming lights the torch to full. Flames never run out, so the save code
 carries no pickup state, and the slot carries the coins taken, below, but none
@@ -850,7 +851,8 @@ equal to the slot's serial; RESUME of an open run continues with no question.
 Y or Enter restores the slot (§5) and begins its run. N, Esc or Q returns to
 the title with the clean state, whichever path opened the panel, and the slot
 stands until a new run earns. The panel ignores auto-repeated keydowns, so a
-held key answers nothing, and ignores every other key, Space and P included.
+held key answers nothing, and ignores every other key, Space and P included,
+except M, which mutes as on every screen.
 
 **Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
 pixels. It scrolls freely across board seams, and rock fills every position

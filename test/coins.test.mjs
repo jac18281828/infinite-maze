@@ -8,7 +8,7 @@ import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
   SLOT_KEY, LEGACY_KEYS, COIN_RATE, COIN_ID, TOMB_ID, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot,
-  legacySlot, parseWallet, parseIdSets, parsePaid, serializeIdSets, serializePaid,
+  legacySlot, parseWallet, parseIdSets, parsePaid,
 } from '../src/game/wallet.mjs';
 
 test('the level rates are 1, 2, 5 and 10', () => {
@@ -25,18 +25,14 @@ test('the wallet, the collected set and the payout record read absent or malform
   const paid = parsePaid('{"K7Q2M9XA:HARD":4,"B:EASY":-1,"C:EASY":"2","D:EASY":1.5}');
   assert.deepEqual([...paid], [['K7Q2M9XA:HARD', 4]]);
   for (const bad of [null, '', '{not json', '[1]']) assert.equal(parsePaid(bad).size, 0, String(bad));
-  assert.deepEqual(parseIdSets(serializeIdSets(set), COIN_ID).get('K7Q2M9XA:MEDIUM'), set.get('K7Q2M9XA:MEDIUM'));
-  assert.deepEqual([...parsePaid(serializePaid(paid))], [...paid]);
   assert.equal(coinKey('K7Q2M9XA', 'medium'), 'K7Q2M9XA:MEDIUM');
 });
 
-test('the solved tombs read absent or malformed storage as empty, drop bad ids and round-trip', () => {
+test('the solved tombs read absent or malformed storage as empty and drop bad ids', () => {
   const tombs = parseIdSets('{"K7Q2M9XA:MEDIUM":["0,0","-2,19","1,2,3","x","0,0,",7,"3,-4"],"A:EASY":"no"}', TOMB_ID);
   assert.deepEqual([...tombs.get('K7Q2M9XA:MEDIUM')], ['0,0', '-2,19', '3,-4']);
   assert.deepEqual([...tombs.get('A:EASY') ?? []], []);
   for (const bad of [null, '', '{', '[]', '3', 'null']) assert.equal(parseIdSets(bad, TOMB_ID).size, 0, String(bad));
-  assert.deepEqual(parseIdSets(serializeIdSets(tombs), TOMB_ID).get('K7Q2M9XA:MEDIUM'), tombs.get('K7Q2M9XA:MEDIUM'));
-  assert.equal(serializeIdSets(new Map([['K:EASY', new Set()], ['K:HARD', new Set(['1,1'])]])), '{"K:HARD":["1,1"]}');
 });
 
 const SAVE = 'K7Q2-M9XA:13', KEY = 'K7Q2M9XA:MEDIUM';
@@ -214,12 +210,20 @@ test('legacySlot reads the seven old keys of a MEDIUM save into a slot with a fr
     assert.equal(got.level, 'ultimate');
     assert.deepEqual(got.coins, [], 'the ULTIMATE seed holds none of the MEDIUM entries');
   }
-  // The run counts only when it names the save.
+  // The run counts only when it names the save; else it starts at the save's own tomb: board (-2, -1) of
+  // K7Q2-M9XA:13 lies in tomb (-1, -1) at MEDIUM.
   const runs = [null, '{not json', JSON.stringify({ save: 'K7Q2-M9XA:14', start: '3,-2', solved: ['3,-2'] }),
     JSON.stringify({ save: SAVE, start: 'x', solved: [] }), JSON.stringify({ save: SAVE, start: '0,0', solved: ['x'] })];
   for (const run of runs) {
     const got = legacySlot(old({ 'infinite-maze.plane.save.run': run }));
-    assert.deepEqual([got.start, got.solved], ['0,0', []], String(run));
+    assert.deepEqual([got.start, got.solved], ['-1,-1', []], String(run));
+  }
+  // K7Q2-M9XA:19 is board (-2, 2): tomb (-1, 0) at MEDIUM and at ULTIMATE (6x4), tomb (-1, 1) at EASY (2x2).
+  for (const [level, start] of [['medium', '-1,0'], ['ultimate', '-1,0'], ['easy', '-1,1']]) {
+    const got = legacySlot(old({
+      'infinite-maze.plane.save': 'K7Q2-M9XA:19', 'infinite-maze.plane.save.difficulty': level, 'infinite-maze.plane.save.run': null,
+    }));
+    assert.deepEqual([got.start, got.solved], [start, []], level);
   }
 });
 
