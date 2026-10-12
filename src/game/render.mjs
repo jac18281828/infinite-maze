@@ -77,9 +77,73 @@ function hash3(a, b, c) {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
+// Rock tiles as palette indices, 16 rows of 16, and packed RGBA words, so the
+// shading writes one word a pixel.
+const TILES = ROCK.map((tile) => Uint8Array.from(tile.join(''), (ch) => idx(ch)));
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+const packRGBA = ([r, g, b], a) => (LITTLE_ENDIAN ? ((a << 24) | (b << 16) | (g << 8) | r) >>> 0 : ((r << 24) | (g << 16) | (b << 8) | a) >>> 0);
+const ROCK_WORD = RGB.map((c) => packRGBA(c, 255));
+// The shadow alphas the air rules produce.
+const AIR_WORD = Object.fromEntries([0, 40, 50, 80, 95, 150].map((a) => [a, packRGBA(RGB[0], a)]));
+// Palette indices of the rock edges: top face, top shade, floor face, floor shade, side.
+const [K_TOP, K_TOP2, K_BOT, K_BOT2, K_SIDE] = ['b', 'a', '6', '7', '8'].map(idx);
+// The grids hold the board with a PAD px border of its clamped edge, the
+// shading's widest reach.
+const PAD = 3;
+const GRID_W = BOARD_W + 2 * PAD;
+const solidGrid = new Uint8Array(GRID_W * (BOARD_H + 2 * PAD));
+const filledGrid = new Uint8Array(solidGrid.length);
+
+/** Fills `grid` with the union of the masks `a` and, when given, `b` and `c`, edge-clamped. */
+function fillGrid(grid, a, b, c) {
+  for (let y = -PAD; y < BOARD_H + PAD; y++) {
+    const src = Math.min(BOARD_H - 1, Math.max(0, y)) * BOARD_W, row = (y + PAD) * GRID_W + PAD;
+    if (b) for (let x = 0; x < BOARD_W; x++) grid[row + x] = a[src + x] | b[src + x] | c[src + x];
+    else for (let x = 0; x < BOARD_W; x++) grid[row + x] = a[src + x];
+    for (let k = 1; k <= PAD; k++) {
+      grid[row - k] = grid[row];
+      grid[row + BOARD_W - 1 + k] = grid[row + BOARD_W - 1];
+    }
+  }
+}
+
+/** Writes the board's pixels into `data`: the rock and shadow rules of `shadeMask` over its masks. */
+function shadePixels(data, mask, p, stairs, ledge) {
+  const words = new Uint32Array(data.buffer, data.byteOffset, BOARD_W * BOARD_H);
+  fillGrid(solidGrid, mask);
+  if (stairs) fillGrid(filledGrid, mask, stairs, ledge);
+  const solid = solidGrid, filled = stairs ? filledGrid : solidGrid;
+  const tiles = new Array(BOARD_W >> 4);
+  for (let y = 0; y < BOARD_H; y++) {
+    const row = (y & 15) << 4;
+    if (row === 0) for (let tx = 0; tx < tiles.length; tx++) tiles[tx] = TILES[hash3(tx, y >> 4, p) % TILES.length];
+    for (let x = 0; x < BOARD_W; x++) {
+      const q = (y + PAD) * GRID_W + x + PAD;
+      if (filled[q]) {
+        let k;
+        if (!filled[q - GRID_W]) k = K_TOP;
+        else if (!filled[q - 2 * GRID_W]) k = K_TOP2;
+        else if (!filled[q + GRID_W]) k = K_BOT;
+        else if (!filled[q + 2 * GRID_W]) k = K_BOT2;
+        else if (!filled[q - 1] || !filled[q + 1]) k = K_SIDE;
+        else k = tiles[x >> 4][row | (x & 15)];
+        words[y * BOARD_W + x] = ROCK_WORD[k];
+      } else {
+        let a = 0;
+        if (solid[q - GRID_W]) a = 150; else if (solid[q - 2 * GRID_W]) a = 95; else if (solid[q - 3 * GRID_W]) a = 50;
+        if (solid[q - 1] || solid[q + 1]) a = Math.max(a, 80);
+        else if (solid[q - 2] || solid[q + 2]) a = Math.max(a, 40);
+        words[y * BOARD_W + x] = AIR_WORD[a];
+      }
+    }
+  }
+}
+
 export function createRenderer(canvas, world) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
+  // One buffer serves every board: putImageData copies it.
+  let shadeImg = null;
   const sprites = {};
   for (const [name, frames] of Object.entries(EXPLORER)) {
     sprites[name] = frames.map((f) => [spriteCanvas(f), spriteCanvas(f, true)]);
@@ -157,36 +221,9 @@ export function createRenderer(canvas, world) {
    * from a stair or ledge.
    */
   function shadeMask(g, mask, p, stairs, ledge) {
-    const W = BOARD_W, H = BOARD_H;
-    const img = g.createImageData(W, H);
-    const d = img.data;
-    const at = (x, y) => Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x));
-    const solid = (x, y) => mask[at(x, y)];
-    const filled = stairs ? (x, y) => mask[at(x, y)] || stairs[at(x, y)] || ledge[at(x, y)] : solid;
-    const [ar, ag, ab] = RGB[0];
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const o = (y * W + x) * 4;
-        if (filled(x, y)) {
-          const tile = ROCK[hash3(x >> 4, y >> 4, p) % ROCK.length];
-          let ch = tile[y & 15][x & 15];
-          if (!filled(x, y - 1)) ch = 'b';
-          else if (!filled(x, y - 2)) ch = 'a';
-          else if (!filled(x, y + 1)) ch = '6';
-          else if (!filled(x, y + 2)) ch = '7';
-          else if (!filled(x - 1, y) || !filled(x + 1, y)) ch = '8';
-          const k = idx(ch);
-          d[o] = RGB[k][0]; d[o + 1] = RGB[k][1]; d[o + 2] = RGB[k][2]; d[o + 3] = 255;
-        } else {
-          let a = 0;
-          if (solid(x, y - 1)) a = 150; else if (solid(x, y - 2)) a = 95; else if (solid(x, y - 3)) a = 50;
-          if (solid(x - 1, y) || solid(x + 1, y)) a = Math.max(a, 80);
-          else if (solid(x - 2, y) || solid(x + 2, y)) a = Math.max(a, 40);
-          d[o] = ar; d[o + 1] = ag; d[o + 2] = ab; d[o + 3] = a;
-        }
-      }
-    }
-    g.putImageData(img, 0, 0);
+    if (!shadeImg) shadeImg = g.createImageData(BOARD_W, BOARD_H);
+    shadePixels(shadeImg.data, mask, p, stairs, ledge);
+    g.putImageData(shadeImg, 0, 0);
   }
 
   /** Sprite canvas of a skeleton spot [x, yTop, dir, side]. */
