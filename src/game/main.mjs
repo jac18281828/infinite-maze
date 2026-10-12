@@ -1680,6 +1680,12 @@ function typingKey(g, e) {
   else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < TYPED_MAX) g.typing += e.key.toUpperCase();
 }
 
+/** Whether the screen visit now showing is still on; true until `g.screen` is written. */
+function visitLive(g) {
+  const visit = g.visit;
+  return () => g.visit === visit;
+}
+
 function titleKey(g, e) {
   if (g.confirm) { confirmKey(g, e); return; }
   if (g.typing !== null) { typingKey(g, e); return; }
@@ -1701,8 +1707,7 @@ function titleKey(g, e) {
     // The save code the title shows, or the seed code when it shows none.
     const s = readSave();
     const shown = s ? `${formatCode(s.code)}:${s.p}` : formatCode(g.code);
-    const visit = g.visit;
-    copyWithStatus(globalThis.navigator.clipboard, shown, (status) => { g.note = status; }, () => g.visit === visit);
+    copyWithStatus(globalThis.navigator.clipboard, shown, (status) => { g.note = status; }, visitLive(g));
   }
 }
 
@@ -1736,8 +1741,7 @@ function pauseKey(g, e) {
     leaveOpen(g);
     g.copied = '';
   } else if (e.code === 'KeyC') {
-    const visit = g.visit;
-    copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => { g.copied = status; }, () => g.visit === visit);
+    copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => { g.copied = status; }, visitLive(g));
   } else if (DIRS[e.code] && !e.repeat) g.frame = panFrame(g.frame, DIRS[e.code]);
 }
 
@@ -1748,8 +1752,7 @@ function overKey(g, e) {
     begin(g, s.lastEntry, runCarry(s));
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
-    const visit = g.visit;
-    copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => { g.copied = status; }, () => g.visit === visit);
+    copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => { g.copied = status; }, visitLive(g));
   }
 }
 
@@ -1992,7 +1995,7 @@ function draw(g, t) {
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
   }
-  if (guard && guard.shown()) paintError(g);
+  if (guard.shown()) paintError(g);
   present();
   if (touch) touch.refresh();
 }
