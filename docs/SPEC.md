@@ -984,11 +984,12 @@ scrolls, zooms or selects.
   | over | CONTINUE (Enter), COPY (C), TITLE (Q) |
   | splash | CONTINUE (Enter), HOME (Q) |
 
-  In overlay mode a screen's keys stand in one column beside its panel; where
-  one column cannot hold them (the title's eight need a safe height of 410 px,
-  so 640x360 splits them and 736x414 does not), the first half stand in the
-  left strip and the rest in the right. The title's preview explorer then
-  stands lower, below the left column.
+  In overlay mode a screen's keys stand in one column beside its panel, on the
+  title the right one; where one column cannot hold them (the title's eight
+  need a safe height of 410 px, so 640x360 splits them and 736x414 does not),
+  the first half stand in the left strip and the rest in the right. A split
+  title's left column stands at the top of its strip, and the title's preview
+  explorer stands lower, below it.
 
   Each P key has Esc as its keyboard alias. CANCEL sends Esc, because P types
   a letter during code entry.

@@ -5618,6 +5618,9 @@ function keyRegion(lay, sid) {
     return { x: lay.band.x + MARGIN, y: lay.band.y + GAP, w: lay.band.w - 2 * MARGIN, h: lay.band.h - 2 * GAP, cap: 240, align: 'center' };
   }
   const [left, right] = overlayStrips(lay, sid);
+  // The title's preview explorer stands in the left strip, so a single column
+  // always takes the right one.
+  if (sid === 'title') return right;
   return right.w >= left.w ? right : left;
 }
 
@@ -5644,7 +5647,8 @@ function grid(r, count) {
  * Rows sit GAP apart, closing to MIN_GAP before the keys wrap to another
  * column; a layout that fits at GAP keeps it. In overlay mode a screen whose
  * keys do not fit one column in one strip stands one column in each strip,
- * the first half of the keys left and the rest right.
+ * the first half of the keys left and the rest right. The title's single
+ * column stands in the right strip and its left column at the top of its strip.
  */
 function keyRects(lay, sid, labels) {
   const n = labels.length;
@@ -5652,7 +5656,9 @@ function keyRects(lay, sid, labels) {
   const one = grid(keyRegion(lay, sid), n);
   let spots;
   if (lay.mode === 'overlay' && sid !== 'play' && one.cols > 1) {
-    const half = Math.ceil(n / 2), [left, right] = overlayStrips(lay, sid);
+    const half = Math.ceil(n / 2), [strip, right] = overlayStrips(lay, sid);
+    // On the title the left column stands at the top of its strip, above the explorer.
+    const left = sid === 'title' ? { ...strip, align: 'start' } : strip;
     const gl = grid(left, half), gr = grid(right, n - half);
     const w = Math.min(gl.w, gr.w);
     const col = (g, r, count) => Array.from({ length: count }, (_, i) => (

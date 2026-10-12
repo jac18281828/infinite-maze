@@ -416,17 +416,66 @@ const explorerBox = (lay) => {
   return { x: lay.view.x + (fx - 8) * k, y: lay.view.y + (fy - 24) * k, w: 16 * k, h: 24 * k };
 };
 
+// The title's keys with RESUME shown and hidden.
+const titleLabels = (resume) => softKeys({ screen: 'title', typing: false, resume, difficulty: 'medium' }).map((k) => k.text);
+const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
 for (const spec of [LANDSCAPE, LAND_375, SHORT, WIDE_320]) {
   test(`the title explorer stands clear of every title key at ${spec.w}x${spec.h}`, () => {
     const lay = layout(spec);
     assert.equal(lay.mode, 'overlay');
     assert.deepEqual(titleFeet(lay), [42, 176]);
-    const labels = softKeys({ screen: 'title', typing: false, resume: true }).map((k) => k.text);
-    assert.equal(labels.length, 8);
     const box = explorerBox(lay);
-    for (const r of keyRects(lay, 'title', labels)) assert.ok(apart(box, r), `explorer clear of ${JSON.stringify(r)}`);
+    for (const resume of [true, false]) {
+      const labels = titleLabels(resume);
+      assert.equal(labels.length, resume ? 8 : 7);
+      for (const r of keyRects(lay, 'title', labels)) assert.ok(apart(box, r), `RESUME ${resume}: explorer clear of ${JSON.stringify(r)}`);
+    }
   });
 }
+
+test('the title explorer stands clear of every title key on the phones the owner plays', () => {
+  const phones = [
+    { w: 926, h: 428, dpr: 3 },
+    { w: 956, h: 440, dpr: 3, insets: { left: 59, right: 59, bottom: 21 } },
+    { w: 915, h: 412, dpr: 2.6 },
+    { w: 841, h: 613, dpr: 2.6 },
+    { w: 841, h: 583, dpr: 2.6 },
+    { w: 667, h: 285, dpr: 2 },
+    { w: 812, h: 285, dpr: 3, insets: { left: 50, right: 50 } },
+  ];
+  for (const p of phones) {
+    const lay = layout({ insets: {}, ...p, touch: true });
+    const tag = `${p.w}x${p.h} dpr ${p.dpr}`;
+    assert.equal(lay.mode, 'overlay', tag);
+    const box = explorerBox(lay);
+    for (const resume of [true, false]) {
+      for (const r of keyRects(lay, 'title', titleLabels(resume))) {
+        assert.ok(apart(box, r), `${tag} RESUME ${resume}: explorer clear of ${JSON.stringify(r)}`);
+      }
+    }
+  }
+});
+
+test('no title key meets the explorer at any viewport and ratio', () => {
+  let overlay = 0;
+  for (const dpr of [1, 2, 2.6, 3]) {
+    for (let w = 300; w <= 1400; w += 2) {
+      for (let h = 300; h <= 1400; h += 2) {
+        const lay = layout({ w, h, dpr, insets: {}, touch: true });
+        if (lay.mode !== 'overlay') continue;
+        overlay++;
+        const box = explorerBox(lay);
+        for (const resume of [true, false]) {
+          for (const r of keyRects(lay, 'title', titleLabels(resume))) {
+            if (overlaps(box, r)) assert.fail(`${w}x${h} dpr ${dpr} RESUME ${resume}: ${JSON.stringify(r)} meets ${JSON.stringify(box)}`);
+          }
+        }
+      }
+    }
+  }
+  assert.ok(overlay > 0);
+});
 
 // Insets that leave the two strips one pixel apart after rounding: the keys share the narrower width.
 for (const [dpr, wider] of [[2, 'left'], [3, 'right']]) {
