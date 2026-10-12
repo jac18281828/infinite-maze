@@ -51,3 +51,5 @@ and does not search it.
 - Changing generation changes the four pinned digests, one per difficulty,
   of tombs `u ∈ [−2, 2]`, `v ∈ [0, 19]` in `test/world.test.mjs` and
   `tools/acceptance.mjs`; update both on purpose.
+- Changing rock shading changes the reference shading and the pinned digest of
+  its sample in `test/hitch.test.mjs`; update both on purpose.

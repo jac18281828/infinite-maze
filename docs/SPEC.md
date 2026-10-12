@@ -878,6 +878,9 @@ animations:
   make it lo-fi.
 - Intensity follows the burn: as the torch dims, the music adds layers and
   its tempo rises to 128 BPM. A relight drops it back.
+- The scheduler follows the wall clock. While muted it keeps time and builds
+  nothing, so unmuting drops in mid-tune; after a stall it drops the notes it
+  missed and resumes where the music would have been.
 
 **Sound.** Footsteps on stone, ladder creak, the whoosh of a relight and the
 torch sputtering at low burn.
@@ -888,6 +891,20 @@ The simulation runs on a fixed 60 Hz timestep, with rendering on
 `requestAnimationFrame`. Building a board takes 0.7 ms on average and 17 ms
 at most, and a tomb's board tree 0.04 ms on average and under 1 ms at most,
 measured on node 26.7.0 and an Apple M3 Max.
+The frame warms the world ahead of the view. The warm window spans two boards
+beyond the view on every side, one more than the window that gets board art,
+and warms its boards nearest the camera first, by row and then column among
+equals. Each frame does two units of world work: building a board, building
+one tree board of a tomb whose flames the board reads (its own and, on an
+entry board, each upstream tomb's), computing one such tomb's flames,
+computing the board's flames, or, on a route board, computing its wind. A
+unit builds one board, except that a flames or wind unit can build up to
+three more beyond its tomb, so a frame builds at most six. A board enters the
+warm window one board of travel before the art window: 6 s running, 7 s
+climbing. The frame then builds one board's art, which takes 1.4 ms at the
+median on the same node and chip; a board in view with no art builds it at
+once. A run's first frame, a resume, a code entry and the title preview's
+first frame build what they show at once.
 Audio starts on the first key press or touch, as browser autoplay policy
 requires.
 
