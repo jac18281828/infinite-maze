@@ -439,7 +439,7 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty, pause-key, coin, splash, oil, pad-side, fire and gamepad rule broken.
+// zoom guard dropped and each difficulty, pause-key, coin, slot, splash, oil, pad-side, fire and gamepad rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -472,18 +472,19 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     // Each difficulty, pause-key, coin, splash, oil, pad-side, fire and gamepad rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
       ['  if (o) {\n', '  if (false) {\n', /^fail: touch pause, TITLE and RESUME return to the same run/],
-      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate')", "storedDifficulty(KEY_DIFFICULTY, 'medium')", /^fail: touch RESUME rebuilds the save at HARD/],
+      ['  keepSetting(g, slot.level);\n', '  void slot;\n', /^fail: touch RESUME rebuilds the save at HARD/],
       ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 4) % 4', /^fail: touch ArrowRight steps the setting to ULTIMATE/],
       ["return difficulty === 'ultimate' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
-      ["storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate')", "storedDifficulty(KEY_SAVE_DIFFICULTY, 'hard')", /^fail: touch RESUME plays a save with no stored difficulty at ULTIMATE/],
-      ["const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';", "const KEY_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';", /^fail: touch RESUME plays a save with no stored difficulty at ULTIMATE/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.key === 'Escape') { if (!e.repeat) resume(g); }", /^fail: touch pause, TITLE and RESUME return to the same run/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "(e.code === 'KeyP' && !e.repeat) || e.key === 'Escape') { resume(g); }", /^fail: touch the title ignores an auto-repeated Esc/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.code === 'KeyP' || (e.key === 'Escape' && !e.repeat)) { resume(g); }", /^fail: touch the title ignores an auto-repeated P/],
-      ["if (e.code === 'KeyP' || e.key === 'Escape') {\n    g.screen = 'pause';", "if (e.key === 'Escape') {\n    g.screen = 'pause';", /^fail: touch PAUSE reaches pause and stores a save/],
+      ["if (e.code === 'KeyP' || e.key === 'Escape') {\n    g.screen = 'pause';", "if (e.key === 'Escape') {\n    g.screen = 'pause';", /^fail: touch PAUSE reaches pause/],
       ["if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", "if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", /^fail: touch RESUME returns to play/],
       ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
-      ['function readCoinState() {\n', 'function readCoinState() {\n  return { wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map() };\n', /^fail: touch boot reads the wallet and the collected set/],
+      ["    slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map(),\n", "    slotId: null, serial: '', wallet: (readSlot() || { wallet: 0 }).wallet, coins: new Map(), tombs: new Map(), paid: new Map(),\n", /^fail: touch boot starts clean/],
+      ['function beginClean(g) {\n  cleanState(g);\n', 'function beginClean(g) {\n', /^fail: touch BEGIN after a restored run starts with no coins/],
+      ['  if (g.slotId === null) return;\n  g.serial = text;', '  g.serial = text;', /^fail: touch the slot outlives a clean run until a new run earns/],
+      ['const same = held !== null && held.id === state.id;', 'const same = held !== null && held.save.slice(0, 9) === state.save.slice(0, 9) && held.level === state.level;', /^fail: touch BEGIN on the slot's seed earns from 0/],
       ['if (taken.length) collectCoin(g, taken);', 'if (false) collectCoin(g, taken);', /^fail: touch touching the first coin adds one to the wallet/],
       ['const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1, ultimate: 10 };', /^fail: touch a tomb solved first on this device pays 5 at HARD/],
       ['      if (!tombs.has(id)) {', '      if (true) {', /^fail: touch a replay of a solved tomb pays nothing at EASY/],
@@ -505,10 +506,9 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['tap(SPACE.code, SPACE.key);', "tap('KeyX', 'x');", /^fail: touch FIRE jumps/],
       ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch the title ignores an auto-repeated H/],
       ['for (const o of gamepad.poll()) {', 'for (const o of []) {', /^fail: touch gamepad d-pad left holds Left/],
-      ['  state.wallet = Math.max(state.wallet, stored.wallet);\n  unionInto(state.coins, stored.coins);\n  unionInto(state.tombs, stored.tombs);\n  for (const [key, n] of stored.paid) state.paid.set(key, Math.max(state.paid.get(key) || 0, n));\n', '', /^fail: touch two games on one storage keep both coins/],
-      ['beginSaved(g, s.p, storedRun());', 'beginSaved(g, s.p, null);', /^fail: touch RESUME after a reload continues at TOMB/],
-      ['beginSaved(g, save.p, same ? storedRun() : null);', 'beginSaved(g, save.p, storedRun());', /^fail: touch another save code starts at TOMB 0/],
-      ['  if (run.save !== load(KEY_SAVE)) return null;\n', '', /^fail: touch a stored run naming another save resumes at TOMB 0/],
+      ['  if (same) {\n    state.wallet = Math.max(state.wallet, was.wallet);\n    for (const id of was.coins) state.coins.add(id);\n    for (const id of was.tombs) state.tombs.add(id);\n    state.record = Math.max(state.record, was.record);\n  }\n', '', /^fail: touch two games on one slot keep both coins/],
+      ['beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v } });', 'beginSaved(g, at.p, null);', /^fail: touch RESUME after a reload continues at TOMB/],
+      ['if (kept && kept.code === save.code && kept.p === save.p) { restore(g, slot); return; }', 'if (kept) { restore(g, slot); return; }', /^fail: touch another save code starts at TOMB 0/],
       ['const memory = SELFTEST ? new Map() : null;', 'const memory = null;', /^fail: touch the self-test leaves the real wallet untouched/],
     ]) {
       const broken = html.replace(from, to);

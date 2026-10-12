@@ -1,10 +1,19 @@
-// Coins: the payout rules, the storage shapes of the wallet, the collected
-// set, the solved tombs and the payout record, and the merge that writes them.
-// DOM-free; main.mjs supplies the storage.
+// Coins: the payout rules, the save slot that holds a run's serial, tomb count
+// and wallet, and the merge that writes it. DOM-free; main.mjs supplies the
+// storage.
 import { MILESTONE } from './ranks.mjs';
+import { decodeSave } from '../world/save.mjs';
+import { formatCode, CROCKFORD } from '../world/hash.mjs';
 
-// The four coin keys. Each coin write re-reads and merges all four.
-export const COIN_KEYS = {
+// The one key of the save slot: a JSON object, written whole.
+export const SLOT_KEY = 'infinite-maze.plane.slot';
+
+// The seven keys the slot replaced. A slot write removes them; `legacySlot`
+// reads them once.
+export const LEGACY_KEYS = {
+  save: 'infinite-maze.plane.save',
+  difficulty: 'infinite-maze.plane.save.difficulty',
+  run: 'infinite-maze.plane.save.run',
   wallet: 'infinite-maze.wallet',
   coins: 'infinite-maze.plane.coins',
   paid: 'infinite-maze.plane.coins.paid',
@@ -123,40 +132,103 @@ export function tombPay(key, level, solvedNow, count) {
   return pay;
 }
 
-/** Adds each id of `from`, Map(key -> Set), into the Sets of `into`, in place. */
-function unionInto(into, from) {
-  for (const [key, set] of from) {
-    let mine = into.get(key);
-    if (!mine) into.set(key, (mine = new Set()));
-    for (const id of set) mine.add(id);
-  }
+const SLOT_ID = new RegExp(`^[${CROCKFORD}]{8}$`);
+
+/** A fresh slot id: eight random base-32 characters. */
+export function newSlotId() {
+  const b = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(b);
+  return Array.from(b, (n) => CROCKFORD[n & 31]).join('');
+}
+
+const idList = (list, pattern) => Array.isArray(list) && list.every((id) => typeof id === 'string' && pattern.test(id));
+
+/**
+ * The slot in `text` as { id, save, level, start, solved, wallet, coins, tombs,
+ * record }, or null when absent, malformed or any id or count fails its check.
+ * `save` is the serial, `level` its difficulty, `start` the run's start tomb
+ * "u,v", `solved` its solved tombs and `coins` and `tombs` the sets the wallet
+ * depends on.
+ */
+export function parseSlot(text) {
+  let v;
+  try { v = JSON.parse(text); } catch { return null; }
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const ok = typeof v.id === 'string' && SLOT_ID.test(v.id)
+    && typeof v.save === 'string' && decodeSave(v.save) !== null
+    && Object.hasOwn(COIN_RATE, v.level)
+    && typeof v.start === 'string' && TOMB_ID.test(v.start)
+    && idList(v.solved, TOMB_ID) && idList(v.tombs, TOMB_ID) && idList(v.coins, COIN_ID)
+    && isCount(v.wallet) && isCount(v.record);
+  if (!ok) return null;
+  const { id, save, level, start, solved, wallet, coins, tombs, record } = v;
+  return { id, save, level, start, solved, wallet, coins, tombs, record };
+}
+
+/** The slot as text; its lists may be arrays or Sets. */
+export function serializeSlot(slot) {
+  const { id, save, level, start, wallet, record } = slot;
+  return JSON.stringify({
+    id, save, level, start, solved: [...slot.solved], wallet, coins: [...slot.coins], tombs: [...slot.tombs], record,
+  });
 }
 
 /**
- * Writes the coin state `{ wallet, coins, tombs, paid }` through `io`
- * `{ load(key), store(key, value) }` without losing what another tab wrote:
- * re-reads storage, merges it into `state` (the wallet and records by max, the
- * Sets by union, in place so a running sim sees them), then adds
- * `pay(state, stored)`, the coins earned on the merged state, to the wallet and
- * rewrites all four keys. `stored` is what storage held before the merge.
- * Returns the coins earned.
+ * The slot the seven old keys describe, under a fresh id, or null when they
+ * hold no save. `load(key)` reads storage. The wallet is the device's; the
+ * sets and the record are those of the save's seed and level.
  */
-export function commitCoins(io, state, pay) {
-  const stored = {
-    wallet: parseWallet(io.load(COIN_KEYS.wallet)),
-    coins: parseIdSets(io.load(COIN_KEYS.coins), COIN_ID),
-    tombs: parseIdSets(io.load(COIN_KEYS.tombs), TOMB_ID),
-    paid: parsePaid(io.load(COIN_KEYS.paid)),
+export function legacySlot(load) {
+  const text = load(LEGACY_KEYS.save) || '';
+  const at = decodeSave(text);
+  if (!at) return null;
+  const d = load(LEGACY_KEYS.difficulty);
+  const level = Object.hasOwn(COIN_RATE, d) ? d : 'ultimate';
+  const key = coinKey(at.code, level);
+  let run = null;
+  try { run = JSON.parse(load(LEGACY_KEYS.run)); } catch { /* no run */ }
+  const named = run && typeof run === 'object' && run.save === text && TOMB_ID.test(run.start) && idList(run.solved, TOMB_ID);
+  return {
+    id: newSlotId(),
+    save: `${formatCode(at.code)}:${at.p}`,
+    level,
+    start: named ? run.start : '0,0',
+    solved: named ? run.solved : [],
+    wallet: parseWallet(load(LEGACY_KEYS.wallet)),
+    coins: [...(parseIdSets(load(LEGACY_KEYS.coins), COIN_ID).get(key) || [])],
+    tombs: [...(parseIdSets(load(LEGACY_KEYS.tombs), TOMB_ID).get(key) || [])],
+    record: parsePaid(load(LEGACY_KEYS.paid)).get(key) || 0,
   };
-  state.wallet = Math.max(state.wallet, stored.wallet);
-  unionInto(state.coins, stored.coins);
-  unionInto(state.tombs, stored.tombs);
-  for (const [key, n] of stored.paid) state.paid.set(key, Math.max(state.paid.get(key) || 0, n));
-  const earned = pay(state, stored);
+}
+
+/**
+ * Writes the run state `{ id, save, level, start, solved, wallet, coins, tombs,
+ * record }` (coins and tombs are Sets) through `io` `{ load(key), store(key,
+ * value) }` without losing what another tab wrote. A stored slot
+ * with the same id is the same run: its wallet and record merge by max and its
+ * Sets by union, in place so a running sim sees them. Any other slot, or none,
+ * is replaced whole, and `pay` sees an empty stored state. The run fields are
+ * the writer's. `pay(state, stored)` returns the coins this write earns, with
+ * `state` and `stored` holding the slot's sets as one-entry Maps keyed by
+ * `coinKey(seed, level)`; they join the wallet. Returns the coins earned.
+ */
+export function commitSlot(io, state, pay) {
+  const held = parseSlot(io.load(SLOT_KEY));
+  const key = coinKey(decodeSave(state.save).code, state.level);
+  const same = held !== null && held.id === state.id;
+  const was = same ? held : { wallet: 0, coins: [], tombs: [], record: 0 };
+  if (same) {
+    state.wallet = Math.max(state.wallet, was.wallet);
+    for (const id of was.coins) state.coins.add(id);
+    for (const id of was.tombs) state.tombs.add(id);
+    state.record = Math.max(state.record, was.record);
+  }
+  const view = (wallet, coins, tombs, record) => (
+    { wallet, coins: new Map([[key, coins]]), tombs: new Map([[key, tombs]]), paid: new Map([[key, record]]) });
+  const now = view(state.wallet, state.coins, state.tombs, state.record);
+  const earned = pay(now, view(was.wallet, new Set(was.coins), new Set(was.tombs), was.record));
   state.wallet += earned;
-  io.store(COIN_KEYS.wallet, String(state.wallet));
-  io.store(COIN_KEYS.coins, serializeIdSets(state.coins));
-  io.store(COIN_KEYS.tombs, serializeIdSets(state.tombs));
-  io.store(COIN_KEYS.paid, serializePaid(state.paid));
+  state.record = now.paid.get(key);
+  io.store(SLOT_KEY, serializeSlot(state));
   return earned;
 }

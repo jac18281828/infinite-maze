@@ -12,8 +12,7 @@ import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
-  COIN_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitCoins, parseWallet, parseIdSets, parsePaid,
-  serializeIdSets, serializePaid, COIN_ID, TOMB_ID,
+  SLOT_KEY, LEGACY_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot, newSlotId,
 } from './wallet.mjs';
 import { createGamepad } from './gamepad.mjs';
 import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
@@ -22,24 +21,13 @@ import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
 import { RGB, idx } from './art.mjs';
 
-// Saves and bests of the tomb plane keep keys of their own, so a stacked-world
-// value never reads as a position or a score.
-const KEY_SAVE = 'infinite-maze.plane.save';
-// The difficulty of the run that wrote KEY_SAVE; absent means ULTIMATE, the
-// 6x4 world and the only size before difficulties.
-const KEY_SAVE_DIFFICULTY = 'infinite-maze.plane.save.difficulty';
-// The run behind KEY_SAVE: JSON { save, start: "u,v", solved: ["u,v", ...] }. A save
-// code holds a seed and a board, so the run's tomb count lives here.
-const KEY_SAVE_RUN = 'infinite-maze.plane.save.run';
+// The bests of the tomb plane keep a key of their own, so a stacked-world value
+// never reads as a score. The save slot lives under SLOT_KEY (wallet.mjs).
 // The title's difficulty setting; absent means MEDIUM.
 const KEY_DIFFICULTY = 'infinite-maze.difficulty';
 // The d-pad's side, 'left' or 'right'; anything else reads 'left'.
 const KEY_PAD = 'infinite-maze.pad';
 const KEY_BEST = 'infinite-maze.plane.best';
-// Coins: the wallet, the collected set, the payout record and the solved tombs.
-const { wallet: KEY_WALLET, coins: KEY_COINS, paid: KEY_PAID, tombs: KEY_TOMBS } = COIN_KEYS;
-// The stacked world's save difficulty, which a plane save never reads.
-const KEY_STACKED_SAVE_DIFFICULTY = 'infinite-maze.save.difficulty';
 // A save code runs to 26 characters: 10 for the seed and up to 16 digits of p.
 const TYPED_MAX = 26;
 
@@ -62,9 +50,9 @@ function unstore(key) {
   try { globalThis.localStorage.removeItem(key); } catch { /* storage unavailable */ }
 }
 
-/** The real localStorage's coin and save keys, as stored, for the self-test's guard. */
+/** The real localStorage's slot and legacy keys, as stored, for the self-test's guard. */
 function realKeys() {
-  return [KEY_SAVE, KEY_SAVE_DIFFICULTY, KEY_SAVE_RUN, KEY_WALLET, KEY_COINS, KEY_PAID, KEY_TOMBS].map((k) => {
+  return [SLOT_KEY, ...Object.values(LEGACY_KEYS)].map((k) => {
     try { return globalThis.localStorage.getItem(k); } catch { return null; }
   });
 }
@@ -98,30 +86,57 @@ function storedDifficulty(key, fallback) {
   return DIFFICULTIES.includes(d) ? d : fallback;
 }
 
-/** The stored save read at the difficulty that wrote it, or null. */
+// The slot as last parsed, keyed by the raw text it came from: the title reads
+// the slot every frame.
+let parsed = { raw: undefined, slot: null };
+
+/** The stored slot, or null. Callers never change it. */
+function readSlot() {
+  const raw = load(SLOT_KEY);
+  if (parsed.raw !== raw) parsed = { raw, slot: parseSlot(raw) };
+  return parsed.slot;
+}
+
+/** The slot's serial decoded, with the slot's difficulty, or null. */
 function readSave() {
-  const difficulty = storedDifficulty(KEY_SAVE_DIFFICULTY, 'ultimate');
-  const s = decodeSave(load(KEY_SAVE) || '');
-  return s && { ...s, difficulty };
+  const slot = readSlot();
+  const s = slot && decodeSave(slot.save);
+  return s && { ...s, difficulty: slot.level };
 }
 
-/** Stores a save of the current run with the run's difficulty, start tomb and solved tombs. */
+const slotIo = { load, store };
+
+/** The slot state of the game's run, its serial being `g.serial`. */
+function slotState(g) {
+  const { start, solved } = g.sim, key = coinKey(g.code, g.world.difficulty);
+  return {
+    id: g.slotId, save: g.serial, level: g.world.difficulty, start: `${start.u},${start.v}`, solved,
+    wallet: g.wallet, coins: collectedSet(g), tombs: tombSet(g), record: g.paid.get(key) || 0,
+  };
+}
+
+/**
+ * Writes the run to the slot through `commitSlot` and returns the coins earned.
+ * The first write of a clean run takes the slot: a new id and the run's last
+ * entry as its serial.
+ */
+function commit(g, pay) {
+  if (g.slotId === null) {
+    g.slotId = newSlotId();
+    g.serial = entryCode(g);
+  }
+  const state = slotState(g);
+  const earned = commitSlot(slotIo, state, pay);
+  g.wallet = state.wallet;
+  g.paid.set(coinKey(g.code, g.world.difficulty), state.record);
+  return earned;
+}
+
+/** Stores a save of the run in the slot, once the run has taken it; a clean run writes nothing. */
 function writeSave(g, text) {
-  const { start, solved } = g.sim;
-  store(KEY_SAVE, text);
-  store(KEY_SAVE_DIFFICULTY, g.world.difficulty);
-  store(KEY_SAVE_RUN, JSON.stringify({ save: text, start: `${start.u},${start.v}`, solved: [...solved] }));
-}
-
-/** The run stored with the stored save, as { start: { u, v }, solved: Set }, or null when absent, malformed or another save's. */
-function storedRun() {
-  let run;
-  try { run = JSON.parse(load(KEY_SAVE_RUN)); } catch { return null; }
-  if (!run || typeof run !== 'object') return null;
-  if (run.save !== load(KEY_SAVE)) return null;
-  if (!TOMB_ID.test(run.start) || !Array.isArray(run.solved) || !run.solved.every((id) => typeof id === 'string' && TOMB_ID.test(id))) return null;
-  const [u, v] = run.start.split(',').map(Number);
-  return { start: { u, v }, solved: new Set(run.solved) };
+  if (g.slotId === null) return;
+  g.serial = text;
+  commit(g, () => 0);
 }
 
 function present() {
@@ -261,15 +276,13 @@ function driveTouch(copied, fake) {
   const need = (ok, what) => { if (!ok) throw new Error(`touch ${what}`); };
   // Boot reads the player's setting; with none stored, a new player starts at MEDIUM.
   unstore(KEY_DIFFICULTY);
-  // Boot reads the coin keys: a wallet of 7, one collected coin and a record that is not JSON.
-  store(KEY_WALLET, '7');
-  store(KEY_COINS, JSON.stringify({ [coinKey(SELFTEST_CODE, 'medium')]: ['0,0,21'] }));
-  store(KEY_PAID, '{not json');
+  // The slot holds 300 coins and TOMB 20, which boot leaves alone.
+  putSlot({ wallet: 300, solved: fakeSolved(20), coins: ['0,0,21'], tombs: ['0,0'], record: 20 });
   // Boot reads the pad's side.
   store(KEY_PAD, 'right');
   const g = boot();
-  need(g.wallet === 7 && (g.coins.get(coinKey(SELFTEST_CODE, 'medium')) || new Set()).has('0,0,21') && g.paid.size === 0,
-    'boot reads the wallet and the collected set, and a malformed record as empty');
+  need(isClean(g), 'boot starts clean');
+  need(g.code === 'K7Q2M9XA' && readSlot().wallet === 300, 'the title shows the slot\'s seed and boot leaves the slot');
   need(g.difficulty === 'medium' && g.world.difficulty === 'medium', 'a new player starts at MEDIUM');
   need(touch && !touch.on, 'starts in keyboard mode');
   need(touch.soft('title', 'begin').getBoundingClientRect().width === 0, 'controls hidden in keyboard mode');
@@ -354,9 +367,9 @@ function driveTouch(copied, fake) {
   need(touchTap(soundArt, 3400, 3500) && g.audio.muted !== muted, 'a quick second tap on a key is cancelled and clicks it');
   need(touchTap(soundArt, 3800, 3900, display) && g.audio.muted !== muted, 'a quick second tap lifted off its key clicks nothing');
   click('title', 'sound');
-  // A save under another seed, so the title's save code differs from its seed code.
-  store(KEY_SAVE, g.code === 'K7Q2M9XA' ? '0000-0000:13' : 'K7Q2-M9XA:13');
-  const saved = decodeSave(load(KEY_SAVE));
+  // A serial under another seed, so the title's save code differs from its seed code.
+  putSlot({ save: g.code === 'K7Q2M9XA' ? '0000-0000:13' : 'K7Q2-M9XA:13' });
+  const saved = decodeSave(readSlot().save);
   need(formatCode(saved.code) !== formatCode(g.code), 'the title shows a save under another seed');
   copies('title', `${formatCode(saved.code)}:${saved.p}`);
   const realPrompt = window.prompt;
@@ -425,11 +438,10 @@ function driveTouch(copied, fake) {
   // Pause.
   offEntry();
   click('play', 'pause');
-  need(g.screen === 'pause' && load(KEY_SAVE) === hereCode(g), 'PAUSE reaches pause and stores a save');
+  need(g.screen === 'pause', 'PAUSE reaches pause');
   const home = frameOf(g.sim.bd, g.world.size);
   const framed = (du, dv) => sameFrame(g.frame, { u: home.u + du, v: home.v + dv });
   need(framed(0, 0), 'PAUSE frames the explorer\'s tomb');
-  need(load(KEY_SAVE_DIFFICULTY) === g.world.difficulty, 'PAUSE stores the save\'s difficulty');
   press('ArrowUp', 'ArrowUp');
   need(framed(0, 1), 'Up pans one tomb up');
   press('ArrowUp', 'ArrowUp', true);
@@ -513,6 +525,7 @@ function driveTouch(copied, fake) {
   twoGamesLeg(g, { need, click });
   splashLeg(g, { need, click, press });
   resumeLeg(g, { need, click });
+  slotLeg(g, { need, click });
   oilLeg(g, { need, click });
   gamepadLeg(g, { need, click, fake });
 
@@ -554,13 +567,14 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
     need(sized(d), `${code} steps the setting to ${difficultyLabel(d)}`);
   }
 
-  // A save resumes at the difficulty that wrote it, with no run open, as at startup.
+  // A slot resumes at the difficulty that wrote it, with no run open, as at startup.
   const saveAt = (d) => {
     setDifficulty(g, d);
     click('title', 'begin');
     offEntry();
+    earnFake(g);
     click('play', 'pause');
-    need(load(KEY_SAVE_DIFFICULTY) === d, `PAUSE stores ${difficultyLabel(d)} with the save`);
+    need(slotNow().level === d, `PAUSE stores ${difficultyLabel(d)} with the save`);
     const where = { x: g.sim.bd.x, y: g.sim.bd.y, sim: g.sim };
     click('pause', 'title');
     g.open = null;
@@ -581,15 +595,11 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
-  // A save from before difficulties, with none stored beside it, plays at
-  // ULTIMATE, the 6x4 world, whatever difficulty the stacked world's save left.
   const old = saveAt('ultimate');
-  unstore(KEY_SAVE_DIFFICULTY);
-  store(KEY_STACKED_SAVE_DIFFICULTY, 'easy');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
   press('ArrowLeft', 'ArrowLeft');
-  need(sized('easy'), 'the setting moves to EASY over a save with no difficulty');
+  need(sized('easy'), 'the setting moves to EASY over an ULTIMATE save');
   // A held P or Esc repeats; the title ignores the repeat, as it does Space's.
   press('KeyP', 'p', true);
   need(g.screen === 'title', 'the title ignores an auto-repeated P');
@@ -599,7 +609,7 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   press('KeyH', 'h', true);
   need(g.side === sideNow && load(KEY_PAD) === sideNow, 'the title ignores an auto-repeated H');
   click('title', 'resume');
-  need(g.screen === 'play' && sized('ultimate') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays a save with no stored difficulty at ULTIMATE on its board');
+  need(g.screen === 'play' && sized('ultimate') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays the ULTIMATE save on its board');
   click('play', 'pause');
   click('pause', 'title');
   g.open = null;
@@ -608,12 +618,12 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
   need(sized('medium'), 'the setting moves to MEDIUM over an EASY save');
   resumesAt('easy', easy);
 
-  // RESET rolls a new seed and keeps the save.
+  // RESET rolls a new seed and keeps the slot.
   click('play', 'pause');
   click('pause', 'title');
-  const save = [load(KEY_SAVE), load(KEY_SAVE_DIFFICULTY)], code = g.code;
+  const kept = load(SLOT_KEY), code = g.code;
   click('title', 'reset');
-  need(g.code !== code && load(KEY_SAVE) === save[0] && load(KEY_SAVE_DIFFICULTY) === save[1], 'RESET changes the seed and keeps the save');
+  need(g.code !== code && kept !== null && load(SLOT_KEY) === kept, 'RESET changes the seed and keeps the slot');
 
   // The best tomb is per seed and difficulty; ULTIMATE keeps the bare seed code.
   click('title', 'resume');
@@ -698,33 +708,47 @@ function walkOut(g, n, doomAt = 0) {
   return ticks;
 }
 
-/** Stores the wallet, the collected set, the solved tombs and the payout record, as the game does on each change. */
-function keepCoins(g) {
-  store(KEY_WALLET, String(g.wallet));
-  store(KEY_COINS, serializeIdSets(g.coins));
-  store(KEY_TOMBS, serializeIdSets(g.tombs));
-  store(KEY_PAID, serializePaid(g.paid));
+/** A slot of the self-test's MEDIUM seed with nothing earned; `putSlot` fills in what a step changes. */
+const SLOT_BASE = {
+  id: 'AAAAAAAA', save: 'K7Q2-M9XA:13', level: 'medium', start: '0,0', solved: [], wallet: 0, coins: [], tombs: [], record: 0,
+};
+
+/** Stores a slot made of SLOT_BASE and `over`. */
+function putSlot(over = {}) {
+  store(SLOT_KEY, serializeSlot({ ...SLOT_BASE, ...over }));
 }
 
-/** Empties the wallet, the collected set, the solved tombs and the record, in memory and in storage. */
-function clearCoins(g) {
-  g.wallet = 0;
-  g.coins = new Map();
-  g.tombs = new Map();
-  g.paid = new Map();
-  keepCoins(g);
+/** The stored slot, or null. */
+const slotNow = () => parseSlot(load(SLOT_KEY));
+
+/** True when the game's economy is clean: no slot, wallet 0, empty sets and no record. */
+const isClean = (g) => g.slotId === null && g.wallet === 0 && [...g.coins.values(), ...g.tombs.values()].every((set) => set.size === 0)
+  && [...g.paid.values()].every((n) => n === 0);
+
+/** A fresh game over the same storage, as after a page reload. */
+function reload() {
+  const h = createGame();
+  useCode(h, h.code);
+  return h;
+}
+
+/** The run takes the slot with a coin the board lacks, through the game's own coin path. */
+function earnFake(g) {
+  const id = '9,9,9';
+  collectedSet(g).add(id);
+  collectCoin(g, [id]);
 }
 
 /**
  * Forgets tomb (0, 0) of the self-test seed at level `d`, and sets its record to
- * `record` (none when 0), in memory and in storage: the merge restores both from
- * storage, so the next solve of (0, 0) pays as a first.
+ * `record` (none when 0), in memory and in the slot: the merge restores both from
+ * the slot, so the next solve of (0, 0) pays as a first.
  */
 function forgetTomb(g, d, record = 0) {
   const key = coinKey(SELFTEST_CODE, d), solved = g.tombs.get(key);
   if (solved) solved.delete('0,0');
   if (record) g.paid.set(key, record); else g.paid.delete(key);
-  keepCoins(g);
+  if (g.slotId !== null) store(SLOT_KEY, serializeSlot(slotState(g)));
 }
 
 /** The first coin of tomb (0, 0), board by board in index order, as { bd, cell }, or null. */
@@ -863,8 +887,9 @@ function coinLeg(g, { need, click }) {
     useCode(g, SELFTEST_CODE);
   };
 
-  // Step 1: the first coin of tomb (0, 0) at MEDIUM.
-  clearCoins(g);
+  // Step 1: the first coin of tomb (0, 0) at MEDIUM takes the slot.
+  cleanState(g);
+  unstore(SLOT_KEY);
   onLevel('medium');
   g.screen = 'title';
   draw(g, 0);
@@ -872,52 +897,36 @@ function coinLeg(g, { need, click }) {
   need(g.screen === 'play' && g.earned === 0, 'BEGIN starts a run with no coins earned');
   const coin = firstCoin(g.world);
   need(coin !== null, 'tomb (0, 0) holds a coin at MEDIUM');
-  const key = coinKey(SELFTEST_CODE, 'medium'), id = coinId(coin.bd, coin.cell);
+  const id = coinId(coin.bd, coin.cell);
   walkToItem(g, coin);
   need(g.sim.events.includes('coin') && g.wallet === 1, 'touching the first coin adds one to the wallet');
   need(g.earned === 1, 'a coin counts as one earned this run');
-  need(load(KEY_WALLET) === '1', 'a touched coin stores the wallet');
-  need((JSON.parse(load(KEY_COINS))[key] || []).includes(id), 'a touched coin stores the collected set under the seed and level');
+  const slot = slotNow();
+  need(slot !== null && slot.wallet === 1, 'a touched coin stores the wallet');
+  need(slot.level === 'medium' && slot.coins.length === 1 && slot.coins[0] === id, 'a touched coin stores the collected set in the slot');
   need(realUntouched(), 'the self-test leaves the real wallet untouched');
 
-  // Step 2: a new run on the same seed and level.
-  begin(g);
-  walkToItem(g, coin);
-  let held = 0;
-  runTicks(g, () => [0, 0, false], () => held >= 30, 100, 'the explorer stands on the coin', () => { held++; });
-  need(g.wallet === 1 && g.earned === 0, 'a collected coin credits nothing on a new run');
-  need(g.coins.get(key).has(id), 'the collected set keeps the coin');
-
-  // Step 3: a tomb solved first on this device pays its rate, at any run count.
+  // Step 2: each level in a clean state. A tomb solved first pays its rate; a replay pays nothing;
+  // a tomb under the record pays, since the record plays no part in it.
   for (const d of DIFFICULTIES) {
+    const label = difficultyLabel(d), key = coinKey(SELFTEST_CODE, d);
+    cleanState(g);
     onLevel(d);
-    forgetTomb(g, d);
-    const was = g.wallet, tombKey = coinKey(SELFTEST_CODE, d);
     oneTombOn(g, 0);
-    need(g.wallet - was === rates[d], `a tomb solved first on this device pays ${rates[d]} at ${difficultyLabel(d)}`);
-    need(load(KEY_WALLET) === String(g.wallet) && (JSON.parse(load(KEY_TOMBS))[tombKey] || []).includes('0,0')
-      && JSON.parse(load(KEY_PAID))[tombKey] === 1,
-      `the payout stores the wallet, the solved tomb and the record at ${difficultyLabel(d)}`);
+    need(g.wallet === rates[d], `a tomb solved first on this device pays ${rates[d]} at ${label}`);
+    const stored = slotNow();
+    need(stored.wallet === g.wallet && stored.tombs.includes('0,0') && stored.record === 1 && stored.level === d,
+      `the payout stores the wallet, the solved tomb and the record at ${label}`);
+    oneTombOn(g, 0);
+    need(g.wallet === rates[d], `a replay of a solved tomb pays nothing at ${label}`);
+    cleanState(g);
+    g.paid.set(key, 50);
+    oneTombOn(g, 0);
+    need(g.wallet === rates[d] && slotNow().record === 50, `a new tomb pays under the record at ${label}`);
   }
 
-  // Step 4: a replay of a solved tomb pays nothing; a new tomb pays under the record.
-  for (const d of DIFFICULTIES) {
-    onLevel(d);
-    const was = g.wallet;
-    oneTombOn(g, 0);
-    need(g.wallet === was, `a replay of a solved tomb pays nothing at ${difficultyLabel(d)}`);
-  }
-  for (const d of DIFFICULTIES) {
-    onLevel(d);
-    forgetTomb(g, d, 50);
-    const was = g.wallet;
-    oneTombOn(g, 0);
-    need(g.wallet - was === rates[d] && JSON.parse(load(KEY_PAID))[coinKey(SELFTEST_CODE, d)] === 50,
-      `a new tomb pays under the record at ${difficultyLabel(d)}`);
-  }
-
-  // Step 5: the coins earned this run equal the wallet's gain since BEGIN.
-  clearCoins(g);
+  // Step 3: the coins earned this run equal the wallet's gain since BEGIN.
+  cleanState(g);
   onLevel('medium');
   g.screen = 'title';
   draw(g, 0);
@@ -940,23 +949,24 @@ function coinLeg(g, { need, click }) {
 /** The two-games step of the touch leg, from the title with no run open. */
 function twoGamesLeg(g, { need, click }) {
   const key = coinKey(SELFTEST_CODE, 'medium');
-  // A second game, made before the first one's write, earns after it; the merge keeps both.
-  clearCoins(g);
+  // Two games that restored one slot share its id. A second game, made before the first one's write,
+  // earns after it; the merge keeps both.
+  cleanState(g);
   setDifficulty(g, 'medium');
   useCode(g, SELFTEST_CODE);
-  g.screen = 'title';
-  draw(g, 0);
-  click('title', 'begin');
+  const first = g.world.startPoint().board;
+  putSlot({ save: encodeSave(SELFTEST_CODE, first.x, first.y) });
+  restore(g, readSlot());
+  const other = reload();
+  restore(other, readSlot());
   const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell);
-  const other = createGame();
   walkToItem(g, coin);
   const second = '9,9,9';
-  useCode(other, SELFTEST_CODE);
   collectedSet(other).add(second);
   collectCoin(other, [second]);
-  const stored = JSON.parse(load(KEY_COINS))[key] || [];
-  need(load(KEY_WALLET) === '2' && other.wallet === 2 && other.earned === 1 && stored.includes(id) && stored.includes(second)
-    && other.coins.get(key).has(id), 'two games on one storage keep both coins');
+  const stored = slotNow();
+  need(stored.wallet === 2 && other.wallet === 2 && other.earned === 1 && stored.coins.includes(id) && stored.coins.includes(second)
+    && other.coins.get(key).has(id), 'two games on one slot keep both coins');
 }
 
 /**
@@ -966,28 +976,23 @@ function twoGamesLeg(g, { need, click }) {
 function splashLeg(g, { need, click, press }) {
 
   // Step 1: the first crossing of tomb 100 shows TORCHBEARER and pays the rate plus 100, at every level.
-  g.wallet = 0;
-  g.coins = new Map();
-  g.tombs = new Map();
-  g.paid = new Map();
   for (const d of DIFFICULTIES) {
+    cleanState(g);
     setDifficulty(g, d);
     useCode(g, SELFTEST_CODE);
     const key = coinKey(SELFTEST_CODE, d), label = difficultyLabel(d);
     g.paid.set(key, 99);
-    keepCoins(g);
     const was = g.wallet, earned = g.earned;
     oneTombOn(g, 99);
     need(g.screen === 'splash' && g.splash.k === 1 && rankName(g.splash.k) === 'TORCHBEARER' && g.splash.paid,
       `tomb 100 shows the splash with TORCHBEARER at ${label}`);
     need(g.wallet - was === COIN_RATE[d] + 100, `tomb 100 pays ${COIN_RATE[d]} plus 100 at ${label}`);
     need(g.earned - earned === g.wallet - was, `the milestone payout counts in the coins earned at ${label}`);
-    need(load(KEY_WALLET) === String(g.wallet) && JSON.parse(load(KEY_PAID))[key] === 100,
-      `the ${label} milestone payout stores the wallet and the record`);
+    need(slotNow().wallet === g.wallet && slotNow().record === 100, `the ${label} milestone payout stores the wallet and the record`);
     // The tick's entry event stores a save too, so the splash's own write shows only over a stale one.
-    store(KEY_SAVE, 'stale');
+    store(SLOT_KEY, serializeSlot({ ...slotNow(), save: SLOT_BASE.save }));
     showSplash(g, g.splash.k, g.splash.paid);
-    need(load(KEY_SAVE) === hereCode(g), `the ${label} splash stores the save`);
+    need(slotNow().save === hereCode(g), `the ${label} splash stores the save`);
   }
   draw(g, 0);
 
@@ -1055,11 +1060,6 @@ function splashLeg(g, { need, click, press }) {
  */
 function resumeLeg(g, { need, click }) {
   const level = 'medium', key = coinKey(SELFTEST_CODE, level);
-  const reload = () => {
-    const h = createGame();
-    useCode(h, h.code);
-    return h;
-  };
   setDifficulty(g, level);
   useCode(g, SELFTEST_CODE);
   g.screen = 'title';
@@ -1069,15 +1069,15 @@ function resumeLeg(g, { need, click }) {
   const count = tombCount(g.sim);
   draw(g, 0);
   click('play', 'pause');
-  const saved = load(KEY_SAVE);
+  const saved = slotNow().save;
 
-  // The count survives a reload through the stored run.
+  // The count survives a reload through the slot.
   const resumed = reload();
   resume(resumed);
   need(count >= 2 && resumed.screen === 'play' && tombCount(resumed.sim) === count, `RESUME after a reload continues at TOMB ${count}`);
   need(resumed.sim.start.u === 0 && resumed.sim.start.v === 0 && resumed.earned === 0, 'a resumed run keeps its start tomb and earns afresh');
 
-  // A typed copy of the stored save continues it; another code does not, as it carries no count.
+  // A typed copy of the slot's serial continues it; another code does not, as it carries no count.
   const typed = (text) => {
     const h = reload();
     h.typing = text;
@@ -1085,25 +1085,12 @@ function resumeLeg(g, { need, click }) {
     return tombCount(h.sim);
   };
   const elsewhere = encodeSave(SELFTEST_CODE, g.sim.bd.x + 1, g.sim.bd.y);
-  need(typed(saved) === count, `a typed copy of the stored save continues at TOMB ${count}`);
+  need(typed(saved) === count, `a typed copy of the slot's serial continues at TOMB ${count}`);
   need(typed(elsewhere) === 0, 'another save code starts at TOMB 0');
-
-  // The stored run names its save.
-  store(KEY_SAVE, elsewhere);
-  const other = reload();
-  resume(other);
-  need(tombCount(other.sim) === 0, 'a stored run naming another save resumes at TOMB 0');
-  store(KEY_SAVE, saved);
-  unstore(KEY_SAVE_RUN);
-  const bare = reload();
-  resume(bare);
-  need(tombCount(bare.sim) === 0, 'a save without a stored run resumes at TOMB 0');
 
   // A run resumed at TOMB 99 crosses 100 under a record of 100: the splash shows unpaid and only the tomb pays.
   const exit = exitBoard(g.world), at = encodeSave(SELFTEST_CODE, exit.x, exit.y);
-  store(KEY_SAVE, at);
-  store(KEY_SAVE_RUN, JSON.stringify({ save: at, start: '0,0', solved: fakeSolved(99) }));
-  forgetTomb(g, level, 100);
+  putSlot({ save: at, solved: fakeSolved(99), record: 100 });
   const late = reload();
   resume(late);
   need(tombCount(late.sim) === 99 && late.paid.get(key) === 100, 'RESUME after a reload continues at TOMB 99');
@@ -1111,6 +1098,73 @@ function resumeLeg(g, { need, click }) {
   walkOut(late, 99);
   need(late.screen === 'splash' && late.splash.k === 1 && !late.splash.paid && late.wallet - was === COIN_RATE[level],
     'a resumed run crossing tomb 100 below the record pays no milestone');
+}
+
+/**
+ * The save slot steps of the touch leg, from the title with no run open: a
+ * clean start, the slot restored by RESUME, and a new run taking the slot on
+ * its first coin.
+ */
+function slotLeg(g, { need, click }) {
+  const level = 'medium', key = coinKey(SELFTEST_CODE, level);
+  setDifficulty(g, level);
+  useCode(g, SELFTEST_CODE);
+  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell), first = g.world.startPoint().board;
+  // The slot holds 300 coins, a collected coin and TOMB 20, at tomb (0, 0)'s first board.
+  const hold = () => putSlot({ save: encodeSave(SELFTEST_CODE, first.x, first.y), solved: fakeSolved(20), wallet: 300, coins: [id], tombs: ['0,0'], record: 20 });
+  const toTitle = () => {
+    cleanState(g);
+    g.open = null;
+    g.typing = null;
+    g.screen = 'title';
+    draw(g, 0);
+  };
+  const typeIn = (text) => {
+    const realPrompt = window.prompt;
+    try {
+      window.prompt = () => text;
+      click('title', 'type');
+    } finally {
+      window.prompt = realPrompt;
+    }
+  };
+
+  // A typed serial on another seed starts clean.
+  hold();
+  toTitle();
+  typeIn('K7Q2-M9XA:13');
+  need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'a new serial starts with no coins');
+
+  // RESUME restores the slot's coins and TOMB 20.
+  toTitle();
+  click('title', 'resume');
+  need(g.screen === 'play' && g.wallet === 300 && tombCount(g.sim) === 20 && g.coins.get(key).has(id), 'Y restores the slot\'s coins and TOMB 20');
+  walkToItem(g, coin);
+  need(g.wallet === 300 && g.earned === 0, 'a coin the slot lists pays nothing again');
+
+  // BEGIN after a restored run starts clean.
+  draw(g, 0);
+  click('play', 'pause');
+  click('pause', 'title');
+  click('title', 'begin');
+  need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'BEGIN after a restored run starts with no coins at TOMB 0');
+
+  // A clean run leaves the slot as it was until its first coin.
+  draw(g, 0);
+  click('play', 'pause');
+  const later = reload();
+  resume(later);
+  need(later.wallet === 300 && tombCount(later.sim) === 20, 'the slot outlives a clean run until a new run earns');
+
+  // The run's first coin takes the slot, and its wallet counts from 0.
+  toTitle();
+  hold();
+  click('title', 'begin');
+  walkToItem(g, coin);
+  need(g.wallet === 1, 'BEGIN on the slot\'s seed earns from 0');
+  const taken = slotNow();
+  need(taken.id === g.slotId && taken.id !== SLOT_BASE.id && taken.wallet === 1 && taken.coins.length === 1 && taken.solved.length === 0
+    && taken.tombs.length === 0 && taken.record === 0, 'a new run\'s first coin takes the slot');
 }
 
 const DIRS = {
@@ -1139,27 +1193,37 @@ function writeBest(code, difficulty, solved) {
   if (all[key] === undefined || solved > all[key]) { all[key] = solved; store(KEY_BEST, JSON.stringify(all)); }
 }
 
-/** The wallet, the collected set, the solved tombs and the payout record as stored; absent or malformed reads as empty. */
-function readCoinState() {
-  return {
-    wallet: parseWallet(load(KEY_WALLET)), coins: parseIdSets(load(KEY_COINS), COIN_ID),
-    tombs: parseIdSets(load(KEY_TOMBS), TOMB_ID), paid: parsePaid(load(KEY_PAID)),
-  };
-}
-
-/** The collected set of the game's seed and level, which a run's sim fills as it takes coins. */
-function collectedSet(g) {
+/** The Set that `map` keeps for the game's seed and level, made when absent. */
+function setOf(g, map) {
   const key = coinKey(g.code, g.world.difficulty);
-  let set = g.coins.get(key);
+  let set = map.get(key);
   if (!set) {
     set = new Set();
-    g.coins.set(key, set);
+    map.set(key, set);
   }
   return set;
 }
 
-/** The storage pair every coin write goes through, in `commitCoins`. */
-const coinIo = { load, store };
+/** The collected set of the game's seed and level, which a run's sim fills as it takes coins. */
+function collectedSet(g) {
+  return setOf(g, g.coins);
+}
+
+/** The solved tombs of the game's seed and level, which the tomb pay fills. */
+function tombSet(g) {
+  return setOf(g, g.tombs);
+}
+
+/** The economy of a clean state: no slot, wallet 0 and empty sets. A new Map keeps a left-open run's sets. */
+function cleanState(g) {
+  Object.assign(g, { slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map() });
+}
+
+/** The fields of the game's economy, which a run left open takes with it. */
+function economyOf(g) {
+  const { slotId, serial, wallet, coins, tombs, paid } = g;
+  return { slotId, serial, wallet, coins, tombs, paid };
+}
 
 /** The entries a set gained after it held `before`; a Set iterates in insertion order. */
 function appended(set, before) {
@@ -1168,7 +1232,7 @@ function appended(set, before) {
 
 /** A tick took the coins `ids`: pays those storage did not list and counts them earned. */
 function collectCoin(g, ids) {
-  g.earned += commitCoins(coinIo, g, coinPay(coinKey(g.code, g.world.difficulty), ids));
+  g.earned += commit(g, coinPay(coinKey(g.code, g.world.difficulty), ids));
 }
 
 /**
@@ -1180,14 +1244,15 @@ function payTombs(g, solvedNow) {
   if (solvedNow.length === 0) return null;
   const level = g.world.difficulty;
   const pay = tombPay(coinKey(g.code, level), level, solvedNow, tombCount(g.sim));
-  g.earned += commitCoins(coinIo, g, pay);
+  g.earned += commit(g, pay);
   return pay;
 }
 
 /** State shared by input, tick and draw. */
 function createGame() {
   return {
-    ...readCoinState(),
+    // A game starts clean: wallet 0, no collected coins, solved tombs or record, and no slot.
+    slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map(),
     // The coins the wallet has gained since the run began; Continue carries them.
     earned: 0,
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
@@ -1260,30 +1325,50 @@ function begin(g, p = null, carry = null) {
   play(g);
 }
 
-/** Begins at save position p; with the stored `run`, its tomb count and start tomb carry over. */
+/** Begins at save position p; with a `run`, its solved tombs and start tomb carry over. */
 function beginSaved(g, p, run) {
   begin(g, p, run && { time: 0, solved: run.solved, start: run.start, lastEntry: p });
   g.earned = 0;
 }
 
+/** BEGIN: a run from tomb (0, 0) with a clean economy. */
+function beginClean(g) {
+  cleanState(g);
+  begin(g);
+}
+
 /**
- * RESUME: back to the open run unchanged, or with none open, the save rebuilt
- * at its own difficulty. Either way the setting follows the run.
+ * Restores `slot` into memory and begins its run at the serial's position, at
+ * the slot's difficulty, with its start tomb, solved tombs and wallet. The
+ * setting follows.
+ */
+function restore(g, slot) {
+  const at = decodeSave(slot.save), key = coinKey(at.code, slot.level);
+  keepSetting(g, slot.level);
+  if (at.code !== g.code || g.world.difficulty !== slot.level) useCode(g, at.code);
+  Object.assign(g, {
+    slotId: slot.id, serial: slot.save, wallet: slot.wallet, coins: new Map([[key, new Set(slot.coins)]]),
+    tombs: new Map([[key, new Set(slot.tombs)]]), paid: new Map([[key, slot.record]]),
+  });
+  const [u, v] = slot.start.split(',').map(Number);
+  beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v } });
+}
+
+/**
+ * RESUME: back to the open run unchanged, or with none open, the stored slot
+ * restored. Either way the setting follows the run.
  */
 function resume(g) {
   const o = g.open;
   if (o) {
     g.open = null;
-    Object.assign(g, { code: o.code, world: o.world, renderer: o.renderer, preview: o.preview, sim: o.sim });
+    Object.assign(g, economyOf(o), { code: o.code, world: o.world, renderer: o.renderer, preview: o.preview, sim: o.sim });
     keepSetting(g, o.world.difficulty);
     play(g);
     return;
   }
-  const s = readSave();
-  if (!s) return;
-  keepSetting(g, s.difficulty);
-  if (s.code !== g.code || g.world.difficulty !== s.difficulty) useCode(g, s.code);
-  beginSaved(g, s.p, storedRun());
+  const slot = readSlot();
+  if (slot) restore(g, slot);
 }
 
 function hereCode(g) {
@@ -1298,16 +1383,17 @@ function entryCode(g) {
 function submitTyped(g) {
   const save = decodeSave(g.typing);
   if (save) {
-    if (save.code !== g.code) useCode(g, save.code);
     g.typing = null;
-    // A code carries no count: only a copy of the stored save, at its difficulty, continues the stored run.
-    const kept = readSave();
-    const same = kept && kept.code === save.code && kept.p === save.p && kept.difficulty === g.difficulty;
-    beginSaved(g, save.p, same ? storedRun() : null);
+    // A code carries no count or coins: only the slot's own serial restores the slot.
+    const slot = readSlot(), kept = slot && decodeSave(slot.save);
+    if (kept && kept.code === save.code && kept.p === save.p) { restore(g, slot); return; }
+    cleanState(g);
+    if (save.code !== g.code) useCode(g, save.code);
+    beginSaved(g, save.p, null);
     return;
   }
   const c = parseCode(g.typing);
-  if (c) { useCode(g, c); g.typing = null; g.note = ''; return; }
+  if (c) { cleanState(g); useCode(g, c); g.typing = null; g.note = ''; return; }
   g.note = 'NOT A SEED OR SAVE CODE';
 }
 
@@ -1321,9 +1407,9 @@ function typingKey(g, e) {
 function titleKey(g, e) {
   if (g.typing !== null) { typingKey(g, e); return; }
   const at = DIFFICULTIES.indexOf(g.difficulty);
-  if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) begin(g);
+  if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) beginClean(g);
   else if (e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }
-  else if (e.code === 'KeyR') { useCode(g, rollCode()); g.note = ''; }
+  else if (e.code === 'KeyR') { cleanState(g); useCode(g, rollCode()); g.note = ''; }
   else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
   else if (e.code === 'KeyL') setDifficulty(g, DIFFICULTIES[(at + 1) % DIFFICULTIES.length]);
   else if (e.code === 'KeyH') {
@@ -1362,7 +1448,7 @@ function playKey(g, e) {
 
 /** Goes to the title with the run open: RESUME there returns to it unchanged. */
 function leaveOpen(g) {
-  g.open = { code: g.code, world: g.world, renderer: g.renderer, preview: g.preview, sim: g.sim };
+  g.open = { ...economyOf(g), code: g.code, world: g.world, renderer: g.renderer, preview: g.preview, sim: g.sim };
   g.screen = 'title';
   titleCam(g);
 }
