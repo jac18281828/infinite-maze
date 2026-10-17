@@ -1046,7 +1046,7 @@ test('the coin is gold: 6x6, at least 30 luma brighter than before, no k in its 
 const jarSprite = spriteCanvas(JAR);
 const isJar = ([src]) => src.width === 9 && src.height === 12 && Buffer.from(src.data).equals(Buffer.from(jarSprite.data));
 const jarsOf = (bd) => floorItems(world, bd).filter((it) => it.kind === 'oil');
-const jarBoard = boards.find(({ bd }) => jarsOf(bd).length > 1);
+const jarBoard = boards.find(({ bd }) => jarsOf(bd).length > 0);
 
 test('a scene draws the jar sprite at each untaken jar\'s floor point, before the light map, and none for a taken one', () => {
   assert.ok(jarBoard, 'the sample holds a board with jars');

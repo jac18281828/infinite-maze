@@ -49,13 +49,12 @@ and no assets.
   **Select** goes to the title and answers no to CONTINUE?.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
-  reach a flame in that time or the run ends. Oil jars lie on dead ends,
-  about one in ten at EASY, one in fourteen at MEDIUM, one in twenty at HARD
-  and one in twenty-five at ULTIMATE. A coin takes a cell first: a room holds
-  4.6, 6.4, 6.6 and 6.6 dead ends by level, and 6.0%, 5.0%, 4.9% and 4.8% of
-  them hold a coin and 9.2%, 6.9%, 4.6% and 3.9% a jar, measured. Touch a jar
-  to add 60 s of burn, up to a full torch, or to relight an ember. Jars return
-  on every new run.
+  reach a flame in that time or the run ends. Every room holds oil jars on
+  dead ends with no coin: two a room at EASY and one at MEDIUM, HARD and
+  ULTIMATE. A room holds 4.6, 6.4, 6.6 and 6.6 dead ends by level, and 6.0%,
+  5.0%, 4.9% and 4.8% of them hold a coin, measured. Touch a jar to add 60 s
+  of burn, up to a full torch, or to relight an ember. Jars return on every new
+  run.
 - Occasional hints mark the way on at a junction with a real choice; a link
   into a one-room dead end is none. A carved arrow in the upper corner of the
   room points along the link: about 1 junction in 12 at EASY, 1 in 16 at

@@ -1654,14 +1654,17 @@ const { BW, NCELL, DX } = __m2;
 
 
 
-// Jars per hundred dead-end cells whose coin hash fails, by the world's difficulty.
-const OIL_PERCENT = { easy: 10, medium: 7, hard: 5, ultimate: 4 };
+// Oil jars per tree board, by the world's difficulty.
+const OIL_COUNT = { easy: 2, medium: 1, hard: 1, ultimate: 1 };
 
-// In order: a dead-end cell takes the first kind whose hash passes `percent`
-// (a number, or a table keyed by difficulty), so two items never share a cell.
+// In list order, each row claims cells from the dead ends the rows before it
+// left, so two items never share a cell. A `percent` row takes each such cell
+// whose hash passes; a `count` row takes that many by lowest hash, the lower
+// cell winning a tie, or every such cell when fewer remain. Either field is a
+// number or a table keyed by difficulty.
 const FLOOR_ITEMS = [
   { kind: 'coin', tag: 'coin', percent: 5 },
-  { kind: 'oil', tag: 'oil', percent: OIL_PERCENT },
+  { kind: 'oil', tag: 'oil', count: OIL_COUNT },
 ];
 
 // Board geometry in world pixels, as the game's nodeXY lays it out: a cell is
@@ -1684,7 +1687,7 @@ function deadEnds(world, bd) {
   return cells;
 }
 
-const percentOf = (it, world) => (typeof it.percent === 'number' ? it.percent : it.percent[world.difficulty]);
+const byDifficulty = (v, world) => (typeof v === 'number' ? v : v[world.difficulty]);
 
 const cache = new WeakMap();
 
@@ -1696,10 +1699,22 @@ function floorItems(world, bd, items = FLOOR_ITEMS) {
   const cached = items === FLOOR_ITEMS ? cache.get(bd) : undefined;
   if (cached) return cached;
   const out = [];
-  for (const cell of deadEnds(world, bd)) {
-    const item = items.find((it) => u32(world.H(it.tag, bd.x, bd.y, cell)) % 100 < percentOf(it, world));
-    if (item) out.push({ cell, kind: item.kind });
+  let free = deadEnds(world, bd);
+  for (const it of items) {
+    const hash = (cell) => u32(world.H(it.tag, bd.x, bd.y, cell));
+    let taken;
+    if (it.count !== undefined) {
+      const rank = new Map(free.map((cell) => [cell, hash(cell)]));
+      taken = [...free].sort((a, b) => rank.get(a) - rank.get(b) || a - b).slice(0, byDifficulty(it.count, world));
+    } else {
+      const percent = byDifficulty(it.percent, world);
+      taken = free.filter((cell) => hash(cell) % 100 < percent);
+    }
+    for (const cell of taken) out.push({ cell, kind: it.kind });
+    const gone = new Set(taken);
+    free = free.filter((cell) => !gone.has(cell));
   }
+  out.sort((a, b) => a.cell - b.cell);
   if (items === FLOOR_ITEMS) cache.set(bd, out);
   return out;
 }
@@ -1717,7 +1732,7 @@ function itemSpot(bd, cell) {
     bd.y * BOARD_PX_H + ((cell / BW) | 0) * CELL_PX + 8,
   ];
 }
-return { OIL_PERCENT, FLOOR_ITEMS, deadEnds, floorItems, itemSpot };
+return { OIL_COUNT, FLOOR_ITEMS, deadEnds, floorItems, itemSpot };
 })();
 
 // src/game/ranks.mjs

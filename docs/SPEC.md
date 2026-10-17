@@ -109,7 +109,7 @@ the same world on every engine.
 | Corner of an arrow | `H("sign", x, y, cell)` u32 bit 31 | upper left, upper right |
 | Corner of a skeleton | `H("sign", x, y, cell)` u32 bit 31 | lower left, lower right: the corner of an up or down way; a way to the right prefers the left corner and a way to the left the right, and a gallery's side gives way (§8) |
 | Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
-| Oil jar | `H("oil", x, y, cell)` u32 mod 100 < 10, 7, 5 or 4 | on a dead-end cell (§4) with no coin; 10 at EASY, 7 at MEDIUM, 5 at HARD, 4 at ULTIMATE |
+| Oil jar | `H("oil", x, y, cell)` u32 | on the board's free cells (§4) of lowest value, the lower cell winning a tie: 2 at EASY, 1 at MEDIUM, HARD and ULTIMATE |
 | Wind | `H("wind", x, y, cell)` u32 mod 64 at a branch's first cell | windy when under `min(n, 18)` for a branch of `n` cells (§4) |
 
 Both boards on a shared wall read the same door key, and both tombs on a
@@ -339,23 +339,29 @@ one tree link, no door and no flame, where a flame is any in the board's flame
 set: gap flames and a dead-end board's deepest-cell flame included. The flame
 cell of §2, which the carve protects whether or not it burns, stays eligible.
 A rock board has none. An ordered item list names each kind, its hash tag and
-its percentage, and a dead-end cell takes the first kind whose
-`u32(H(tag, x, y, cell)) mod 100` falls below its percentage, so two items
-never share a cell. Two kinds ship, in this order: the coin, at 5 under the tag
-`coin`, then the oil jar under the tag `oil`, at 10 at EASY, 7 at MEDIUM, 5 at
-HARD and 4 at ULTIMATE. The coin wins a tie, and placement reads hashes only, so
-a jar lies on a dead-end cell whose coin hash fails and whose oil hash passes:
-95% of the rate, 9.5%, 6.7%, 4.8% and 3.8% of dead-end cells. Items are read
-off a built board and built into none. The difficulty enters the jar's
-percentage and no tag, and no pinned digest depends on either. On seed
-`0000-0000`, tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`:
+its percentage or its count. The rows claim cells in list order from the
+dead-end cells the earlier rows left, so two items never share a cell. A
+percentage row takes each such cell whose `u32(H(tag, x, y, cell)) mod 100`
+falls below it. A count row takes that many such cells of lowest
+`u32(H(tag, x, y, cell))`, the lower cell winning a tie, or all of them when
+fewer remain. Two kinds ship, in this order: the coin, at 5 under the tag
+`coin`, then the oil jar under the tag `oil`, counted: every tree board holds
+2 jars at EASY and 1 at MEDIUM, HARD and ULTIMATE. The coin keeps its cell, so
+a jar ranks only the board's **free cells**, its dead-end cells without a
+coin; a coin on a jar's first-ranked cell moves the jar to the next rank and
+never removes it. A board with fewer free cells than its count holds a jar on
+each and a board with none holds none; no tree board in the sample below has
+none. Placement reads hashes only. Items are read off a built board and built
+into none. The difficulty enters the jar's count and no tag, and no pinned
+digest depends on either. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
+`v ∈ [0, 19]`:
 
-| Level | Dead-end cells per tree board | Coin | Jar |
-|---|---|---|---|
-| EASY | 4.58 | 6.0% | 9.2% |
-| MEDIUM | 6.36 | 5.0% | 6.9% |
-| HARD | 6.57 | 4.9% | 4.6% |
-| ULTIMATE | 6.59 | 4.8% | 3.9% |
+| Level | Dead-end cells per tree board | Coin | Jars per tree board | Short of the count |
+|---|---|---|---|---|
+| EASY | 4.58 | 6.0% | 1.98 | 9 of 388 |
+| MEDIUM | 6.36 | 5.0% | 1.00 | 0 of 888 |
+| HARD | 6.57 | 4.9% | 1.00 | 0 of 1551 |
+| ULTIMATE | 6.59 | 4.8% | 1.00 | 0 of 2378 |
 
 **Wind.** A route board's **way on** is every cell on the tree path from one of
 its in-cells to the out-door's cell `o`, `o` included, with the in-cells and
