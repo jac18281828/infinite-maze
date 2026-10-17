@@ -1,5 +1,7 @@
 # Infinite Maze
 
+![Infinite Maze: the explorer in a torchlit tomb room at MEDIUM](docs/play.png)
+
 An endless tomb maze, climbed by torchlight. One seed code grows a plane of
 tombs without end in any direction. The difficulty picked on the title sets a
 tomb's size: EASY 2x2 boards, MEDIUM 3x3, HARD 4x4 and ULTIMATE 6x4, the
@@ -13,6 +15,8 @@ only the boards inside a tomb differ.
 `docs/SPEC.md` is the full specification.
 
 ## Play
+
+![Infinite Maze: the title screen](docs/title.png)
 
 Open `infinite-maze.html` in a browser. It is one file with no network access
 and no assets.
