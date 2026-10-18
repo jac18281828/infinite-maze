@@ -136,8 +136,8 @@ export function tombCount(s) {
 
 /**
  * A run from `start` = { board, cell }, standing on the door's cell. `collected`
- * is the game's set of "x,y,cell" keys of the coins already taken on this seed
- * and level; the sim adds a key on each pickup and touches no storage.
+ * is the run's set of the coin ids (`coinId`) taken so far, empty for a new
+ * run; the sim adds an id on each pickup and touches no storage.
  */
 export function createSim(world, start, carry = null, { collected = new Set() } = {}) {
   const s = {

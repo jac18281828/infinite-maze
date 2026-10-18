@@ -411,8 +411,8 @@ export function createRenderer(canvas, world) {
 
   /**
    * Draws the items of the in-view boards resting on the floor: the dead-end
-   * and row coins that `collected` (a set of coin ids) lacks and the jars that
-   * `jars` (the run's taken set) lacks.
+   * and row coins that `collected` (the run's set of coin ids) lacks and the
+   * jars that `jars` (the run's taken set) lacks.
    */
   function drawItems(lit, sx, sy, collected, jars) {
     for (const [bx, by] of lit) {

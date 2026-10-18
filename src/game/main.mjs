@@ -116,7 +116,7 @@ function slotState(g) {
   const { start, solved } = g.sim, key = coinKey(g.code, g.world.difficulty);
   return {
     id: g.slotId, save: g.serial, level: g.world.difficulty, start: `${start.u},${start.v}`, solved,
-    wallet: g.wallet, coins: collectedSet(g), tombs: tombSet(g), record: g.paid.get(key) || 0,
+    wallet: g.wallet, tombs: tombSet(g), record: g.paid.get(key) || 0,
   };
 }
 
@@ -535,7 +535,7 @@ function driveTouch(copied, fake) {
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
 
   difficultyLeg(g, { need, click, press, offEntry });
-  coinLeg(g, { need, click });
+  coinLeg(g, { need, click, press });
   twoGamesLeg(g, { need, click });
   splashLeg(g, { need, click, press });
   resumeLeg(g, { need, click });
@@ -734,16 +734,19 @@ const SLOT_BASE = {
   id: 'AAAAAAAA', save: 'K7Q2-M9XA:13', level: 'medium', start: '0,0', solved: [], wallet: 0, coins: [], tombs: [], record: 0,
 };
 
-/** Stores a slot made of SLOT_BASE and `over`. */
+/** Stores a slot made of SLOT_BASE and `over`, as text: a step's `coins` list reaches storage as an older build writes it. */
 function putSlot(over = {}) {
-  store(SLOT_KEY, serializeSlot({ ...SLOT_BASE, ...over }));
+  store(SLOT_KEY, JSON.stringify({ ...SLOT_BASE, ...over }));
 }
 
 /** The stored slot, or null. */
 const slotNow = () => parseSlot(load(SLOT_KEY));
 
-/** True when the game's economy is clean: no slot, wallet 0, empty sets and no record. */
-const isClean = (g) => g.slotId === null && g.wallet === 0 && [...g.coins.values(), ...g.tombs.values()].every((set) => set.size === 0)
+/** The `coins` list of the stored slot as written, which an older build reads. */
+const storedCoins = () => JSON.parse(load(SLOT_KEY)).coins;
+
+/** True when the game's economy is clean: no slot, wallet 0, no paid tombs and no record. */
+const isClean = (g) => g.slotId === null && g.wallet === 0 && [...g.tombs.values()].every((set) => set.size === 0)
   && [...g.paid.values()].every((n) => n === 0);
 
 /** Sends game `h` a keydown, as the window would a key; `h` is a game made by `reload`, with no listener of its own. */
@@ -786,9 +789,7 @@ function reload() {
 
 /** The run takes the slot with a coin the board lacks, through the game's own coin path. */
 function earnFake(g) {
-  const id = '9,9,9';
-  collectedSet(g).add(id);
-  collectCoin(g, [id]);
+  collectCoin(g, ['9,9,9']);
 }
 
 /**
@@ -960,8 +961,15 @@ function gamepadLeg(g, { need, click, fake }) {
   cleanState(g);
 }
 
+/** Walks game `h` toward `home` until its feet lie more than 12 px from `spot`, so a walk to the spot runs ticks. */
+function walkAway(h, home, spot) {
+  const auto = createAutopilot(h.world, [home]);
+  const far = () => { const [fx, fy] = feet(h.sim); return Math.abs(fx - spot[0]) > 12 || Math.abs(fy - spot[1]) > 12; };
+  runTicks(h, auto, far, 600, 'the walk leaves the coin');
+}
+
 /** The coin steps of the touch leg, from the title with no run open. */
-function coinLeg(g, { need, click }) {
+function coinLeg(g, { need, click, press }) {
   const rates = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
   const onLevel = (d) => {
     setDifficulty(g, d);
@@ -977,18 +985,48 @@ function coinLeg(g, { need, click }) {
   need(g.screen === 'play' && g.earned === 0, 'BEGIN starts a run with no coins earned');
   const coin = firstCoin(g.world);
   need(coin !== null, 'tomb (0, 0) holds a coin at MEDIUM');
-  const id = coinId(coin.bd, coin.cell, coin.i);
   walkToItem(g, coin);
   need(g.sim.events.includes('coin') && g.wallet === 1, 'touching the first coin adds one to the wallet');
   need(g.earned === 1, 'a coin counts as one earned this run');
   const slot = slotNow();
   need(slot !== null && slot.wallet === 1, 'a touched coin stores the wallet');
-  need(slot.level === 'medium' && slot.coins.length === 1 && slot.coins[0] === id, 'a touched coin stores the collected set in the slot');
+  need(slot.level === 'medium' && storedCoins().length === 0, 'a touched coin stores the wallet and no coin in the slot');
   need(realUntouched(), 'the self-test leaves the real wallet untouched');
 
-  // Step 2: each level in a clean state. A tomb solved first pays its rate; a replay pays nothing;
+  // Step 2: the coin stays gone for the rest of its run, and lies back on every new run. Each walk to it
+  // starts with the feet out of reach, so the walk runs ticks, and the coins it takes are the pickups the
+  // sim reports, which no merge of the wallet changes.
+  const origin = g.world.startPoint(), home = { x: origin.board.x, y: origin.board.y, cell: origin.cell };
+  const spot = itemPoint(coin);
+  const takes = (h) => {
+    let n = 0;
+    walkAway(h, home, spot);
+    walkToItem(h, coin, () => { for (const ev of h.sim.events) if (ev === 'coin') n++; });
+    return n;
+  };
+  const run = g.sim;
+  press('KeyP', 'p');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === run && takes(g) === 0, 'a coin taken stays gone through P and P');
+  press('KeyP', 'p');
+  press('KeyQ', 'q');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim === run && takes(g) === 0, 'a coin taken stays gone through Q, the title and RESUME');
+  endRun(g);
+  draw(g, 0);
+  click('over', 'continue');
+  need(g.screen === 'play' && g.sim !== run && takes(g) === 1, 'the end screen CONTINUE lays the coin back');
+  const later = reload();
+  resume(later);
+  keyTo(later, 'KeyY', 'y');
+  need(later.screen === 'play' && takes(later) === 1, 'RESUME after a reload lays the coin back');
+  openTitle(g);
+  click('title', 'begin');
+  need(g.screen === 'play' && takes(g) === 1, 'BEGIN lays the coin back');
+
+  // Step 3: each level in a clean state. A tomb solved first pays its rate; a replay pays nothing;
   // a tomb under the record pays, since the record plays no part in it. Each wallet check nets out the
-  // floor coins the walk took.
+  // floor coins the walk took, which lie back with every new run.
   for (const d of DIFFICULTIES) {
     const label = difficultyLabel(d), key = coinKey(SELFTEST_CODE, d);
     cleanState(g);
@@ -1006,7 +1044,7 @@ function coinLeg(g, { need, click }) {
     need(g.wallet - under.coins === rates[d] && slotNow().record === 50, `a new tomb pays under the record at ${label}`);
   }
 
-  // Step 3: the coins earned this run equal the wallet's gain since BEGIN.
+  // Step 4: the coins earned this run equal the wallet's gain since BEGIN.
   cleanState(g);
   onLevel('medium');
   openTitle(g);
@@ -1028,7 +1066,6 @@ function coinLeg(g, { need, click }) {
 
 /** The two-games step of the touch leg, from the title with no run open. */
 function twoGamesLeg(g, { need, click }) {
-  const key = coinKey(SELFTEST_CODE, 'medium');
   // Two games that restored one slot share its id. A second game, made before the first one's write,
   // earns after it; the merge keeps both.
   cleanState(g);
@@ -1039,14 +1076,10 @@ function twoGamesLeg(g, { need, click }) {
   restore(g, readSlot());
   const other = reload();
   restore(other, readSlot());
-  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell, coin.i);
-  walkToItem(g, coin);
-  const second = '9,9,9';
-  collectedSet(other).add(second);
-  collectCoin(other, [second]);
+  walkToItem(g, firstCoin(g.world));
+  collectCoin(other, ['9,9,9']);
   const stored = slotNow();
-  need(stored.wallet === 2 && other.wallet === 2 && other.earned === 1 && stored.coins.includes(id) && stored.coins.includes(second)
-    && other.coins.get(key).has(id), 'two games on one slot keep both coins');
+  need(stored.wallet === 2 && other.wallet === 2 && other.earned === 1, 'two games on one slot keep both coins');
 }
 
 /**
@@ -1188,12 +1221,12 @@ function resumeLeg(g, { need, click }) {
  * taking the slot on its first coin.
  */
 function slotLeg(g, { need, click, press }) {
-  const level = 'medium', key = coinKey(SELFTEST_CODE, level);
+  const level = 'medium';
   setDifficulty(g, level);
   useCode(g, SELFTEST_CODE);
   const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell, coin.i), first = g.world.startPoint().board;
   const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
-  // The slot holds 300 coins, a collected coin and TOMB 20, at tomb (0, 0)'s first board.
+  // The slot holds 300 coins, a coin listed as an older build writes it and TOMB 20, at tomb (0, 0)'s first board.
   const hold = () => putSlot({ save: serial, solved: fakeSolved(20), wallet: 300, coins: [id], tombs: ['0,0'], record: 20 });
   const toTitle = () => {
     hold();
@@ -1216,7 +1249,7 @@ function slotLeg(g, { need, click, press }) {
     need(g.screen === 'title' && g.slotId === SLOT_BASE.id && g.wallet === 300, 'a played run leaves the title with its wallet');
   };
   const restored = () => g.screen === 'play' && g.slotId === SLOT_BASE.id && g.wallet === 300 && tombCount(g.sim) === 20
-    && g.coins.get(key).has(id);
+    && g.sim.collected.size === 0;
 
   // A typed serial on another seed starts clean.
   toTitle();
@@ -1256,15 +1289,15 @@ function slotLeg(g, { need, click, press }) {
   press('KeyL', 'l');
   need(asks(), 'CONTINUE? ignores a key that answers neither way');
 
-  // Y and Enter restore the slot's coins and TOMB 20.
+  // Y and Enter restore the slot's wallet and TOMB 20, with every coin back on the floor.
   press('KeyY', 'y');
-  need(restored(), 'Y restores the slot\'s coins and TOMB 20');
+  need(restored(), 'Y restores the slot\'s wallet and TOMB 20');
   walkToItem(g, coin);
-  need(g.wallet === 300 && g.earned === 0, 'a coin the slot lists pays nothing again');
+  need(g.wallet === 301 && g.earned === 1, 'a coin the slot lists lies back and pays one');
   endRun(g);
   draw(g, 0);
   click('over', 'continue');
-  need(g.screen === 'play' && g.slotId === SLOT_BASE.id && g.wallet === 300 && slotNow().id === SLOT_BASE.id, 'Continue keeps the run\'s slot and coins');
+  need(g.screen === 'play' && g.slotId === SLOT_BASE.id && g.wallet === 301 && slotNow().id === SLOT_BASE.id, 'Continue keeps the run\'s slot and coins');
   toTitle();
   typeIn(serial);
   press('Enter', 'Enter');
@@ -1332,8 +1365,9 @@ function slotLeg(g, { need, click, press }) {
   walkToItem(g, coin);
   need(g.wallet === 1, 'after N, BEGIN on the slot\'s seed earns from 0');
   const taken = slotNow();
-  need(taken.id === g.slotId && taken.id !== SLOT_BASE.id && taken.wallet === 1 && taken.coins.length === 1 && taken.solved.length === 0
+  need(taken.id === g.slotId && taken.id !== SLOT_BASE.id && taken.wallet === 1 && storedCoins().length === 0 && taken.solved.length === 0
     && taken.tombs.length === 0 && taken.record === 0, 'a new run\'s first coin takes the slot');
+
 }
 
 /**
@@ -1377,8 +1411,8 @@ function legacyLeg(g, { need, click, press }) {
   need(slot.wallet === 57 && slot.solved.length === 20 && slot.level === level, 'a legacy save keeps its wallet, TOMB and difficulty');
   need(load(SLOT_KEY) === null && !gone(), 'a legacy slot waits for Y before it is stored');
   press('KeyY', 'y');
-  need(g.screen === 'play' && g.wallet === 57 && tombCount(g.sim) === 20 && g.difficulty === level && g.coins.size === 1
-    && [...g.coins.get(key)].join() === id && [...g.tombs.get(key)].join() === '0,0' && g.paid.get(key) === 20, 'a legacy save restores only its own seed\'s sets');
+  need(g.screen === 'play' && g.wallet === 57 && tombCount(g.sim) === 20 && g.difficulty === level && g.tombs.size === 1
+    && [...g.tombs.get(key)].join() === '0,0' && g.paid.get(key) === 20, 'a legacy save restores only its own seed\'s sets');
   need(slotNow() !== null && slotNow().id === g.slotId && slotNow().wallet === 57 && gone(), 'a legacy save adopts the device wallet once on Y');
 
   // A new run's first coin takes the slot, and the legacy wallet is gone with it.
@@ -1449,36 +1483,26 @@ function writeBest(code, difficulty, solved) {
   if (all[key] === undefined || solved > all[key]) { all[key] = solved; store(KEY_BEST, JSON.stringify(all)); }
 }
 
-/** The Set that `map` keeps for the game's seed and level, made when absent. */
-function setOf(g, map) {
+/** The paid tombs of the game's seed and level, made when absent, which the tomb pay fills. */
+function tombSet(g) {
   const key = coinKey(g.code, g.world.difficulty);
-  let set = map.get(key);
+  let set = g.tombs.get(key);
   if (!set) {
     set = new Set();
-    map.set(key, set);
+    g.tombs.set(key, set);
   }
   return set;
 }
 
-/** The collected set of the game's seed and level, which a run's sim fills as it takes coins. */
-function collectedSet(g) {
-  return setOf(g, g.coins);
-}
-
-/** The solved tombs of the game's seed and level, which the tomb pay fills. */
-function tombSet(g) {
-  return setOf(g, g.tombs);
-}
-
-/** The economy of a clean state: no slot, wallet 0 and empty sets. A new Map keeps a left-open run's sets. */
+/** The economy of a clean state: no slot, wallet 0, no paid tombs. A new Map keeps a left-open run's sets. */
 function cleanState(g) {
-  Object.assign(g, { slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map() });
+  Object.assign(g, { slotId: null, serial: '', wallet: 0, tombs: new Map(), paid: new Map() });
 }
 
 /** The fields of the game's economy, which a run left open takes with it. */
 function economyOf(g) {
-  const { slotId, serial, wallet, coins, tombs, paid } = g;
-  return { slotId, serial, wallet, coins, tombs, paid };
+  const { slotId, serial, wallet, tombs, paid } = g;
+  return { slotId, serial, wallet, tombs, paid };
 }
 
 /** The entries a set gained after it held `before`; a Set iterates in insertion order. */
@@ -1486,9 +1510,9 @@ function appended(set, before) {
   return set.size > before ? [...set].slice(before) : [];
 }
 
-/** A tick took the coins `ids`: pays those storage did not list and counts them earned. */
+/** A tick took the coins `ids`: pays one each and counts them earned. */
 function collectCoin(g, ids) {
-  g.earned += commit(g, coinPay(coinKey(g.code, g.world.difficulty), ids));
+  g.earned += commit(g, coinPay(ids));
 }
 
 /**
@@ -1512,8 +1536,8 @@ function createGame() {
     get screen() { return screen; },
     set screen(next) { screen = next; visit++; },
     get visit() { return visit; },
-    // A game starts clean: wallet 0, no collected coins, solved tombs or record, and no slot.
-    slotId: null, serial: '', wallet: 0, coins: new Map(), tombs: new Map(), paid: new Map(),
+    // A game starts clean: wallet 0, no paid tombs or record, and no slot.
+    slotId: null, serial: '', wallet: 0, tombs: new Map(), paid: new Map(),
     // CONTINUE? on the title: { slot }, the stored slot a Y restores; null when not asked.
     confirm: null,
     // The coins the wallet has gained since the run began; Continue carries them.
@@ -1549,7 +1573,7 @@ function useCode(g, code) {
   g.code = code;
   g.world = createWorld(code, { difficulty: g.difficulty });
   g.renderer = createRenderer(view, g.world);
-  g.preview = createSim(g.world, g.world.startPoint(), null, { collected: collectedSet(g) });
+  g.preview = createSim(g.world, g.world.startPoint());
   titleCam(g);
 }
 
@@ -1575,14 +1599,17 @@ function play(g) {
   g.jump = false;
 }
 
-/** Starts a new run at save position p, or at tomb (0, 0)'s first entry when p is null. */
+/**
+ * Starts a new run at save position p, or at tomb (0, 0)'s first entry when p
+ * is null. The new sim takes no coin or jar: every one lies back.
+ */
 function begin(g, p = null, carry = null) {
   let start = g.world.startPoint();
   if (p !== null) {
     const { x, y } = boardOfPos(p);
     start = g.world.resumePoint(x, y);
   }
-  g.sim = createSim(g.world, start, carry, { collected: collectedSet(g) });
+  g.sim = createSim(g.world, start, carry);
   if (!carry) g.earned = 0;
   g.open = null;
   play(g);
@@ -1610,7 +1637,7 @@ function restore(g, slot) {
   keepSetting(g, slot.level);
   if (at.code !== g.code || g.world.difficulty !== slot.level) useCode(g, at.code);
   Object.assign(g, {
-    slotId: slot.id, serial: slot.save, wallet: slot.wallet, coins: new Map([[key, new Set(slot.coins)]]),
+    slotId: slot.id, serial: slot.save, wallet: slot.wallet,
     tombs: new Map([[key, new Set(slot.tombs)]]), paid: new Map([[key, slot.record]]),
   });
   const [u, v] = slot.start.split(',').map(Number);
@@ -1847,7 +1874,7 @@ function tick(g) {
   const s = g.sim;
   const was = tombCount(s), took = s.collected.size;
   stepSim(g);
-  // Read before any commit, which merges stored ids into s.collected.
+  // Only the step adds to these sets; a commit leaves both alone.
   const taken = appended(s.collected, took), solvedNow = appended(s.solved, was);
   handleEvents(g);
   if (taken.length) collectCoin(g, taken);
