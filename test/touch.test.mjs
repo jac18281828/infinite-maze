@@ -531,7 +531,7 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty, pause-key, coin, slot, CONTINUE?, legacy-save, splash, oil, pad-side, fire and gamepad rule broken.
+// zoom guard dropped and each difficulty, pause-key, coin, slot, continue-count, CONTINUE?, legacy-save, splash, oil, pad-side, fire and gamepad rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -596,7 +596,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['      if (!tombs.has(id)) {', '      if (true) {', /^fail: touch a replay of a solved tomb pays nothing at EASY/],
       ['      if (!tombs.has(id)) {', '      if (!tombs.has(id) && count > record) {', /^fail: touch a new tomb pays under the record at EASY/],
       ['const MAP_FRAME = Object.values(DIFFICULTY).map(mapCells)\n  .reduce((m, c) => ({ cols: Math.max(m.cols, c.cols), rows: Math.max(m.rows, c.rows) }));', 'const MAP_FRAME = mapCells(DIFFICULTY.hard);', /^fail: touch the pause map centres in ULTIMATE's 72x28-cell frame/],
-      ['begin(g, s.lastEntry, runCarry(s));', 'g.earned = 0; begin(g, s.lastEntry, runCarry(s));', /^fail: touch CONTINUE keeps the coins earned this run/],
+      ['begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', 'g.earned = 0; begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', /^fail: touch CONTINUE keeps the coins earned this run/],
       ['    g.pausedAt = null;\n    writeSave(g, hereCode(g));', '    writeSave(g, hereCode(g));', /^fail: touch a second pause restarts the pause map clock/],
       ["} else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", "} else if (e.code === 'KeyQ' || e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", /^fail: touch P on the end screen leaves it showing/],
       ['      draw(g, now / 1000);', "      draw(g, now / 1000); throw new Error('frame');", /^fail: .*frame/],
@@ -615,10 +615,13 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['tap(SPACE.code, SPACE.key);', "tap('KeyX', 'x');", /^fail: touch FIRE jumps/],
       ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch the title ignores an auto-repeated H/],
       ['for (const o of gamepad.poll()) {', 'for (const o of []) {', /^fail: touch gamepad d-pad left holds Left/],
-      ['  if (same) {\n    state.wallet = Math.max(state.wallet, was.wallet);\n    for (const id of was.tombs) state.tombs.add(id);\n    state.record = Math.max(state.record, was.record);\n  }\n', '', /^fail: touch two games on one slot keep both coins/],
-      ['beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v } });', 'beginSaved(g, at.p, null);', /^fail: touch RESUME after a reload continues at TOMB/],
+      ['  if (same) {\n    state.wallet = Math.max(state.wallet, was.wallet);\n    for (const id of was.tombs) state.tombs.add(id);\n    state.record = Math.max(state.record, was.record);\n    state.continues = Math.max(state.continues, was.continues);\n  }\n', '', /^fail: touch two games on one slot keep both coins/],
+      ['beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues });', 'beginSaved(g, at.p, null);', /^fail: touch RESUME after a reload continues at TOMB/],
       // A new run takes every coin back: the mutation hands the outgoing sim's taken set to the sim it creates.
       ['g.sim = createSim(g.world, start, carry);', 'g.sim = createSim(g.world, start, carry, { collected: g.sim ? g.sim.collected : undefined });', /^fail: touch the end screen CONTINUE lays the coin back/],
+      // Only a death raises the continue count: Continue carries it unchanged, and the slot's write from a dead run drops its plus one.
+      ['begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', 'begin(g, s.lastEntry, runCarry(s));', /^fail: touch a death and CONTINUE raise the continue count to 1/],
+      ["continues: state === 'over' ? continues + 1 : continues", 'continues', /^fail: touch a second death stores 2 in the slot while the end screen shows 1/],
       ['if (kept && kept.code === save.code && kept.p === save.p) {', 'if (kept) {', /^fail: touch another save code starts at TOMB 0/],
       ['const memory = SELFTEST ? new Map() : null;', 'const memory = null;', /^fail: touch the self-test leaves the real wallet untouched/],
     ]) {

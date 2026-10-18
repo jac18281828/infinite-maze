@@ -76,10 +76,10 @@ and no assets.
   first time a run solves it: 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at
   ULTIMATE. A replay pays nothing. The wallet shows under `TOMB n`; the end
   screen shows the coins earned this run. The game keeps the wallet in one save
-  slot beside the last serial, its difficulty, its run, the tombs paid and the
-  payout record, in `localStorage`, and merges every write with the slot, so
-  two tabs on one slot lose nothing. Every new run starts with no coins at
-  `TOMB 0`. Nothing buys with coins yet.
+  slot beside the last serial, its difficulty, its run, the tombs paid, the
+  payout record and the continue count, in `localStorage`, and merges every
+  write with the slot, so two tabs on one slot lose nothing. Every new run
+  starts with no coins at `TOMB 0`. Nothing buys with coins yet.
 - In some dead ends, more often the longer ones, the dust drifts back toward the
   way in while the explorer stands inside, a hint that the branch leads
   nowhere.
@@ -90,7 +90,9 @@ and no assets.
   through its exit door, if it lies on the way on from the run's start tomb:
   that tomb, the tomb its exit leads to, and so on. A tomb off that way on
   never counts. Each tomb counts once. Continue, and Y at CONTINUE?, keep the
-  count and the start tomb.
+  count and the start tomb. Each Continue after the torch dies adds one to the
+  run's continue count, shown on the pause and end screens and at CONTINUE?;
+  pausing and resuming never add, and BEGIN starts at 0.
 
 The title screen shows the seed code. **Enter** begins at tomb (0, 0)'s
 first entry. **R** rolls a new world. **T** takes a typed seed or save code.

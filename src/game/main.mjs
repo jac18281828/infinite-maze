@@ -111,19 +111,23 @@ function readSave() {
 
 const slotIo = { load, store, remove: unstore };
 
-/** The slot state of the game's run, its serial being `g.serial`. */
+/**
+ * The slot state of the game's run, its serial being `g.serial`. A dead run
+ * writes the count any continuation of it carries: its own plus one.
+ */
 function slotState(g) {
-  const { start, solved } = g.sim, key = coinKey(g.code, g.world.difficulty);
+  const { start, solved, continues, state } = g.sim, key = coinKey(g.code, g.world.difficulty);
   return {
     id: g.slotId, save: g.serial, level: g.world.difficulty, start: `${start.u},${start.v}`, solved,
-    wallet: g.wallet, tombs: tombSet(g), record: g.paid.get(key) || 0,
+    wallet: g.wallet, tombs: tombSet(g), record: g.paid.get(key) || 0, continues: state === 'over' ? continues + 1 : continues,
   };
 }
 
 /**
  * Writes the run to the slot through `commitSlot` and returns the coins earned.
  * The first write of a clean run takes the slot: a new id and the run's last
- * entry as its serial.
+ * entry as its serial. A live run adopts the merged continue count; a dead
+ * run keeps its own, so every write on one death stores one rise.
  */
 function commit(g, pay) {
   if (g.slotId === null) {
@@ -134,6 +138,7 @@ function commit(g, pay) {
   const earned = commitSlot(slotIo, state, pay);
   g.wallet = state.wallet;
   g.paid.set(coinKey(g.code, g.world.difficulty), state.record);
+  if (g.sim.state !== 'over') g.sim.continues = state.continues;
   return earned;
 }
 
@@ -729,7 +734,10 @@ function walkOut(g, n, doomAt = 0) {
   return { ticks, coins };
 }
 
-/** A slot of the self-test's MEDIUM seed with nothing earned; `putSlot` fills in what a step changes. */
+/**
+ * A slot of the self-test's MEDIUM seed with nothing earned; `putSlot` fills in what a step changes. It
+ * holds no `continues`, as a slot from before the count does.
+ */
 const SLOT_BASE = {
   id: 'AAAAAAAA', save: 'K7Q2-M9XA:13', level: 'medium', start: '0,0', solved: [], wallet: 0, coins: [], tombs: [], record: 0,
 };
@@ -1217,8 +1225,8 @@ function resumeLeg(g, { need, click }) {
 
 /**
  * The save slot steps of the touch leg, from the title with no run open: a
- * clean start, CONTINUE? over the slot from RESUME and TYPE CODE, and a new run
- * taking the slot on its first coin.
+ * clean start, CONTINUE? over the slot from RESUME and TYPE CODE, a new run
+ * taking the slot on its first coin and the continue count.
  */
 function slotLeg(g, { need, click, press }) {
   const level = 'medium';
@@ -1226,7 +1234,8 @@ function slotLeg(g, { need, click, press }) {
   useCode(g, SELFTEST_CODE);
   const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell, coin.i), first = g.world.startPoint().board;
   const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
-  // The slot holds 300 coins, a coin listed as an older build writes it and TOMB 20, at tomb (0, 0)'s first board.
+  // The slot holds 300 coins, a coin listed as an older build writes it, TOMB 20 and no continue count,
+  // at tomb (0, 0)'s first board.
   const hold = () => putSlot({ save: serial, solved: fakeSolved(20), wallet: 300, coins: [id], tombs: ['0,0'], record: 20 });
   const toTitle = () => {
     hold();
@@ -1368,6 +1377,45 @@ function slotLeg(g, { need, click, press }) {
   need(taken.id === g.slotId && taken.id !== SLOT_BASE.id && taken.wallet === 1 && storedCoins().length === 0 && taken.solved.length === 0
     && taken.tombs.length === 0 && taken.record === 0, 'a new run\'s first coin takes the slot');
 
+  // The continue count: only a death raises it. Each death ends the torch through the sim, so the tick's own
+  // endRun writes; a bare endRun leaves the run live and stores no rise.
+  const die = () => {
+    g.sim.burn = 0;
+    g.sim.ember = TICK / 2;
+    runTicks(g, () => [0, 0, false], () => g.screen === 'over', 10, 'the torch dies');
+  };
+  toTitle();
+  tap('title', 'resume');
+  press('KeyY', 'y');
+  need(restored() && g.sim.continues === 0, 'Y restores a slot without a count at 0 continues');
+  die();
+  draw(g, 0);
+  click('over', 'continue');
+  need(g.screen === 'play' && g.sim.continues === 1, 'a death and CONTINUE raise the continue count to 1');
+  press('KeyP', 'p');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim.continues === 1, 'P and P hold the continue count at 1');
+  press('KeyP', 'p');
+  press('KeyQ', 'q');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim.continues === 1, 'Q, the title and RESUME hold the continue count at 1');
+  die();
+  need(g.sim.continues === 1 && slotNow().continues === 2, 'a second death stores 2 in the slot while the end screen shows 1');
+  draw(g, 0);
+  press('KeyQ', 'q');
+  need(g.screen === 'title', 'Q leaves the end screen for the title');
+  tap('title', 'resume');
+  press('KeyY', 'y');
+  need(restored() && g.sim.continues === 2, 'Q, RESUME and Y restore the stored count of 2');
+  draw(g, 0);
+  click('play', 'pause');
+  const after = reload();
+  resume(after);
+  keyTo(after, 'KeyY', 'y');
+  need(after.screen === 'play' && after.sim.continues === 2 && slotNow().continues === 2, 'a PAUSE, a reload, RESUME and Y hold the count at 2');
+  openTitle(g);
+  click('title', 'begin');
+  need(g.screen === 'play' && g.sim.continues === 0, 'BEGIN starts the continue count at 0');
 }
 
 /**
@@ -1615,9 +1663,9 @@ function begin(g, p = null, carry = null) {
   play(g);
 }
 
-/** Begins at save position p; with a `run`, its solved tombs and start tomb carry over. */
+/** Begins at save position p; with a `run`, its solved tombs, start tomb and continue count carry over. */
 function beginSaved(g, p, run) {
-  begin(g, p, run && { time: 0, solved: run.solved, start: run.start, lastEntry: p });
+  begin(g, p, run && { time: 0, solved: run.solved, start: run.start, lastEntry: p, continues: run.continues });
   g.earned = 0;
 }
 
@@ -1629,8 +1677,9 @@ function beginClean(g) {
 
 /**
  * Restores `slot` into memory and begins its run at the serial's position, at
- * the slot's difficulty, with its start tomb, solved tombs and wallet. The
- * setting follows. The write that follows adopts a legacy slot.
+ * the slot's difficulty, with its start tomb, solved tombs, wallet and
+ * continue count. The setting follows. The write that follows adopts a legacy
+ * slot.
  */
 function restore(g, slot) {
   const at = decodeSave(slot.save), key = coinKey(at.code, slot.level);
@@ -1641,7 +1690,7 @@ function restore(g, slot) {
     tombs: new Map([[key, new Set(slot.tombs)]]), paid: new Map([[key, slot.record]]),
   });
   const [u, v] = slot.start.split(',').map(Number);
-  beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v } });
+  beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues });
   commit(g, () => 0);
 }
 
@@ -1782,7 +1831,7 @@ function overKey(g, e) {
   const s = g.sim;
   if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) {
     g.copied = '';
-    begin(g, s.lastEntry, runCarry(s));
+    begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });
   } else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }
   else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, entryCode(g), (status) => { g.copied = status; }, visitLive(g));
@@ -1905,11 +1954,11 @@ function drawTitle(g, t) {
   r.panel(62, 50, 196, g.confirm || saved || g.typing !== null ? 100 : 88);
   if (!g.confirm) r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 58, 'i', { align: 'center' });
   if (g.confirm) {
-    const { save, level, solved, wallet } = g.confirm.slot;
+    const { save, level, solved, wallet, continues } = g.confirm.slot;
     r.text('CONTINUE?', VIEW_W / 2, 58, 'i', { align: 'center' });
     r.text(save, 72, 74, 'c');
     r.text(`${difficultyLabel(level)}  TOMB ${solved.length}`, 72, 86, 'b');
-    r.text(`COINS  ${wallet}`, 72, 98, 'b');
+    r.text(`COINS  ${wallet}  CONTINUES  ${continues}`, 72, 98, 'b');
     r.text('Y YES  N NO', 72, 114, 'p');
   } else if (g.typing !== null) {
     // No label, so TYPED_MAX characters and the cursor fit the panel.
@@ -1982,6 +2031,7 @@ function drawPause(g, t = 0) {
   const r = g.renderer;
   r.panel(50, 2, 220, 176);
   r.text('PAUSED', VIEW_W / 2, 9, 'm', { align: 'center', scale: 2 });
+  r.text(`CONTINUES ${g.sim.continues}`, 53, 16, 'a');
   r.text(`TOMB ${g.sim.solved.size}`, 267, 16, 'a', { align: 'right' });
   if (g.pausedAt === null) g.pausedAt = t;
   const o = mapOrigin(g.world);
@@ -2000,9 +2050,10 @@ function drawOver(g) {
   r.text(`TOMBS CLIMBED  ${s.solved.size}`, VIEW_W / 2, 68, 'c', { align: 'center' });
   r.text(`TIME  ${clock(s.time)}`, VIEW_W / 2, 80, 'c', { align: 'center' });
   r.text(`COINS  ${g.earned}`, VIEW_W / 2, 92, 'c', { align: 'center' });
-  r.text(saveLabel(g.copied), VIEW_W / 2, 108, 'a', { align: 'center' });
-  r.text(`${entryCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 120, 'i', { align: 'center' });
-  r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 138, 'b', { align: 'center' });
+  r.text(`CONTINUES  ${s.continues}`, VIEW_W / 2, 103, 'c', { align: 'center' });
+  r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
+  r.text(`${entryCode(g)}  ${difficultyLabel(g.world.difficulty)}`, VIEW_W / 2, 130, 'i', { align: 'center' });
+  r.text('ENTER CONTINUE  Q TITLE  C COPY', VIEW_W / 2, 146, 'b', { align: 'center' });
 }
 
 // The panel spans y 40..135; its rules leave y 43..132 for rows at least 4 px apart.

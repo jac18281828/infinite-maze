@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { worlds, sample } from './sample.mjs';
 import { DX, DY } from '../src/world/board.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot } from '../src/world/floor.mjs';
+import { textWidth } from '../src/game/touch.mjs';
 import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
@@ -34,17 +35,20 @@ test('the solved tombs read absent or malformed storage as empty and drop bad id
 const SAVE = 'K7Q2-M9XA:13', KEY = 'K7Q2M9XA:MEDIUM';
 /** A slot as parsed, with `over` changing fields; it holds no `coins`, which the slot writes empty and reads past. */
 const slotOf = (over = {}) => ({
-  id: 'AAAAAAAA', save: SAVE, level: 'medium', start: '0,0', solved: [], wallet: 0, tombs: [], record: 0, ...over,
+  id: 'AAAAAAAA', save: SAVE, level: 'medium', start: '0,0', solved: [], wallet: 0, tombs: [], record: 0, continues: 0, ...over,
 });
-/** A slot as 83c2cf7 wrote it: `coins` listed. */
-const olderSlot = (over = {}) => ({ ...slotOf(), coins: [], ...over });
+/** A slot as 83c2cf7 wrote it: `coins` listed, `continues` absent. */
+const olderSlot = (over = {}) => {
+  const { continues, ...rest } = slotOf();
+  return { ...rest, coins: [], ...over };
+};
 
 test('the slot key, and a slot reads absent or malformed text as null and round-trips', () => {
   assert.equal(SLOT_KEY, 'infinite-maze.plane.slot');
-  const full = slotOf({ solved: ['0,0', '-2,19'], wallet: 143, tombs: ['0,0'], record: 20 });
+  const full = slotOf({ solved: ['0,0', '-2,19'], wallet: 143, tombs: ['0,0'], record: 20, continues: 3 });
   assert.deepEqual(parseSlot(serializeSlot(full)), full);
   assert.deepEqual(JSON.parse(serializeSlot(full)), { ...full, coins: [] }, 'the field order of the written slot');
-  assert.deepEqual(Object.keys(JSON.parse(serializeSlot(full))), ['id', 'save', 'level', 'start', 'solved', 'wallet', 'coins', 'tombs', 'record']);
+  assert.deepEqual(Object.keys(JSON.parse(serializeSlot(full))), ['id', 'save', 'level', 'start', 'solved', 'wallet', 'coins', 'tombs', 'record', 'continues']);
   const sets = { ...full, solved: new Set(full.solved), tombs: new Set(full.tombs) };
   assert.equal(serializeSlot(sets), serializeSlot(full), 'Sets and arrays serialize alike');
   // The stored coin list is read past, whatever it holds or whether it is there.
@@ -204,7 +208,7 @@ test('legacySlot reads the seven old keys of a MEDIUM save into a slot with a fr
   assert.match(slot.id, /^[0-9A-HJKMNP-TV-Z]{8}$/);
   assert.notEqual(legacySlot(old()).id, slot.id, 'each read mints a fresh id');
   assert.deepEqual({ ...slot, id: 'AAAAAAAA' }, slotOf({
-    start: '3,-2', solved: ['3,-2', '3,-1'], wallet: 57, tombs: ['3,-2', '3,-1'], record: 12,
+    start: '3,-2', solved: ['3,-2', '3,-1'], wallet: 57, tombs: ['3,-2', '3,-1'], record: 12, continues: 0,
   }));
   assert.ok(!('coins' in slot), 'the old coin key is not read');
   assert.deepEqual(parseSlot(serializeSlot(slot)), slot);
@@ -259,6 +263,7 @@ test('a run with another id takes the slot whole, and its pay sees an empty stor
   assert.deepEqual(slot.tombs, []);
   assert.deepEqual(slot.solved, []);
   assert.equal(slot.record, 0);
+  assert.equal(slot.continues, 0);
   assert.equal(slot.save, '0000-0000:1');
 });
 
@@ -504,6 +509,65 @@ test('the slot keeps no coin: an older slot with coins listed parses, a slot wit
   assert.equal(sim.collected.size, 0);
   assert.equal(sim.jars.size, 0);
   assert.notEqual(createSim(worlds.medium, worlds.medium.startPoint()).collected, sim.collected, 'each sim owns its set');
+});
+
+test('the continue count reads 0 when absent, round-trips, fails the slot unless a count, merges by maximum and rides runCarry', () => {
+  const { continues, ...without } = slotOf({ wallet: 4 });
+  assert.equal(parseSlot(JSON.stringify(without)).continues, 0, 'absent reads 0');
+  for (const n of [0, 1, 7, 12345]) assert.equal(parseSlot(serializeSlot(slotOf({ continues: n }))).continues, n);
+  for (const bad of [-1, 1.5, '3', null, [3], true]) assert.equal(parseSlot(JSON.stringify(slotOf({ continues: bad }))), null, JSON.stringify(bad));
+  // Another build's write drops the field, which reads 0 and keeps its other fields.
+  assert.deepEqual(parseSlot(JSON.stringify(olderSlot({ wallet: 4 }))), slotOf({ wallet: 4 }));
+  // The same-id merge stores the larger count, from either side; another id's write stores its own.
+  const io = hold(memoryIo(), { continues: 3 });
+  const lower = readRun(io), higher = readRun(io);
+  lower.continues = 1;
+  higher.continues = 5;
+  commitSlot(io, lower, () => 0);
+  assert.equal(stored(io).continues, 3, 'a lower count leaves the stored one');
+  assert.equal(lower.continues, 3, 'the writer takes the merged maximum');
+  commitSlot(io, higher, () => 0);
+  assert.equal(stored(io).continues, 5);
+  const taker = fresh('BBBBBBBB', { continues: 2 });
+  commitSlot(io, taker, () => 0);
+  assert.deepEqual([stored(io).id, stored(io).continues], ['BBBBBBBB', 2], 'another id takes the slot with its own count');
+  // runCarry carries the count into the next sim, and a sim with no carry starts at 0.
+  const world = worlds.medium, start = world.startPoint();
+  const a = createSim(world, start);
+  assert.equal(a.continues, 0);
+  a.continues = 4;
+  assert.equal(runCarry(a).continues, 4);
+  assert.equal(createSim(world, start, runCarry(a)).continues, 4);
+  assert.equal(createSim(world, start, { ...runCarry(a), continues: undefined }).continues, 0);
+});
+
+test('the end, pause and CONTINUE? screens draw the continue count: CONTINUES under COINS in the end panel, on the pause header\'s row at x 53, and in the COINS row of CONTINUE?', () => {
+  const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
+  const body = (name) => {
+    const fn = src.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`));
+    assert.ok(fn, `${name} found`);
+    return fn[0];
+  };
+  // The end screen: the row sits under COINS, 11 px below it, inside the panel.
+  const over = body('drawOver');
+  const [py, ph] = over.match(/r\.panel\((\d+), (\d+), (\d+), (\d+)\)/).slice(2, 5).map(Number).filter((_, i) => i !== 1);
+  const rows = [...over.matchAll(/r\.text\(([^\n]*?), VIEW_W \/ 2, (\d+), [^\n]*/g)].map((m) => ({ text: m[1], y: +m[2], h: /scale: 2/.test(m[0]) ? 14 : 7 }));
+  const coins = rows.find((r) => r.text.startsWith('`COINS')), continues = rows.filter((r) => r.text.startsWith('`CONTINUES'));
+  assert.equal(continues.length, 1, 'one CONTINUES row');
+  assert.equal(continues[0].y - coins.y, 11, 'under COINS');
+  assert.ok(continues[0].y >= py + 3 && continues[0].y + continues[0].h <= py + ph - 3, 'inside the panel');
+  assert.match(continues[0].text, /\$\{s\.continues\}/, 'the run\'s count');
+  // The pause header: left-aligned at x 53 on TOMB n's row, ending before PAUSED at x 125 up to 99.
+  const pause = body('drawPause');
+  const tomb = pause.match(/r\.text\(`TOMB \$\{[^}]*\}`, (\d+), (\d+), /);
+  const mark = pause.match(/r\.text\(`CONTINUES \$\{g\.sim\.continues\}`, (\d+), (\d+), '[a-z0-9]'\);/);
+  assert.ok(tomb && mark, 'drawPause draws TOMB n and CONTINUES n');
+  assert.deepEqual(mark.slice(1).map(Number), [53, +tomb[2]], 'x 53 on the row of TOMB n');
+  assert.ok(53 + textWidth('CONTINUES 99') <= 124 && 53 + textWidth('CONTINUES 100') > 124, 'flush against PAUSED up to 99');
+  // CONTINUE?: the COINS row names the slot's count.
+  const title = body('drawTitle');
+  assert.match(title, /const \{ save, level, solved, wallet, continues \} = g\.confirm\.slot;/);
+  assert.match(title, /r\.text\(`COINS  \$\{wallet\}  CONTINUES  \$\{continues\}`, 72, 98, 'b'\);/);
 });
 
 // The end screen's row sits inside its panel and 4 px clear of every other row.

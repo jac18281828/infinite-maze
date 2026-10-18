@@ -103,9 +103,9 @@ function recordWalk(trail, bd, cell, d, to) {
   b.walked[to.cell] |= 1 << (d ^ 2);
 }
 
-/** Everything a Continue carries into the next run, its start tomb included. */
+/** Everything a Continue carries into the next run, its start tomb and continue count included. */
 export function runCarry(s) {
-  return { time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail, start: s.start };
+  return { time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail, start: s.start, continues: s.continues };
 }
 
 const tombKey = (bd) => `${bd.u},${bd.v}`;
@@ -151,6 +151,8 @@ export function createSim(world, start, carry = null, { collected = new Set() } 
     // The run's start tomb, which Continue carries, and its way on walked so far.
     start: carry && carry.start ? carry.start : { u: start.board.u, v: start.board.v },
     wayOn: null,
+    // The times the run went on after its torch died, which a Continue raises.
+    continues: carry && carry.continues ? carry.continues : 0,
     lastEntry: start.board.entry ? start.board.p : (carry ? carry.lastEntry : start.board.p),
     touching: false, walked: 0, climbed: 0, carry: 0,
     stats: {
