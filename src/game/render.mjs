@@ -8,7 +8,7 @@ import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } f
 import { BW, BH, DX, DY } from '../world/board.mjs';
 import { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
-import { floorItems, itemSpot } from '../world/floor.mjs';
+import { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } from '../world/floor.mjs';
 import { windDir, windBranches } from '../world/wind.mjs';
 import { coinId } from './wallet.mjs';
 import { boardMask } from './mask.mjs';
@@ -410,9 +410,9 @@ export function createRenderer(canvas, world) {
   }
 
   /**
-   * Draws the items of the in-view boards resting on the floor: the coins that
-   * `collected` (a set of coin keys) lacks and the jars that `jars` (the run's
-   * taken set) lacks.
+   * Draws the items of the in-view boards resting on the floor: the dead-end
+   * and row coins that `collected` (a set of coin ids) lacks and the jars that
+   * `jars` (the run's taken set) lacks.
    */
   function drawItems(lit, sx, sy, collected, jars) {
     for (const [bx, by] of lit) {
@@ -426,6 +426,13 @@ export function createRenderer(canvas, world) {
           // The 9 px jar fills room columns 8..16 at the west spot and 31..39 at the east.
           const east = x > nodeXY(bd, cell)[0];
           ctx.drawImage(jar, Math.round(sx(x)) - (east ? 5 : 4), Math.round(sy(y)) - 12);
+        }
+      }
+      for (const cell of coinRows(world, bd)) {
+        for (let i = 0; i < ROW_COINS; i++) {
+          if (collected && collected.has(coinId(bd, cell, i))) continue;
+          const [x, y] = rowSpot(bd, cell, i);
+          ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
         }
       }
     }

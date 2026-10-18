@@ -4,7 +4,7 @@ import { createWorld, boardOfPos, boardCoords } from '../world/world.mjs';
 import { DIFFICULTY, DIFFICULTIES } from '../world/band.mjs';
 import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
-import { floorItems, itemSpot } from '../world/floor.mjs';
+import { floorItems, itemSpot, coinRows, rowSpot } from '../world/floor.mjs';
 import {
   createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
 } from './sim.mjs';
@@ -700,7 +700,8 @@ const fakeSolved = (n) => Array.from({ length: n }, (_, i) => `0,${-1 - i}`);
 /**
  * Scores one tomb along the forward chain: starts a run on the game's world at
  * the first primary cell of tomb (0, 0)'s exit board, with `n` tombs below its
- * row already solved, and walks it out (`walkOut`). It returns the ticks run.
+ * row already solved, and walks it out (`walkOut`). It returns the ticks run
+ * and the floor coins the walk took.
  */
 function oneTombOn(g, n, doomAt = 0) {
   const X = exitBoard(g.world);
@@ -711,22 +712,21 @@ function oneTombOn(g, n, doomAt = 0) {
 /**
  * Walks the run of `n` tombs solved at tomb (0, 0)'s exit board to its chain's
  * last member, Q, the cell across the exit door, until the tomb count reaches
- * n + 1. Throws `touch ...` when the walk takes a coin or runs out of ticks. It
- * returns the ticks run. With `doomAt` > 0, the torch is an ember that goes out
- * on that tick.
+ * n + 1. Throws `touch ...` when the walk runs out of ticks. It returns the
+ * ticks run and the floor coins the walk took, which a wallet check nets out.
+ * With `doomAt` > 0, the torch is an ember that goes out on that tick.
  */
 function walkOut(g, n, doomAt = 0) {
   const chain = g.world.tombFlames(0, 0).chains[0];
   const auto = createAutopilot(g.world, [chain[chain.length - 1]]);
-  let taken = 0, ticks = 0;
+  let coins = 0, ticks = 0;
   const drive = (s) => {
     if (++ticks === doomAt) { s.burn = 0; s.ember = TICK / 2; }
     return auto(s);
   };
   runTicks(g, drive, () => tombCount(g.sim) >= n + 1, 4000,
-    `the walk out of tomb (0, 0) reaches tomb count ${n + 1}`, () => { if (g.sim.events.includes('coin')) taken++; });
-  if (taken) throw new Error('touch the walk out of tomb (0, 0) takes no coin');
-  return ticks;
+    `the walk out of tomb (0, 0) reaches tomb count ${n + 1}`, () => { for (const ev of g.sim.events) if (ev === 'coin') coins++; });
+  return { ticks, coins };
 }
 
 /** A slot of the self-test's MEDIUM seed with nothing earned; `putSlot` fills in what a step changes. */
@@ -803,24 +803,28 @@ function forgetTomb(g, d, record = 0) {
   if (g.slotId !== null) store(SLOT_KEY, serializeSlot(slotState(g)));
 }
 
-/** The first coin of tomb (0, 0), board by board in index order, as { bd, cell }, or null. */
+/**
+ * The coin a run from the start point meets first, as { bd, cell, i }: coin 0
+ * of the row east of the start cell, 17 px along the corridor, which the walk
+ * east touches before any other coin. Null when that cell holds no row.
+ */
 function firstCoin(world) {
-  for (let i = 0; i < world.size.w * world.size.h; i++) {
-    const { x, y } = boardCoords(0, 0, i, world.size);
-    const bd = world.board(x, y);
-    const item = floorItems(world, bd).find((it) => it.kind === 'coin');
-    if (item) return { bd, cell: item.cell };
-  }
-  return null;
+  const { board, cell } = world.startPoint();
+  return coinRows(world, board).includes(cell) ? { bd: board, cell, i: 0 } : null;
 }
 
+/** The floor point of `item`, a dead-end coin or jar on `cell` or coin `i` of the row east of it. */
+const itemPoint = ({ bd, cell, i }) => (i === undefined ? itemSpot(bd, cell) : rowSpot(bd, cell, i));
+
 /**
- * Walks the run to the dead-end cell of `item`, then toward its spot until the
- * feet come within 12 px of it, as the sim tests contact. `seen` runs after
- * each tick. Throws `touch ...` when the walk runs out of ticks.
+ * Walks the run to the cell of `item` (its dead-end cell, or a row's west
+ * cell), then toward its spot until the feet come within 12 px of it, as the
+ * sim tests contact. `seen` runs after each tick. Throws `touch ...` when the
+ * walk runs out of ticks.
  */
-function walkToItem(g, { bd, cell }, seen = () => {}, what = 'coin') {
-  const [sx, sy] = itemSpot(bd, cell);
+function walkToItem(g, item, seen = () => {}, what = 'coin') {
+  const { bd, cell } = item;
+  const [sx, sy] = itemPoint(item);
   const side = Math.sign(sx - nodeXY(bd, cell)[0]);
   const auto = createAutopilot(g.world, [{ x: bd.x, y: bd.y, cell }]);
   const here = (s) => s.bd.x === bd.x && s.bd.y === bd.y && s.cell === cell && s.mode === 'floor';
@@ -973,7 +977,7 @@ function coinLeg(g, { need, click }) {
   need(g.screen === 'play' && g.earned === 0, 'BEGIN starts a run with no coins earned');
   const coin = firstCoin(g.world);
   need(coin !== null, 'tomb (0, 0) holds a coin at MEDIUM');
-  const id = coinId(coin.bd, coin.cell);
+  const id = coinId(coin.bd, coin.cell, coin.i);
   walkToItem(g, coin);
   need(g.sim.events.includes('coin') && g.wallet === 1, 'touching the first coin adds one to the wallet');
   need(g.earned === 1, 'a coin counts as one earned this run');
@@ -983,22 +987,23 @@ function coinLeg(g, { need, click }) {
   need(realUntouched(), 'the self-test leaves the real wallet untouched');
 
   // Step 2: each level in a clean state. A tomb solved first pays its rate; a replay pays nothing;
-  // a tomb under the record pays, since the record plays no part in it.
+  // a tomb under the record pays, since the record plays no part in it. Each wallet check nets out the
+  // floor coins the walk took.
   for (const d of DIFFICULTIES) {
     const label = difficultyLabel(d), key = coinKey(SELFTEST_CODE, d);
     cleanState(g);
     onLevel(d);
-    oneTombOn(g, 0);
-    need(g.wallet === rates[d], `a tomb solved first on this device pays ${rates[d]} at ${label}`);
+    const first = oneTombOn(g, 0);
+    need(g.wallet - first.coins === rates[d], `a tomb solved first on this device pays ${rates[d]} at ${label}`);
     const stored = slotNow();
     need(stored.wallet === g.wallet && stored.tombs.includes('0,0') && stored.record === 1 && stored.level === d,
       `the payout stores the wallet, the solved tomb and the record at ${label}`);
-    oneTombOn(g, 0);
-    need(g.wallet === rates[d], `a replay of a solved tomb pays nothing at ${label}`);
+    const replay = oneTombOn(g, 0);
+    need(g.wallet - first.coins - replay.coins === rates[d], `a replay of a solved tomb pays nothing at ${label}`);
     cleanState(g);
     g.paid.set(key, 50);
-    oneTombOn(g, 0);
-    need(g.wallet === rates[d] && slotNow().record === 50, `a new tomb pays under the record at ${label}`);
+    const under = oneTombOn(g, 0);
+    need(g.wallet - under.coins === rates[d] && slotNow().record === 50, `a new tomb pays under the record at ${label}`);
   }
 
   // Step 3: the coins earned this run equal the wallet's gain since BEGIN.
@@ -1034,7 +1039,7 @@ function twoGamesLeg(g, { need, click }) {
   restore(g, readSlot());
   const other = reload();
   restore(other, readSlot());
-  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell);
+  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell, coin.i);
   walkToItem(g, coin);
   const second = '9,9,9';
   collectedSet(other).add(second);
@@ -1058,10 +1063,10 @@ function splashLeg(g, { need, click, press }) {
     const key = coinKey(SELFTEST_CODE, d), label = difficultyLabel(d);
     g.paid.set(key, 99);
     const was = g.wallet, earned = g.earned;
-    oneTombOn(g, 99);
+    const { coins } = oneTombOn(g, 99);
     need(g.screen === 'splash' && g.splash.k === 1 && rankName(g.splash.k) === 'TORCHBEARER' && g.splash.paid,
       `tomb 100 shows the splash with TORCHBEARER at ${label}`);
-    need(g.wallet - was === COIN_RATE[d] + 100, `tomb 100 pays ${COIN_RATE[d]} plus 100 at ${label}`);
+    need(g.wallet - was - coins === COIN_RATE[d] + 100, `tomb 100 pays ${COIN_RATE[d]} plus 100 at ${label}`);
     need(g.earned - earned === g.wallet - was, `the milestone payout counts in the coins earned at ${label}`);
     need(slotNow().wallet === g.wallet && slotNow().record === 100, `the ${label} milestone payout stores the wallet and the record`);
     // The tick's entry event stores a save too, so the splash's own write shows only over a stale one.
@@ -1088,9 +1093,9 @@ function splashLeg(g, { need, click, press }) {
 
   // Step 4: the second crossing shows the splash and pays nothing.
   const wallet = g.wallet;
-  oneTombOn(g, 99);
+  const again = oneTombOn(g, 99);
   need(g.screen === 'splash' && g.splash.k === 1 && !g.splash.paid, 'a second crossing of tomb 100 shows the splash');
-  need(g.wallet === wallet, 'a second crossing of tomb 100 pays nothing');
+  need(g.wallet - wallet === again.coins, 'a second crossing of tomb 100 pays nothing');
   draw(g, 0);
 
   // Step 5: Q leaves the run open, and P on the title returns to it in play with its torch and time.
@@ -1119,13 +1124,13 @@ function splashLeg(g, { need, click, press }) {
   need(g.screen === 'play' && g.sim === fourth, 'P after the splash HOME returns to the run');
 
   // Step 7: a run that ends on the tick that crosses tomb 100 shows the end screen, and the payout stands.
-  const ticks = oneTombOn(g, 99);
+  const { ticks } = oneTombOn(g, 99);
   const level = g.world.difficulty;
   forgetTomb(g, level, 99);
   const before = g.wallet;
-  oneTombOn(g, 99, ticks);
+  const ended = oneTombOn(g, 99, ticks);
   need(g.screen === 'over' && tombCount(g.sim) === 100, 'a run that ends on the crossing of tomb 100 shows the end screen');
-  need(g.wallet - before === COIN_RATE[level] + 100, 'the payout stands when the run ends on the crossing of tomb 100');
+  need(g.wallet - before - ended.coins === COIN_RATE[level] + 100, 'the payout stands when the run ends on the crossing of tomb 100');
   draw(g, 0);
 }
 
@@ -1172,8 +1177,8 @@ function resumeLeg(g, { need, click }) {
   keyTo(late, 'KeyY', 'y');
   need(tombCount(late.sim) === 99 && late.paid.get(key) === 100, 'RESUME after a reload continues at TOMB 99');
   const was = late.wallet;
-  walkOut(late, 99);
-  need(late.screen === 'splash' && late.splash.k === 1 && !late.splash.paid && late.wallet - was === COIN_RATE[level],
+  const { coins } = walkOut(late, 99);
+  need(late.screen === 'splash' && late.splash.k === 1 && !late.splash.paid && late.wallet - was - coins === COIN_RATE[level],
     'a resumed run crossing tomb 100 below the record pays no milestone');
 }
 
@@ -1186,7 +1191,7 @@ function slotLeg(g, { need, click, press }) {
   const level = 'medium', key = coinKey(SELFTEST_CODE, level);
   setDifficulty(g, level);
   useCode(g, SELFTEST_CODE);
-  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell), first = g.world.startPoint().board;
+  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell, coin.i), first = g.world.startPoint().board;
   const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
   // The slot holds 300 coins, a collected coin and TOMB 20, at tomb (0, 0)'s first board.
   const hold = () => putSlot({ save: serial, solved: fakeSolved(20), wallet: 300, coins: [id], tombs: ['0,0'], record: 20 });
@@ -1342,7 +1347,7 @@ function legacyLeg(g, { need, click, press }) {
   const level = 'hard', key = coinKey(SELFTEST_CODE, level), stranger = coinKey('K7Q2M9XA', level);
   setDifficulty(g, level);
   useCode(g, SELFTEST_CODE);
-  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell), first = g.world.startPoint().board;
+  const coin = firstCoin(g.world), id = coinId(coin.bd, coin.cell, coin.i), first = g.world.startPoint().board;
   const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
   // A device that played before the slot, with another seed's coins, tombs and record beside the save's.
   const oldKeys = ({ save = serial, difficulty = level, run = { save: serial, start: '0,0', solved: fakeSolved(20) } } = {}) => {

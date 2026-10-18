@@ -4,6 +4,8 @@
 import { MILESTONE } from './ranks.mjs';
 import { decodeSave } from '../world/save.mjs';
 import { tombOf } from '../world/world.mjs';
+import { NCELL } from '../world/board.mjs';
+import { ROW_COINS } from '../world/floor.mjs';
 import { DIFFICULTY } from '../world/band.mjs';
 import { formatCode, CROCKFORD } from '../world/hash.mjs';
 
@@ -41,9 +43,14 @@ export function coinKey(code, difficulty) {
   return `${code}:${difficulty.toUpperCase()}`;
 }
 
-/** The key of a coin in a collected set: its board and cell. */
-export function coinId(bd, cell) {
-  return `${bd.x},${bd.y},${cell}`;
+/**
+ * The key of a coin in a collected set: `x,y,cell` for the dead-end coin or jar
+ * on `cell`; `x,y,n` with n = NCELL + ROW_COINS * cell + i for coin `i` of the
+ * row east of `cell`. The row form starts past the last cell, so the two kinds
+ * never collide.
+ */
+export function coinId(bd, cell, i) {
+  return `${bd.x},${bd.y},${i === undefined ? cell : NCELL + ROW_COINS * cell + i}`;
 }
 
 const isCount = (n) => Number.isSafeInteger(n) && n >= 0;

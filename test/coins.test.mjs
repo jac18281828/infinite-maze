@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { worlds, sample } from './sample.mjs';
 import { DX, DY } from '../src/world/board.mjs';
-import { floorItems, itemSpot } from '../src/world/floor.mjs';
+import { floorItems, itemSpot, coinRows, rowSpot } from '../src/world/floor.mjs';
 import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
@@ -328,11 +328,13 @@ function coinsByLink(d, per) {
 /**
  * Walks a sim from the neighbour across the coin's cell's link to the cell,
  * then toward the coin's spot, and then to and fro for 60 ticks. Returns the
- * tick of each 'coin' event and the first tick the feet were within 12 px.
+ * tick of each pickup of the target coin and the first tick the feet were
+ * within 12 px of it; row coins the walk crosses are left out.
  */
 function walkPast(world, { bd, cell, link }, collected) {
   const to = world.step(bd, cell, link);
   const [sx, sy] = itemSpot(bd, cell);
+  const id = coinId(bd, cell);
   const side = Math.sign(sx - nodeXY(bd, cell)[0]);
   const sim = createSim(world, { board: to.board, cell: to.cell }, null, { collected });
   const auto = createAutopilot(world, [{ x: bd.x, y: bd.y, cell }]);
@@ -342,12 +344,13 @@ function walkPast(world, { bd, cell, link }, collected) {
     const arrived = sim.bd === bd && sim.cell === cell && sim.mode === 'floor';
     // Once the feet are on the coin, walk away and back.
     const [h, v, jump] = near >= 0 ? [back++ < 30 ? -side : side, 0, false] : arrived ? [side, 0, false] : auto(sim);
+    const had = sim.collected.has(id);
     step(sim, h, v, jump, inputEdges(ph, pv, h, v));
     ph = h;
     pv = v;
     const [fx, fy] = feet(sim);
     if (near < 0 && Math.abs(fx - sx) <= 12 && Math.abs(fy - sy) <= 12) near = i;
-    for (const ev of sim.events) if (ev === 'coin') events.push(i);
+    if (!had && sim.collected.has(id) && sim.events.includes('coin')) events.push(i);
   }
   return { events, near, sim };
 }
@@ -361,26 +364,119 @@ test('a sim walked to a coin takes it once, on the tick its feet come within 12 
     const { events, near, sim } = walkPast(world, coin, set);
     assert.ok(near >= 0, `the feet reach the coin on cell ${coin.cell} of board (${coin.bd.x},${coin.bd.y})`);
     assert.deepEqual(events, [near], 'one pickup, on the first tick within reach');
-    assert.deepEqual([...set], [coinId(coin.bd, coin.cell)]);
+    assert.deepEqual([...set].filter((k) => Number(k.split(',')[2]) < 84), [coinId(coin.bd, coin.cell)], 'the dead-end coin, once');
     assert.ok(sim.collected === set, 'the sim fills the set it was handed');
     // A key already in the set takes nothing.
     assert.deepEqual(walkPast(world, coin, new Set([coinId(coin.bd, coin.cell)])).events, []);
   }
 });
 
-test('a run that never nears a coin takes none', () => {
+/** The world pixel and id of every coin, dead-end and row, on board `bd`. */
+function coinsOn(world, bd) {
+  const out = [];
+  for (const { cell, kind } of floorItems(world, bd)) if (kind === 'coin') out.push({ id: coinId(bd, cell), spot: itemSpot(bd, cell) });
+  for (const cell of coinRows(world, bd)) for (let i = 0; i < 3; i++) out.push({ id: coinId(bd, cell, i), spot: rowSpot(bd, cell, i) });
+  return out;
+}
+
+test('a run takes a coin only on a tick its feet lie within 12 px of the coin\'s spot, and every coin it never reached stays untaken', () => {
   const world = worlds.hard;
   const sim = createSim(world, world.startPoint());
   const drive = createAutopilot(world, world.tombFlames(0, 0).chains[0]);
+  const walked = new Map(), reached = new Set();
   let ph = 0, pv = 0;
   for (let i = 0; i < 3000; i++) {
     const [h, v, jump] = drive(sim);
     step(sim, h, v, jump, inputEdges(ph, pv, h, v));
     ph = h;
     pv = v;
-    assert.ok(!sim.events.includes('coin'));
+    const [fx, fy] = feet(sim);
+    const boards = sim.mode === 'link' && sim.to.board !== sim.bd ? [sim.bd, sim.to.board] : [sim.bd];
+    const near = [];
+    for (const bd of boards) {
+      if (!walked.has(bd.p)) walked.set(bd.p, coinsOn(world, bd));
+      for (const { id, spot } of walked.get(bd.p)) if (Math.abs(fx - spot[0]) <= 12 && Math.abs(fy - spot[1]) <= 12) near.push(id);
+    }
+    const events = sim.events.filter((ev) => ev === 'coin').length;
+    const fresh = near.filter((id) => !reached.has(id));
+    assert.equal(events, fresh.length, `tick ${i}: ${events} pickups, ${fresh.length} coins newly within reach`);
+    for (const id of near) reached.add(id);
   }
-  assert.equal(sim.collected.size, 0);
+  const all = [...walked.values()].flat().map(({ id }) => id);
+  assert.ok(reached.size >= 3 && all.length > reached.size, `${reached.size} reached of ${all.length} coins on the walked boards`);
+  for (const id of all) assert.equal(sim.collected.has(id), reached.has(id), id);
+  assert.equal(sim.collected.size, reached.size);
+});
+
+test('coinId keys a dead-end coin x,y,cell and coin i of the row east of cell c x,y,84 + 3c + i, and a board\'s coin ids never collide', () => {
+  const world = worlds.medium;
+  let rows = 0, dead = 0;
+  for (const bd of sample('medium', 3)) {
+    if (!bd.links) continue;
+    const ids = [];
+    for (const { cell, kind } of floorItems(world, bd)) {
+      if (kind !== 'coin') continue;
+      assert.equal(coinId(bd, cell), `${bd.x},${bd.y},${cell}`);
+      ids.push(coinId(bd, cell));
+      dead++;
+    }
+    // A jar shares the dead-end form, on a cell the coin leaves.
+    for (const { cell, kind } of floorItems(world, bd)) if (kind === 'oil') ids.push(coinId(bd, cell));
+    for (const c of coinRows(world, bd)) {
+      for (let i = 0; i < 3; i++) {
+        assert.equal(coinId(bd, c, i), `${bd.x},${bd.y},${84 + 3 * c + i}`);
+        ids.push(coinId(bd, c, i));
+        rows++;
+      }
+    }
+    assert.equal(new Set(ids).size, ids.length, `board (${bd.x},${bd.y}) holds distinct ids`);
+  }
+  assert.ok(rows > 100 && dead > 30, `${rows} row coins, ${dead} dead-end coins`);
+  // The row form runs from 84 to 332, past every cell of a board.
+  const bd = sample('medium', 0).find((b) => b.links);
+  assert.deepEqual([coinId(bd, 0, 0), coinId(bd, 82, 2)], [`${bd.x},${bd.y},84`, `${bd.x},${bd.y},332`]);
+});
+
+/**
+ * Walks a sim over the corridor east of `cell` of `bd`, from the standing point of its west cell east
+ * (dir 1) or of its east cell west (dir -1), 30 ticks to the other standing point. Returns, per tick, the
+ * pickups the sim pushed and the coins newly within 12 px of the feet.
+ */
+function crossRow(world, bd, cell, dir, collected = new Set()) {
+  const here = dir > 0 ? { board: bd, cell } : { board: bd, cell: cell + 1 };
+  const sim = createSim(world, here, null, { collected });
+  const spots = [0, 1, 2].map((i) => rowSpot(bd, cell, i));
+  const seen = new Set(), ticks = [];
+  let ph = 0, pv = 0;
+  for (let i = 0; i < 30; i++) {
+    step(sim, dir, 0, false, inputEdges(ph, pv, dir, 0));
+    ph = dir;
+    pv = 0;
+    const [fx, fy] = feet(sim);
+    const near = spots.flatMap(([x, y], k) => (Math.abs(fx - x) <= 12 && Math.abs(fy - y) <= 12 && !seen.has(k) ? [k] : []));
+    for (const k of near) seen.add(k);
+    ticks.push({ pickups: sim.events.filter((ev) => ev === 'coin').length, near: near.length });
+  }
+  return { ticks, sim };
+}
+
+test('a sim crossing a corridor that holds a row, in either direction, takes its three coins, one event each on the tick the feet come within 12 px, and none again', () => {
+  const world = worlds.medium;
+  const seen = [0, 0];
+  for (const bd of sample('medium', 3)) {
+    for (const cell of coinRows(world, bd)) {
+      if (seen[0] >= 6 && seen[1] >= 6) break;
+      for (const dir of [1, -1]) {
+        const { ticks, sim } = crossRow(world, bd, cell, dir);
+        assert.deepEqual(ticks.map((t) => t.pickups), ticks.map((t) => t.near), `cell ${cell} of board (${bd.x},${bd.y}), direction ${dir}`);
+        assert.equal(ticks.reduce((n, t) => n + t.pickups, 0), 3, 'the three coins');
+        assert.deepEqual([...sim.collected].sort(), [0, 1, 2].map((i) => coinId(bd, cell, i)).sort());
+        assert.deepEqual(crossRow(world, bd, cell, dir, new Set(sim.collected)).ticks.map((t) => t.pickups), ticks.map(() => 0), 'none again');
+        seen[dir > 0 ? 0 : 1]++;
+      }
+    }
+  }
+  assert.ok(seen[0] >= 6 && seen[1] >= 6, `${seen} corridors crossed each way`);
 });
 
 // The end screen's row sits inside its panel and 4 px clear of every other row.

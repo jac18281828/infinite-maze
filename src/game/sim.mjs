@@ -4,7 +4,7 @@
 // door. A let-go drops from a ladder over its lower cell. Runs on a fixed
 // 60 Hz tick; no DOM.
 import { DX, DY, BW, NCELL } from '../world/board.mjs';
-import { floorItems, itemSpot } from '../world/floor.mjs';
+import { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } from '../world/floor.mjs';
 import { coinId } from './wallet.mjs';
 
 export const TICK = 1 / 60;
@@ -464,7 +464,7 @@ function flameTouch(s) {
   return false;
 }
 
-/** Takes each uncollected coin the feet touch, once, pushing 'coin' for it. */
+/** Takes each untaken coin the feet touch, dead-end or row, once, pushing 'coin' for it. */
 function coinTouch(s) {
   const [fx, fy] = feet(s);
   for (const bd of touchBoards(s)) {
@@ -476,6 +476,17 @@ function coinTouch(s) {
       if (Math.abs(fx - x) <= TOUCH && Math.abs(fy - y) <= TOUCH) {
         s.collected.add(id);
         s.events.push('coin');
+      }
+    }
+    for (const cell of coinRows(s.world, bd)) {
+      for (let i = 0; i < ROW_COINS; i++) {
+        const [x, y] = rowSpot(bd, cell, i);
+        if (Math.abs(fx - x) > TOUCH || Math.abs(fy - y) > TOUCH) continue;
+        const id = coinId(bd, cell, i);
+        if (!s.collected.has(id)) {
+          s.collected.add(id);
+          s.events.push('coin');
+        }
       }
     }
   }

@@ -5,7 +5,8 @@ import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import { createSim, step, nodeXY, torchRadius } from '../src/game/sim.mjs';
 import { RGB, idx, ARROWS, SKELETONS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
-import { floorItems, itemSpot } from '../src/world/floor.mjs';
+import { floorItems, itemSpot, coinRows, rowSpot } from '../src/world/floor.mjs';
+import { coinId } from '../src/game/wallet.mjs';
 import {
   fixtureSets, ladderPixels, sconcePixels, arrowPixels, arrowSpot, skeletonPixels, skeletonSpot, dustMotes, maskRow, SWAY_X, SWAY_Y,
 } from '../src/game/fixtures.mjs';
@@ -1017,6 +1018,37 @@ test('a scene draws the coin sprite at each uncollected coin\'s floor point, and
     assert.ok(coin >= 0 && lit > coin, `coin draw ${coin} precedes the light map draw ${lit}`);
     taken.add(`${bd.x},${bd.y},${cell}`);
     assert.ok(!drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `collected coin at cell ${cell} is gone`);
+  }
+});
+
+const rowBoard = boards.find(({ bd }) => coinRows(world, bd).length > 0);
+
+test('a scene draws the coin sprite at each untaken row coin\'s floor point, before the light map, and none for a taken one', () => {
+  assert.ok(rowBoard, 'the sample holds a board with a coin row');
+  const { bd } = rowBoard;
+  for (const cell of coinRows(world, bd)) {
+    for (let i = 0; i < 3; i++) {
+      const [wx, wy] = rowSpot(bd, cell, i);
+      const cam = { x: wx, y: wy + 18 };
+      const cx = Math.round(cam.x), cy = Math.round(cam.y);
+      // The 6x6 sprite rests on the floor point: bottom row at the point's pixel row.
+      const want = [Math.round(wx) - cx + 160 - 3, cy - Math.round(wy) + 90 - 6];
+      const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isCoin).map(([, x, y]) => [x, y]); };
+      const taken = new Set();
+      const sim = createSim(world, { board: bd, cell: bd.a }, null, { collected: taken });
+      assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `coin ${i} of the row east of cell ${cell} drawn at ${want}`);
+      assert.ok(drawn(null).some(([x, y]) => x === want[0] && y === want[1]), 'a scene with no explorer draws it too');
+      // The light map multiplies the scene last, so a coin drawn after it would stay bright in the dark.
+      renderBoard(bd, sim, cam, 0);
+      const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
+      const coin = view.draws.findIndex(isCoin);
+      assert.ok(coin >= 0 && lit > coin, `coin draw ${coin} precedes the light map draw ${lit}`);
+      // Taking its neighbours leaves it drawn; taking it removes it.
+      for (const k of [0, 1, 2]) if (k !== i) taken.add(coinId(bd, cell, k));
+      assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), 'the row\'s other coins do not hide it');
+      taken.add(coinId(bd, cell, i));
+      assert.ok(!drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `taken coin ${i} of the row east of cell ${cell} is gone`);
+    }
   }
 });
 

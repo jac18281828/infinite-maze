@@ -110,6 +110,7 @@ the same world on every engine.
 | Corner of an arrow | `H("sign", x, y, cell)` u32 bit 31 | upper left, upper right |
 | Corner of a skeleton | `H("sign", x, y, cell)` u32 bit 31 | lower left, lower right: the corner of an up or down way; a way to the right prefers the left corner and a way to the left the right, and a gallery's side gives way (§8) |
 | Floor coin | `H("coin", x, y, cell)` u32 mod 100 < 5 | on a dead-end cell (§4) |
+| Coin row | `H("row", x, y, cell)` u32 mod 100 < 4 | the corridor east of `cell` (§4) |
 | Oil jar | `H("oil", x, y, cell)` u32 | on the board's free cells (§4) of lowest value, the lower cell winning a tie: 2 at EASY, 1 at MEDIUM, HARD and ULTIMATE |
 | Wind | `H("wind", x, y, cell)` u32 mod 64 at a branch's first cell | windy when under `min(n, 18)` for a branch of `n` cells (§4) |
 
@@ -379,6 +380,38 @@ digest depends on either. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
 | MEDIUM | 6.41 | 5.0% | 1.00 | 0 of 888 |
 | HARD | 6.60 | 5.0% | 1.00 | 0 of 1551 |
 | ULTIMATE | 6.61 | 4.8% | 1.00 | 0 of 2378 |
+
+**Coin rows.** A **corridor** is a tree link east from cell `c` to cell
+`c + 1` of one board; a board seam and a door carry no tree link. A corridor
+holds a **row** when `u32(H("row", x, y, c)) mod 100 < 4`, with `(x, y)` the
+board and `c` its west cell. One rate holds at every level, and the level
+enters neither the tag nor the rate. The rule reads the link and its hash
+alone, so a row is as likely on the way on as in a dead end, and a row marks
+neither: coins point nowhere. No jar or brazier follows a row, and a row in a
+dead end tempts the player down it, a choice between coins and torch time.
+
+A row holds three coins, 6 px wide with 1 px gaps. Coin `i` of 0, 1 and 2 rests
+on the floor at board x `48·col + 48 + 7·(i − 1)`, with `col = c mod 12`, and
+at the floor y of a dead-end item: the middle of the 16 px wall opening between
+the rooms and 7 px either side. The sprites span board x `48·col + 38` to
+`48·col + 57`. That span lies between the two rooms' ladder and brazier columns
+(x 16 to 31 of each room) and beside the skeleton corners (x 32 to 38 of the
+west room, 9 to 15 of the east), so no opaque pixel of a coin meets rock, a
+ladder, a stair, a ledge, a sconce, an arrow, a skeleton of either tier, a
+brazier, a jar or a dead-end coin. A pitch of 8 reaches a skeleton. Every row
+coin lies 17 px from both standing points of its corridor, past the 12 px
+touch reach (§5), so a run starts or resumes on any cell that touches no row
+coin, and a tomb entry needs no exception. A row reads no flame, no sign and no
+level, and builds into no board or band: no pinned digest depends on it. The
+rows add about ten times the dead-end coins to a tomb. On seed `0000-0000`,
+tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`:
+
+| Level | Corridors per tree board | Rows per tomb | Row coins per tomb |
+|---|---|---|---|
+| EASY | 21.71 | 3.26 | 9.78 |
+| MEDIUM | 24.63 | 8.52 | 25.56 |
+| HARD | 27.10 | 16.86 | 50.58 |
+| ULTIMATE | 26.94 | 25.62 | 76.86 |
 
 **Wind.** A route board's **way on** is every cell on the tree path from one of
 its in-cells to the out-door's cell `o`, `o` included, with the in-cells and

@@ -4,9 +4,17 @@ import { createWorld } from '../src/world/world.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
 import { CODE, worlds, sample } from './sample.mjs';
 import { u32 } from '../src/world/hash.mjs';
-import { NCELL, DX } from '../src/world/board.mjs';
-import { FLOOR_ITEMS, OIL_COUNT, deadEnds, floorItems, itemSpot } from '../src/world/floor.mjs';
+import { BW, NCELL, DX } from '../src/world/board.mjs';
+import {
+  FLOOR_ITEMS, OIL_COUNT, ROW_PERCENT, ROW_COINS, ROW_PITCH, deadEnds, floorItems, itemSpot, coinRows, rowSpot,
+} from '../src/world/floor.mjs';
 import { nodeXY } from '../src/game/sim.mjs';
+import { boardMask, MASK_W } from '../src/game/mask.mjs';
+import {
+  fixtureSets, ladderPixels, sconcePixels, arrowPixels, arrowSpot, skeletonPixels, skeletonSpot, maskRow,
+} from '../src/game/fixtures.mjs';
+import { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../src/world/signs.mjs';
+import { idx, COIN, BRAZIER, FLAME, SCONCE_FLAME, JAR } from '../src/game/art.mjs';
 
 const popcount1 = (m) => m !== 0 && (m & (m - 1)) === 0;
 
@@ -141,4 +149,149 @@ test('itemSpot is the standing point 12 px from the cell centre, away from its o
     }
   }
   assert.ok(n > 300 && seen.size === 8, 'every link direction appears');
+});
+
+// Coin rows: three coins on the floor of a corridor, chosen by hash off the built board.
+
+/** The coin rows of `bd`, by the rule's definition: each tree link east whose `row` hash falls under 4. */
+const rowCells = (world, bd) => {
+  const want = [];
+  for (let c = 0; c < NCELL; c++) if (bd.links && bd.links[c] & 1 && u32(world.H('row', bd.x, bd.y, c)) % 100 < 4) want.push(c);
+  return want;
+};
+
+test('the constants: a row is 3 coins 7 px apart on 4 corridors in 100, and the dead-end coin list stands', () => {
+  assert.deepEqual([ROW_PERCENT, ROW_COINS, ROW_PITCH], [4, 3, 7]);
+  assert.deepEqual(FLOOR_ITEMS, [{ kind: 'coin', tag: 'coin', percent: 5 }, { kind: 'oil', tag: 'oil', count: OIL_COUNT }]);
+});
+
+test('coinRows holds each corridor whose row hash falls under 4, ascending, and rowSpot puts its coins at x 41, 48 and 55 of the opening', () => {
+  let rock = 0, rows = 0, corridors = 0;
+  for (const d of DIFFICULTIES) {
+    const world = worlds[d];
+    const again = createWorld(CODE, { difficulty: d });
+    let at = 0;
+    for (const bd of sample(d, 3)) {
+      if (!bd.links) {
+        rock++;
+        assert.deepEqual(coinRows(world, bd), [], 'a rock board has no row');
+        continue;
+      }
+      const want = rowCells(world, bd);
+      assert.deepEqual(coinRows(world, bd), want, `rows of board (${bd.x},${bd.y})`);
+      assert.equal(coinRows(world, bd), coinRows(world, bd), 'computed once per board object');
+      assert.deepEqual(coinRows(again, again.board(bd.x, bd.y)), want, 'two builds agree');
+      for (let c = 0; c < NCELL; c++) if (bd.links[c] & 1) corridors++;
+      for (const c of want) {
+        assert.ok(c % BW < BW - 1, 'no corridor crosses a board seam');
+        for (let i = 0; i < 3; i++) {
+          const [x, y] = rowSpot(bd, c, i);
+          assert.deepEqual([x, y], [bd.x * 576 + (c % 12) * 48 + 48 + 7 * (i - 1), bd.y * 336 + ((c / 12) | 0) * 48 + 8], `coin ${i} of cell ${c}`);
+          assert.equal(y, nodeXY(bd, c)[1], 'on the floor itemSpot uses');
+        }
+        rows++;
+        at++;
+      }
+    }
+    assert.ok(at > 0, `${d}: the sample holds rows`);
+  }
+  assert.ok(rock > 0 && rows > 100 && corridors > 5000, `${rock} rock boards, ${rows} rows, ${corridors} corridors`);
+});
+
+test('over tombs u -2..2 by v 0..19, a level\'s coins per tomb with rows lie 9 to 12.5 times its dead-end coins', () => {
+  for (const d of DIFFICULTIES) {
+    const world = worlds[d];
+    let dead = 0, rows = 0;
+    for (const bd of sample(d, 19)) {
+      for (const { kind } of floorItems(world, bd)) if (kind === 'coin') dead++;
+      rows += coinRows(world, bd).length;
+    }
+    const ratio = (dead + 3 * rows) / dead;
+    assert.ok(ratio >= 9 && ratio <= 12.5, `${d}: ${ratio}`);
+  }
+});
+
+/** The key of board pixel (x, y), y up. */
+const key = (x, y) => y * 1024 + x;
+/** The keys of the opaque pixels of sprite `rows` with its left column at board x and its top row at board y `top`. */
+const spriteKeys = (rows, x, top) => {
+  const out = [];
+  for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) if (idx(rows[r][c]) >= 0) out.push(key(x + c, top - r));
+  return out;
+};
+
+/** What a tree board draws or holds on its floor row, as a Set of pixel keys, and its rock, stair and ledge maps. */
+function fixturePixels(world, bd) {
+  const mask = boardMask(bd);
+  const fx = fixtureSets(bd, mask);
+  const pixels = new Set();
+  const add = (list) => { for (const k of list) pixels.add(k); };
+  for (const box of fx.ladders) add(ladderPixels(box).map(([x, y]) => key(x, y)));
+  for (const [cx, y] of fx.sconces) {
+    add(sconcePixels([cx, y]).map(([x, yy]) => key(x, yy)));
+    for (const frame of SCONCE_FLAME) add(spriteKeys(frame, cx - 4, y + 3));
+  }
+  for (const { cell, dir } of arrows(world, bd)) add(arrowPixels(arrowSpot(cell, arrowSide(world, bd, cell), dir)).map(([x, y]) => key(x, y)));
+  for (const list of [skeletons(world, bd), boostSkeletons(world, bd)]) {
+    for (const { cell, dir } of list) {
+      add(skeletonPixels(skeletonSpot(cell, skeletonSide(world, bd, cell, dir), dir)).map(([x, y]) => key(x, y)));
+    }
+  }
+  for (const cell of world.flamesAt(bd.x, bd.y)) {
+    const [x, y] = nodeXY({ x: 0, y: 0 }, cell);
+    add(spriteKeys(BRAZIER, x - 8, y + 9));
+    for (const frame of FLAME) add(spriteKeys(frame, x - 6, y + 20));
+  }
+  for (const { cell, kind } of floorItems(world, bd)) {
+    const [wx, wy] = itemSpot(bd, cell);
+    const x = wx - bd.x * 576, y = wy - bd.y * 336;
+    if (kind === 'coin') add(spriteKeys(COIN, x - 3, y + 5));
+    else add(spriteKeys(JAR, x - (wx > nodeXY(bd, cell)[0] ? 5 : 4), y + 11));
+  }
+  return { mask, fx, pixels };
+}
+
+/**
+ * The corridors of `sample(d, 3)` whose three coins at pitch `pitch` lie on rock, a stair, a ledge or a
+ * fixture, or within 12 px in x of a standing point; one string per miss.
+ */
+function rowMisses(d, pitch) {
+  const world = worlds[d];
+  const misses = [];
+  let corridors = 0;
+  for (const bd of sample(d, 3)) {
+    if (!bd.links) continue;
+    const { mask, fx, pixels } = fixturePixels(world, bd);
+    for (let c = 0; c < NCELL; c++) {
+      if (!(bd.links[c] & 1)) continue;
+      corridors++;
+      const X = (c % BW) * 48, Y = ((c / BW) | 0) * 48;
+      for (let i = 0; i < 3; i++) {
+        const x = X + 48 + pitch * (i - 1), y = Y + 8;
+        for (const nx of [X + 24, X + 72]) if (Math.abs(x - nx) <= 12) misses.push(`${d} board (${bd.x},${bd.y}) cell ${c} coin ${i} lies within 12 px of a standing point`);
+        for (let r = 0; r < COIN.length; r++) {
+          for (let k = 0; k < COIN[r].length; k++) {
+            if (idx(COIN[r][k]) < 0) continue;
+            const px = x - 3 + k, py = y + 5 - r, at = maskRow(py) * MASK_W + px;
+            const hit = mask[at] === 1 ? 'rock' : fx.stairs[at] ? 'a stair' : fx.ledge[at] ? 'a ledge' : pixels.has(key(px, py)) ? 'a fixture' : null;
+            if (hit) misses.push(`${d} board (${bd.x},${bd.y}) cell ${c} coin ${i} pixel (${k}, ${r}) lies on ${hit}`);
+          }
+        }
+      }
+    }
+  }
+  return { misses, corridors };
+}
+
+test('over every corridor of tombs u -2..2 by v 0..3, row or not, the coins\' pixels lie clear of rock, stairs, ledges and fixtures, and 12 px from both standing points', () => {
+  for (const d of DIFFICULTIES) {
+    const { misses, corridors } = rowMisses(d, ROW_PITCH);
+    assert.ok(corridors > 1500, `${d}: ${corridors} corridors`);
+    assert.deepEqual(misses.slice(0, 3), [], `${d}: ${misses.length} misses`);
+  }
+});
+
+test('a pitch of 8 puts a coin on a fixture or within reach of a standing point', () => {
+  const found = DIFFICULTIES.reduce((n, d) => n + rowMisses(d, 8).misses.length, 0);
+  assert.ok(found > 0, `${found} misses at pitch 8`);
 });

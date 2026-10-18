@@ -69,15 +69,16 @@ and no assets.
   candidate within 20 s' walk of a flame its tomb has kept is dropped, so a
   candidate can stay dark; gap flames are exempt. No stretch of a way on runs
   more than 150 s between flames, across tomb walls too.
-- Coins lie on the floors of dead ends, about one dead end in twenty. Touch one
-  to take it. Each tomb pays once on this device, the first time a run solves
-  it: 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE. A replay pays
-  nothing. The wallet shows under `TOMB n`; the end screen shows the coins
-  earned this run. The game keeps the wallet in one save slot beside the last
-  serial, its difficulty, its run, and the coins taken, the tombs paid and the
-  payout record, in `localStorage`, and merges every write with the slot, so two
-  tabs on one slot lose nothing. Every new run starts with no coins at `TOMB 0`.
-  Nothing buys with coins yet.
+- Coins lie on the floors of dead ends, about one dead end in twenty, and in
+  rows of three on about one corridor in 25, the way on included: about ten
+  times the coins of dead ends alone. Touch one to take it. Each tomb pays once
+  on this device, the first time a run solves it: 1 coin at EASY, 2 at MEDIUM, 5
+  at HARD and 10 at ULTIMATE. A replay pays nothing. The wallet shows under
+  `TOMB n`; the end screen shows the coins earned this run. The game keeps the
+  wallet in one save slot beside the last serial, its difficulty, its run, and
+  the coins taken, the tombs paid and the payout record, in `localStorage`, and
+  merges every write with the slot, so two tabs on one slot lose nothing. Every
+  new run starts with no coins at `TOMB 0`. Nothing buys with coins yet.
 - In some dead ends, more often the longer ones, the dust drifts back toward the
   way in while the explorer stands inside, a hint that the branch leads
   nowhere.

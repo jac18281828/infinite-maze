@@ -586,7 +586,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["difficulty: 'infinite-maze.plane.save.difficulty',", "difficulty: 'infinite-maze.save.difficulty',", /^fail: touch a legacy save with no stored difficulty adopts at ULTIMATE/],
       ["Object.hasOwn(COIN_RATE, d) ? d : 'ultimate'", "Object.hasOwn(COIN_RATE, d) ? d : 'hard'", /^fail: touch a legacy save with no stored difficulty adopts at ULTIMATE/],
       ['run.save === text && ', '', /^fail: touch a legacy run naming another save resumes at TOMB 0/],
-      ['const same = held !== null && held.id === state.id;', 'const same = held !== null && held.save.slice(0, 9) === state.save.slice(0, 9) && held.level === state.level;', /^fail: touch after N, BEGIN on the slot's seed earns from 0/],
+      ['const same = held !== null && held.id === state.id;', 'const same = held !== null && held.save.slice(0, 9) === state.save.slice(0, 9) && held.level === state.level;', /^fail: touch a new tomb pays under the record at HARD/],
       ['  if (slot) g.confirm = { slot };\n', '  if (slot) restore(g, slot);\n', /^fail: touch RESUME with no open run asks CONTINUE\?/],
       ['  if (o) {\n', '  if (o) {\n    g.confirm = { slot: readSlot() };\n    return;\n', /^fail: touch RESUME of an open run continues without asking/],
       ["if (e.code === 'KeyY' || e.key === 'Enter') {", "if (e.code === 'KeyY' || e.code === 'KeyN' || e.key === 'Enter') {", /^fail: touch N returns to the title with no coins/],

@@ -82,3 +82,42 @@ export function itemSpot(bd, cell) {
     bd.y * BOARD_PX_H + ((cell / BW) | 0) * CELL_PX + 8,
   ];
 }
+
+// Coin rows: three coins on the floor of the corridor east of a cell, chosen by
+// hash off a built board alone, so a row is as likely on the way on as in a dead
+// end and reads no flame, sign or level. A row builds into no board.
+export const ROW_PERCENT = 4;
+export const ROW_COINS = 3;
+export const ROW_PITCH = 7;
+
+const rowCache = new WeakMap();
+
+/**
+ * The west cells of the corridors of board `bd` that hold a row, ascending: a
+ * tree link east from the cell whose `row` hash passes ROW_PERCENT. A rock
+ * board has none. The list is computed once per board object.
+ */
+export function coinRows(world, bd) {
+  let rows = rowCache.get(bd);
+  if (rows) return rows;
+  rows = [];
+  if (bd.links) {
+    for (let cell = 0; cell < NCELL; cell++) {
+      if (bd.links[cell] & 1 && u32(world.H('row', bd.x, bd.y, cell)) % 100 < ROW_PERCENT) rows.push(cell);
+    }
+  }
+  rowCache.set(bd, rows);
+  return rows;
+}
+
+/**
+ * The floor point of coin `i` of the row east of `cell`, in world pixels: the
+ * middle of the wall opening between the two rooms, ROW_PITCH px apart. Every
+ * coin lies 17 px from both standing points of the corridor, past the reach.
+ */
+export function rowSpot(bd, cell, i) {
+  return [
+    bd.x * BOARD_PX_W + (cell % BW) * CELL_PX + CELL_PX + ROW_PITCH * (i - (ROW_COINS - 1) / 2),
+    bd.y * BOARD_PX_H + ((cell / BW) | 0) * CELL_PX + 8,
+  ];
+}
