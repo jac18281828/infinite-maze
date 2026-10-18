@@ -1416,6 +1416,19 @@ function slotLeg(g, { need, click, press }) {
   openTitle(g);
   click('title', 'begin');
   need(g.screen === 'play' && g.sim.continues === 0, 'BEGIN starts the continue count at 0');
+
+  // Two live games on one slot share the count by maximum: one dies, the other's next write adopts the rise.
+  toTitle();
+  tap('title', 'resume');
+  press('KeyY', 'y');
+  const twin = reload();
+  resume(twin);
+  keyTo(twin, 'KeyY', 'y');
+  need(restored() && twin.screen === 'play' && twin.sim.continues === 0, 'two games restore one slot at 0 continues');
+  die();
+  need(slotNow().continues === 1 && twin.sim.continues === 0, 'a death stores the raised count before the other game writes');
+  commit(twin, () => 0);
+  need(twin.sim.continues === 1 && slotNow().continues === 1, 'a live game adopts another\'s death on its next write');
 }
 
 /**

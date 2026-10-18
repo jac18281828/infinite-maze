@@ -1041,8 +1041,8 @@ test('a scene draws the coin sprite at each untaken row coin\'s floor point, bef
       // The light map multiplies the scene last, so a coin drawn after it would stay bright in the dark.
       renderBoard(bd, sim, cam, 0);
       const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
-      const coin = view.draws.findIndex(isCoin);
-      assert.ok(coin >= 0 && lit > coin, `coin draw ${coin} precedes the light map draw ${lit}`);
+      const coin = view.draws.findIndex((d) => isCoin(d) && d[1] === want[0] && d[2] === want[1]);
+      assert.ok(coin >= 0 && lit > coin, `row coin draw ${coin} precedes the light map draw ${lit}`);
       // Taking its neighbours leaves it drawn; taking it removes it.
       for (const k of [0, 1, 2]) if (k !== i) taken.add(coinId(bd, cell, k));
       assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), 'the row\'s other coins do not hide it');

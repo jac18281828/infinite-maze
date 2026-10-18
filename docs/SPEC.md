@@ -399,9 +399,9 @@ the rooms and 7 px either side. The sprites span board x `48·col + 38` to
 west room, 9 to 15 of the east), so no opaque pixel of a coin meets rock, a
 ladder, a stair, a ledge, a sconce, an arrow, a skeleton of either tier, a
 brazier, a jar or a dead-end coin. A pitch of 8 reaches a skeleton. Every row
-coin lies 17 px from both standing points of its corridor, past the 12 px
-touch reach (§5), so a run starts or resumes on any cell that touches no row
-coin, and a tomb entry needs no exception. A row reads no flame, no sign and no
+coin lies at least 17 px from both standing points of its corridor, past the
+12 px touch reach (§5), so a run starts or resumes on any cell that touches no
+row coin, and a tomb entry needs no exception. A row reads no flame, no sign and no
 level, and builds into no board or band: no pinned digest depends on it. The
 rows add about ten times the dead-end coins to a tomb. On seed `0000-0000`,
 tombs `u ∈ [−2, 2]` by `v ∈ [0, 19]`:

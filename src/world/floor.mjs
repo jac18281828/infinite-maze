@@ -113,7 +113,8 @@ export function coinRows(world, bd) {
 /**
  * The floor point of coin `i` of the row east of `cell`, in world pixels: the
  * middle of the wall opening between the two rooms, ROW_PITCH px apart. Every
- * coin lies 17 px from both standing points of the corridor, past the reach.
+ * coin lies at least 17 px from both standing points of the corridor, past the
+ * reach.
  */
 export function rowSpot(bd, cell, i) {
   return [
