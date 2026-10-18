@@ -13,6 +13,7 @@ import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
 import {
   SLOT_KEY, LEGACY_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot, legacySlot, newSlotId,
+  packRecent, unpackRecent,
 } from './wallet.mjs';
 import { createGamepad } from './gamepad.mjs';
 import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
@@ -113,13 +114,15 @@ const slotIo = { load, store, remove: unstore };
 
 /**
  * The slot state of the game's run, its serial being `g.serial`. A dead run
- * writes the count any continuation of it carries: its own plus one.
+ * writes the count any continuation of it carries: its own plus one. Every
+ * state carries the takes of the run's recent tombs.
  */
 function slotState(g) {
   const { start, solved, continues, state } = g.sim, key = coinKey(g.code, g.world.difficulty);
   return {
     id: g.slotId, save: g.serial, level: g.world.difficulty, start: `${start.u},${start.v}`, solved,
     wallet: g.wallet, tombs: tombSet(g), record: g.paid.get(key) || 0, continues: state === 'over' ? continues + 1 : continues,
+    recent: packRecent(g.world, g.sim),
   };
 }
 
@@ -719,9 +722,10 @@ function oneTombOn(g, n, doomAt = 0) {
  * last member, Q, the cell across the exit door, until the tomb count reaches
  * n + 1. Throws `touch ...` when the walk runs out of ticks. It returns the
  * ticks run and the floor coins the walk took, which a wallet check nets out.
- * With `doomAt` > 0, the torch is an ember that goes out on that tick.
+ * With `doomAt` > 0, the torch is an ember that goes out on that tick. The walk
+ * has `budget` ticks.
  */
-function walkOut(g, n, doomAt = 0) {
+function walkOut(g, n, doomAt = 0, budget = 4000) {
   const chain = g.world.tombFlames(0, 0).chains[0];
   const auto = createAutopilot(g.world, [chain[chain.length - 1]]);
   let coins = 0, ticks = 0;
@@ -729,7 +733,7 @@ function walkOut(g, n, doomAt = 0) {
     if (++ticks === doomAt) { s.burn = 0; s.ember = TICK / 2; }
     return auto(s);
   };
-  runTicks(g, drive, () => tombCount(g.sim) >= n + 1, 4000,
+  runTicks(g, drive, () => tombCount(g.sim) >= n + 1, budget,
     `the walk out of tomb (0, 0) reaches tomb count ${n + 1}`, () => { for (const ev of g.sim.events) if (ev === 'coin') coins++; });
   return { ticks, coins };
 }
@@ -850,6 +854,24 @@ function tombJars(world) {
     for (const it of floorItems(world, bd)) if (it.kind === 'oil') out.push({ bd, cell: it.cell });
   }
   return out;
+}
+
+/**
+ * The cell across the exit door of tomb (u, v), where the chain that starts at
+ * cell `from` ends; the first chain when `from` is null.
+ */
+function exitCell(world, u, v, from = null) {
+  const { chains } = world.tombFlames(u, v);
+  const chain = from ? chains.find((c) => c[0].x === from.x && c[0].y === from.y && c[0].cell === from.cell) : chains[0];
+  return chain[chain.length - 1];
+}
+
+/** Walks game `h`, torch full, to the floor of cell `goal` { x, y, cell }. Throws `touch ...` when the walk runs out of ticks. */
+function walkToCell(h, goal, what) {
+  h.sim.burn = BURN_S;
+  const auto = createAutopilot(h.world, [goal]);
+  const at = () => { const s = h.sim; return s.bd.x === goal.x && s.bd.y === goal.y && s.cell === goal.cell && s.mode === 'floor'; };
+  runTicks(h, auto, at, 30000, what);
 }
 
 /** The oil steps of the touch leg, from the title with no run open. */
@@ -1001,9 +1023,9 @@ function coinLeg(g, { need, click, press }) {
   need(slot.level === 'medium' && storedCoins().length === 0, 'a touched coin stores the wallet and no coin in the slot');
   need(realUntouched(), 'the self-test leaves the real wallet untouched');
 
-  // Step 2: the coin stays taken through pause, the title and the end screen's CONTINUE, and lies back after
-  // a reload and on BEGIN. Each walk to it starts with the feet out of reach, so the walk runs ticks, and
-  // the coins it takes are the pickups the sim reports, which no merge of the wallet changes.
+  // Step 2: the coin stays taken through pause, the title, the end screen's CONTINUE and a reload, and lies
+  // back on BEGIN. Each walk to it starts with the feet out of reach, so the walk runs ticks, and the coins
+  // it takes are the pickups the sim reports, which no merge of the wallet changes.
   const origin = g.world.startPoint(), home = { x: origin.board.x, y: origin.board.y, cell: origin.cell };
   const spot = itemPoint(coin);
   const takes = (h) => {
@@ -1027,7 +1049,7 @@ function coinLeg(g, { need, click, press }) {
   const later = reload();
   resume(later);
   keyTo(later, 'KeyY', 'y');
-  need(later.screen === 'play' && takes(later) === 1, 'RESUME after a reload lays the coin back');
+  need(later.screen === 'play' && takes(later) === 0, 'RESUME after a reload keeps the coin taken');
   openTitle(g);
   click('title', 'begin');
   need(g.screen === 'play' && takes(g) === 1, 'BEGIN lays the coin back');
@@ -1070,6 +1092,62 @@ function coinLeg(g, { need, click, press }) {
   oneTombOn(g, 1);
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
   draw(g, 0);
+
+  // Step 5: the coins and jars of the last two tombs, from a clean state at MEDIUM. A is tomb (0, 0), B the
+  // tomb its exit leads to and C the tomb B's exit leads to. A pinned walk holds the burn at 100 s before
+  // every tick, so its contact tick shows whether the jar added its 60 s; a long walk starts with the torch
+  // full.
+  cleanState(g);
+  unstore(SLOT_KEY);
+  onLevel('medium');
+  openTitle(g);
+  click('title', 'begin');
+  const first = firstCoin(g.world), firstId = coinId(first.bd, first.cell, first.i);
+  const [jar, jar2] = tombJars(g.world);
+  const qa = exitCell(g.world, 0, 0), intoB = g.world.board(qa.x, qa.y);
+  const qb = exitCell(g.world, intoB.u, intoB.v, qa);
+  const pinned = (h, item, seen = () => {}) => {
+    let after = null;
+    h.sim.burn = 100;
+    walkToItem(h, item, () => { after = h.sim.burn; h.sim.burn = 100; seen(); }, 'oil jar');
+    return after === null ? Infinity : after - 100;
+  };
+  const resumed = () => {
+    const h = reload();
+    resume(h);
+    keyTo(h, 'KeyY', 'y');
+    return h;
+  };
+  // The coin takes the slot, then the jar; the walk out stores the serial at B.
+  g.sim.burn = BURN_S;
+  walkToItem(g, first);
+  walkToItem(g, jar, undefined, 'oil jar');
+  walkOut(g, 0, 0, 20000);
+  // The walk back into A fires no entry event, so the tomb change alone writes the slot.
+  const back = resumed();
+  let turned = false;
+  const added = pinned(back, jar, () => {
+    if (turned || back.sim.recent[0] !== '0,0') return;
+    turned = true;
+    need(slotNow().recent.map(([tomb]) => tomb).join() === back.sim.recent.join(), 'a walk back into the previous tomb writes the slot\'s recent tombs');
+  });
+  need(turned && added < 0, 'a reload keeps the previous tomb\'s jar taken');
+  // A jar taken since the last tomb entry reaches the slot on its tick.
+  back.sim.burn = BURN_S;
+  walkToItem(back, jar2, undefined, 'oil jar');
+  const again = resumed();
+  need(pinned(again, jar2) < 0, 'a reload keeps a jar taken since the last tomb entry');
+  // Into B and on into C lays A's takes back, and the walk back to the coin takes it once and pays one.
+  walkToCell(again, qa, 'the walk into the next tomb');
+  walkToCell(again, qb, 'the walk on into the tomb after');
+  again.sim.burn = BURN_S;
+  let paid = null, wallet = again.wallet;
+  walkToItem(again, first, () => {
+    const s = again.sim;
+    if (paid === null && s.collected.has(firstId)) paid = { coins: s.events.filter((ev) => ev === 'coin').length, wallet: again.wallet - wallet };
+    wallet = again.wallet;
+  });
+  need(paid !== null && paid.coins === 1 && paid.wallet === 1, 'a coin two tombs back lies back');
 }
 
 /** The two-games step of the touch leg, from the title with no run open. */
@@ -1663,8 +1741,9 @@ function play(g) {
 /**
  * Starts a new run at save position p, or at tomb (0, 0)'s first entry when p
  * is null. The new sim keeps the coins and jars taken in the tomb it starts in
- * and the tomb before it only when the `carry` holds them, as the end screen's
- * Continue does. Any other start takes none, and every coin and jar lies back.
+ * and the tomb before it only when the `carry` holds them: the end screen's
+ * Continue carries them and a restore of the slot unpacks them. Any other
+ * start takes none, and every coin and jar lies back.
  */
 function begin(g, p = null, carry = null) {
   let start = g.world.startPoint();
@@ -1678,9 +1757,15 @@ function begin(g, p = null, carry = null) {
   play(g);
 }
 
-/** Begins at save position p; with a `run`, its solved tombs, start tomb and continue count carry over. */
+/**
+ * Begins at save position p; with a `run`, its solved tombs, start tomb,
+ * continue count and recent takes carry over.
+ */
 function beginSaved(g, p, run) {
-  begin(g, p, run && { time: 0, solved: run.solved, start: run.start, lastEntry: p, continues: run.continues });
+  begin(g, p, run && {
+    time: 0, solved: run.solved, start: run.start, lastEntry: p, continues: run.continues,
+    recent: run.recent, collected: run.collected, jars: run.jars,
+  });
   g.earned = 0;
 }
 
@@ -1692,9 +1777,9 @@ function beginClean(g) {
 
 /**
  * Restores `slot` into memory and begins its run at the serial's position, at
- * the slot's difficulty, with its start tomb, solved tombs, wallet and
- * continue count. The setting follows. The write that follows adopts a legacy
- * slot.
+ * the slot's difficulty, with its start tomb, solved tombs, wallet, continue
+ * count and the takes of its recent tombs. The setting follows. The write that
+ * follows adopts a legacy slot.
  */
 function restore(g, slot) {
   const at = decodeSave(slot.save), key = coinKey(at.code, slot.level);
@@ -1705,7 +1790,7 @@ function restore(g, slot) {
     tombs: new Map([[key, new Set(slot.tombs)]]), paid: new Map([[key, slot.record]]),
   });
   const [u, v] = slot.start.split(',').map(Number);
-  beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues });
+  beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues, ...unpackRecent(g.world, slot.recent) });
   commit(g, () => 0);
 }
 
@@ -1936,7 +2021,7 @@ function milestoneHit(was, count, seen) {
 function tick(g) {
   if (g.screen !== 'play') return;
   const s = g.sim;
-  const was = tombCount(s);
+  const was = tombCount(s), jars = s.jars.size, lead = s.recent[0];
   stepSim(g);
   // Only the step adds to the solved set; a commit leaves it alone. Each coin the step takes pushes
   // one 'coin' event, which a drop of the tomb the explorer left does not undo.
@@ -1944,6 +2029,9 @@ function tick(g) {
   handleEvents(g);
   if (coins.length) collectCoin(g, coins);
   const pay = payTombs(g, solvedNow);
+  // A jar take and a change of tomb reach the slot on their tick, once the run holds it. A step that
+  // changes tomb drops ids, so the jar count alone cannot tell a take there; the change writes anyway.
+  if (g.slotId !== null && (s.recent[0] !== lead || s.jars.size > jars)) commit(g, () => 0);
   const hit = pay && milestoneHit(was, tombCount(s), pay.seen);
   soundCues(g);
   followCam(g.cam, g.sim);

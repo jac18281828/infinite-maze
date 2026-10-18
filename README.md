@@ -53,8 +53,9 @@ and no assets.
   dead ends with no coin: two a room at EASY and one at MEDIUM, HARD and
   ULTIMATE. A room holds 4.7, 6.4, 6.6 and 6.6 dead ends by level, and 5.9%,
   5.0%, 5.0% and 4.8% of them hold a coin, measured. Touch a jar to add 60 s
-  of burn, up to a full torch, or to relight an ember. Jars return on every new
-  run.
+  of burn, up to a full torch, or to relight an ember. A jar taken in the tomb
+  you are in or the tomb before it stays taken, through a reload and Continue;
+  older tombs' jars lie back.
 - Occasional hints mark the way on at a junction with a real choice; a link
   into a one-room dead end is none. A carved arrow in the upper corner of the
   room points along the link: about 1 junction in 12 at EASY, 1 in 16 at
@@ -71,13 +72,15 @@ and no assets.
   more than 150 s between flames, across tomb walls too.
 - Coins lie on the floors of dead ends, about one dead end in twenty, and in
   rows of three on about one corridor in 25, the way on included: about ten
-  times the coins of dead ends alone. Touch one to take it. Taken coins lie
-  back on every new run, as jars do. Each tomb pays once on this device, the
-  first time a run solves it: 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at
-  ULTIMATE. A replay pays nothing. The wallet shows under `TOMB n`; the end
-  screen shows the coins earned this run. The game keeps the wallet in one save
-  slot beside the last serial, its difficulty, its run, the tombs paid, the
-  payout record and the continue count, in `localStorage`, and merges every
+  times the coins of dead ends alone. Touch one to take it. Coins and jars
+  taken in the tomb you are in and the tomb before it stay taken, through a
+  reload and Continue; older tombs' lie back, and BEGIN lays every one back.
+  Each tomb pays once on this device, the first time a run solves it: 1 coin
+  at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE. A replay pays nothing.
+  The wallet shows under `TOMB n`; the end screen shows the coins earned this
+  run. The game keeps the wallet in one save slot beside the last serial, its
+  difficulty, its run, the tombs paid, the payout record, the continue count
+  and the takes of the last two tombs, in `localStorage`, and merges every
   write with the slot, so two tabs on one slot lose nothing. Every new run
   starts with no coins at `TOMB 0`. Nothing buys with coins yet.
 - In some dead ends, more often the longer ones, the dust drifts back toward the

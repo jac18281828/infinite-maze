@@ -1,16 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { worlds, sample } from './sample.mjs';
+import { worlds, sample, CODE } from './sample.mjs';
 import { DX, DY, NCELL } from '../src/world/board.mjs';
-import { boardCoords, tombOf } from '../src/world/world.mjs';
+import { createWorld, boardCoords, tombOf } from '../src/world/world.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } from '../src/world/floor.mjs';
 import { textWidth } from '../src/game/touch.mjs';
-import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges, BURN_S } from '../src/game/sim.mjs';
+import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges, BURN_S, JAR_S, TICK } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
   SLOT_KEY, LEGACY_KEYS, COIN_RATE, TOMB_ID, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot,
-  legacySlot, parseWallet, parseIdSets, parsePaid,
+  legacySlot, parseWallet, parseIdSets, parsePaid, packRecent, unpackRecent,
 } from '../src/game/wallet.mjs';
 
 test('the level rates are 1, 2, 5 and 10', () => {
@@ -36,11 +36,11 @@ test('the solved tombs read absent or malformed storage as empty and drop bad id
 const SAVE = 'K7Q2-M9XA:13', KEY = 'K7Q2M9XA:MEDIUM';
 /** A slot as parsed, with `over` changing fields; it holds no `coins`, which the slot writes empty and reads past. */
 const slotOf = (over = {}) => ({
-  id: 'AAAAAAAA', save: SAVE, level: 'medium', start: '0,0', solved: [], wallet: 0, tombs: [], record: 0, continues: 0, ...over,
+  id: 'AAAAAAAA', save: SAVE, level: 'medium', start: '0,0', solved: [], wallet: 0, tombs: [], record: 0, continues: 0, recent: [], ...over,
 });
-/** A slot as 83c2cf7 wrote it: `coins` listed, `continues` absent. */
+/** A slot as 83c2cf7 wrote it: `coins` listed, `continues` and `recent` absent. */
 const olderSlot = (over = {}) => {
-  const { continues, ...rest } = slotOf();
+  const { continues, recent, ...rest } = slotOf();
   return { ...rest, coins: [], ...over };
 };
 
@@ -49,7 +49,7 @@ test('the slot key, and a slot reads absent or malformed text as null and round-
   const full = slotOf({ solved: ['0,0', '-2,19'], wallet: 143, tombs: ['0,0'], record: 20, continues: 3 });
   assert.deepEqual(parseSlot(serializeSlot(full)), full);
   assert.deepEqual(JSON.parse(serializeSlot(full)), { ...full, coins: [] }, 'the field order of the written slot');
-  assert.deepEqual(Object.keys(JSON.parse(serializeSlot(full))), ['id', 'save', 'level', 'start', 'solved', 'wallet', 'coins', 'tombs', 'record', 'continues']);
+  assert.deepEqual(Object.keys(JSON.parse(serializeSlot(full))), ['id', 'save', 'level', 'start', 'solved', 'wallet', 'coins', 'tombs', 'record', 'continues', 'recent']);
   const sets = { ...full, solved: new Set(full.solved), tombs: new Set(full.tombs) };
   assert.equal(serializeSlot(sets), serializeSlot(full), 'Sets and arrays serialize alike');
   // The stored coin list is read past, whatever it holds or whether it is there.
@@ -492,7 +492,7 @@ test('a sim crossing a corridor that holds a row, in either direction, takes its
   assert.ok(seen[0] >= 6 && seen[1] >= 6, `${seen} corridors crossed each way`);
 });
 
-test('the slot keeps no coin: an older slot with coins listed parses, a slot without the field parses, a write lists none, and a new sim takes none', () => {
+test('the slot lists no coin id: an older slot with coins listed parses, a slot without the field parses, a write lists none, and a new sim takes none', () => {
   const full = { solved: ['0,0'], wallet: 5, tombs: ['0,0'], record: 1 };
   assert.deepEqual(parseSlot(JSON.stringify(olderSlot(full))), slotOf(full));
   assert.deepEqual(parseSlot(JSON.stringify(olderSlot({ ...full, coins: ['0,0,21', '5,6,7'] }))), slotOf(full), 'ids listed');
@@ -591,7 +591,7 @@ test('drawOver draws a COINS row inside its panel, 11 px from the y of every oth
   for (const other of rows.filter((r) => r !== coins[0])) assert.ok(Math.abs(other.y - y) >= 11, `${other.text} at ${other.y}`);
 });
 
-/** The items of tomb `key` from floorItems and coinRows: jars, dead-end coins, then row coins. */
+/** The items of tomb `key` in the slot's bit order, from floorItems and coinRows: jars, dead-end coins, then row coins. */
 function orderOf(world, key) {
   const [u, v] = key.split(',').map(Number);
   const jars = [], coins = [], rows = [];
@@ -761,4 +761,121 @@ test('a sim built from a carry applies the recent tombs to the tomb it starts in
   const sim = createSim(world, entryOf(world, A), carry());
   const out = runCarry(sim);
   assert.deepEqual([out.recent, sorted(out.collected), sorted(out.jars)], [[A, B], [a.coin, b.coin].sort(), [a.jar, b.jar].sort()]);
+});
+
+test('a reload keeps the previous tomb\'s jar taken: the slot unpacks to a sim in the next tomb that finds it taken', () => {
+  const world = worlds.medium, { A, B, qa } = route(world);
+  const jar = orderOf(world, A).ids[0];
+  const sim = createSim(world, world.startPoint());
+  reach(sim, jar);
+  walkCells(sim, [qa]);
+  assert.deepEqual(sim.recent, [B, A]);
+  const slot = parseSlot(serializeSlot(slotOf({ recent: packRecent(world, sim) })));
+  const resume = world.resumePoint(qa.x, qa.y);
+  // Walking to the jar with the burn pinned: the contact tick burns one tick, or adds the jar's burn besides.
+  const gain = (made) => {
+    reach(made, jar, undefined, 100);
+    return made.burn - 100;
+  };
+  const back = createSim(world, resume, unpackRecent(world, slot.recent));
+  assert.deepEqual(back.recent, [B, A]);
+  assert.ok(back.jars.has(jar), 'the unpacked sim holds the jar');
+  assert.ok(Math.abs(gain(back) + TICK) < 1e-9, 'the taken jar adds nothing');
+  assert.ok(Math.abs(gain(createSim(world, resume)) - (JAR_S - TICK)) < 1e-9, 'a sim with no recent tombs takes it for its 60 s');
+});
+
+test('packRecent sets bit k of a recent tomb for item k of the slot\'s order, latest tomb first, and a slot round-trips them', () => {
+  const world = worlds.medium, { A, B } = route(world);
+  const order = { [A]: orderOf(world, A), [B]: orderOf(world, B) };
+  assert.ok(order[A].jars > 5 && order[A].ids.length > order[A].jars + 4 && order[B].ids.length > order[B].jars + 4, 'jars, dead-end coins and rows');
+  const made = (recent, taken) => {
+    const collected = new Set(), jars = new Set();
+    for (const [key, list] of Object.entries(taken)) for (const k of list) (k < order[key].jars ? jars : collected).add(order[key].ids[k]);
+    return { recent, collected, jars };
+  };
+  assert.deepEqual(packRecent(world, made([A, B], {})), [[A, ''], [B, '']], 'nothing taken writes "" for every recent tomb');
+  assert.deepEqual(packRecent(world, made([B, A], {})).map(([key]) => key), [B, A], 'latest first');
+  assert.deepEqual(packRecent(world, made([A], { [A]: [0, 5] })), [[A, '12']]);
+  // Item k alone sets digit k >> 2 to 1 << (k & 3): jars, then dead-end coins, then row coins.
+  for (const key of [A, B]) {
+    for (let k = 0; k < order[key].ids.length; k++) {
+      const [[, bits]] = packRecent(world, made([key], { [key]: [k] }));
+      assert.equal(bits, '0'.repeat(k >> 2) + (1 << (k & 3)).toString(16), `item ${k} of ${key}`);
+    }
+  }
+  // Row coins come last, by board, cell and coin; a jar's id never appears among the coins' bits.
+  const rows = order[A].ids.slice(order[A].jars).filter((id) => Number(id.split(',')[2]) >= NCELL);
+  assert.deepEqual(order[A].ids.slice(-rows.length), rows, 'row coins close the list');
+  // Round trip through the slot's text.
+  const run = made([B, A], {
+    [A]: [...order[A].ids.keys()].filter((k) => k % 3 === 0), [B]: [...order[B].ids.keys()].filter((k) => k % 3 === 1),
+  });
+  const packed = packRecent(world, run);
+  const text = serializeSlot(slotOf({ recent: packed }));
+  assert.deepEqual(JSON.parse(text).recent, packed);
+  assert.ok(packed.every(([, bits]) => /^[0-9a-f]*[1-9a-f]$/.test(bits)), 'no trailing 0 digit');
+  const back = unpackRecent(world, parseSlot(text).recent);
+  assert.deepEqual(back.recent, [B, A]);
+  assert.deepEqual([...back.collected].sort(), [...run.collected].sort());
+  assert.deepEqual([...back.jars].sort(), [...run.jars].sort());
+  // A bit past a tomb's last item reads as nothing.
+  const all = unpackRecent(world, [[A, 'f'.repeat(80)]]);
+  assert.equal(all.collected.size + all.jars.size, order[A].ids.length);
+});
+
+test('a slot reads recent absent, or malformed in any form of R8, as no recent tombs and still parses', () => {
+  const good = [['0,0', '12'], ['-1,0', '']];
+  assert.deepEqual(parseSlot(JSON.stringify(slotOf({ recent: good }))).recent, good);
+  assert.deepEqual(parseSlot(JSON.stringify(slotOf({ recent: [] }))).recent, []);
+  assert.deepEqual(parseSlot(JSON.stringify(slotOf({ recent: [['0,0', '10']] }))).recent, [['0,0', '10']], 'trailing zeros read as written');
+  const { recent, ...without } = slotOf({ wallet: 5 });
+  assert.deepEqual(parseSlot(JSON.stringify(without)), slotOf({ wallet: 5 }), 'absent');
+  // A slot as the coin-rows build writes it: coins empty, a continue count, no recent.
+  assert.deepEqual(parseSlot(JSON.stringify({ ...without, coins: [], continues: 2 })), slotOf({ wallet: 5, continues: 2 }));
+  const bad = [
+    'no', 7, null, true, {}, { '0,0': '1' },
+    [['0,0', '1'], ['1,0', '2'], ['2,0', '3']],
+    ['0,0'], [['0,0']], [['0,0', '1', '2']], [[]], [7], [[0, '1']], [['0,0', 1]], [['0,0', null]], [[['0,0'], '1']],
+    [['0;0', '1']], [['0,0,1', '1']], [['x', '1']], [['', '1']], [[' 0,0', '1']],
+    [['0,0', '1'], ['0,0', '2']],
+    [['0,0', 'G']], [['0,0', 'A']], [['0,0', '1 ']], [['0,0', '0x1']], [['0,0', '-1']],
+    [['0,0', '1'], ['1,0', 'z']],
+  ];
+  for (const recent of bad) {
+    const slot = parseSlot(JSON.stringify(slotOf({ wallet: 5, recent })));
+    assert.deepEqual(slot, slotOf({ wallet: 5 }), JSON.stringify(recent));
+  }
+});
+
+test('packRecent builds no board: a sim whose older recent tomb lies two tombs away packs after retain drops that tomb', () => {
+  const world = createWorld(CODE, { difficulty: 'medium' }), { A, C } = route(world);
+  const { ids, jars } = orderOf(world, A);
+  const [u, v] = C.split(',').map(Number);
+  // R5's third case: the sim starts in C, two tombs from the carried latest, A.
+  const sim = createSim(world, entryOf(world, C), { recent: [A], collected: new Set([ids[jars]]), jars: new Set([ids[0]]) });
+  assert.deepEqual(sim.recent, [C, A]);
+  world.retain(u, v);
+  const built = world.boardsBuilt();
+  const packed = packRecent(world, sim);
+  assert.equal(world.boardsBuilt(), built, 'packing builds nothing');
+  assert.deepEqual(packed, [[C, ''], [A, packRecent(world, { recent: [A], collected: sim.collected, jars: sim.jars })[0][1]]]);
+  assert.notEqual(packed[1][1], '', 'A\'s takes are packed');
+  assert.ok(world.boardsBuilt() > built, 'a pack with no stored list rebuilds the dropped boards');
+});
+
+test('a same-id write stores the writer\'s recent tombs, whatever the stored slot held', () => {
+  const held = [['0,0', 'f'], ['-1,0', '3']];
+  for (const writer of [[['-2,0', '1']], [], [['-1,0', '8'], ['-2,0', '']]]) {
+    const io = hold(memoryIo(), { recent: held, wallet: 4 });
+    const state = readRun(io);
+    state.recent = writer;
+    commitSlot(io, state, () => 0);
+    assert.deepEqual(parseSlot(io.m.get(SLOT_KEY)).recent, writer);
+    assert.deepEqual(JSON.parse(io.m.get(SLOT_KEY)).recent, writer);
+  }
+  // Another id takes the slot whole, with its own recent tombs.
+  const io = hold(memoryIo(), { recent: held });
+  const taker = fresh('BBBBBBBB', { recent: [['2,2', '1']] });
+  commitSlot(io, taker, () => 0);
+  assert.deepEqual(stored(io).recent, [['2,2', '1']]);
 });

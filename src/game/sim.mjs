@@ -6,7 +6,7 @@
 import { DX, DY, BW, NCELL } from '../world/board.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } from '../world/floor.mjs';
 import { tombOf } from '../world/world.mjs';
-import { coinId } from './wallet.mjs';
+import { coinId, tombItems } from './wallet.mjs';
 
 export const TICK = 1 / 60;
 export const CELL = 48;
@@ -184,8 +184,10 @@ export function createSim(world, start, carry = null, { collected = new Set() } 
     collected,
     // The oil jars taken in the recent tombs, keyed as coins are.
     jars: new Set(),
-    // The recent tombs' keys "u,v", the explorer's tomb first.
+    // The recent tombs' keys "u,v", the explorer's tomb first; `items` holds each one's item list,
+    // read once while the tomb stays recent so that a slot write builds no board.
     recent,
+    items: new Map(recent.map((key) => [key, tombItems(world, key)])),
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
@@ -261,9 +263,11 @@ function enterTomb(s, from, bd) {
   const recent = [tombKey(bd), tombKey(from)];
   for (const key of s.recent) {
     if (recent.includes(key)) continue;
+    s.items.delete(key);
     forget(s, s.collected, key);
     forget(s, s.jars, key);
   }
+  for (const key of recent) if (!s.items.has(key)) s.items.set(key, tombItems(s.world, key));
   s.recent = recent;
 }
 
