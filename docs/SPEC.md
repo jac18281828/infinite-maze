@@ -643,8 +643,10 @@ is abstract: touching a flame relights the torch to full, like a fresh
 battery.
 
 - **Burn:** a full torch burns for 300 s.
-- **Light radius:** falls linearly with the remaining burn, from 96 px when
-  full to 24 px at the last 10%. Flicker grows as the light shrinks.
+- **Light radius:** the lit area falls linearly with the remaining burn, from
+  a 96 px radius when full to 24 px at the last 10%, so the radius is the
+  square root of that blend, about 39 px at 20% burn. Flicker grows as the
+  light shrinks.
 - **Wall sconces:** every board has a lit sconce beside each door, with a
   64 px light radius. Entering a board lights the explorer and the doorway,
   and the rest of the board stays dark. Sconces give light only.

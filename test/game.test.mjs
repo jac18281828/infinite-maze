@@ -850,11 +850,18 @@ test('the explorer never leaves a cell except along a link or door, nor enters r
   assert.ok(boxes > 50000, `only ${boxes} boxes checked`);
 });
 
-test('torch radius falls from 96 px to 24 px at 10% burn, then an 8 px ember', () => {
+test('the torch lit area falls linearly with burn', () => {
+  for (const f of [1, 0.8, 0.6, 0.4, 0.2, 0.1]) {
+    const r = torchRadius(BURN_S * f);
+    assert.ok(Math.abs((r * r) / (96 * 96) - (1 / 16 + (15 / 16) * (f - 0.1) / 0.9)) < 1e-9, `area at ${f}`);
+  }
+  assert.ok(Math.abs(torchRadius(BURN_S * 0.2) - Math.sqrt(1536)) < 1e-9);
+});
+
+test('the torch radius holds 96 px full, 24 px from 10% burn, then an 8 px ember', () => {
   assert.equal(torchRadius(BURN_S), 96);
   assert.equal(torchRadius(BURN_S * 0.1), 24);
   assert.equal(torchRadius(BURN_S * 0.05), 24);
-  assert.ok(Math.abs(torchRadius(BURN_S * 0.55) - 60) < 1e-9);
   assert.equal(torchRadius(0), 8);
 });
 

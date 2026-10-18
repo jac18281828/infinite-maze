@@ -50,11 +50,12 @@ export function nodeXY(bd, cell) {
   return [bd.x * BOARD_W + (cell % BW) * CELL + 24, bd.y * BOARD_H + ((cell / BW) | 0) * CELL + 8];
 }
 
-/** Light radius: 96 px full, falling linearly to 24 px at 10% burn. */
+/** Light radius: the lit area, radius squared, falls linearly from 96 px full to 24 px at 10% burn. */
 export function torchRadius(burn) {
   if (burn <= 0) return R_EMBER;
   const f = burn / BURN_S;
-  return f <= 0.1 ? R_LOW : R_LOW + (R_FULL - R_LOW) * (f - 0.1) / 0.9;
+  if (f <= 0.1) return R_LOW;
+  return Math.sqrt(R_LOW * R_LOW + (R_FULL * R_FULL - R_LOW * R_LOW) * (f - 0.1) / 0.9);
 }
 
 /** Press and release edges, as KEY bits, between held inputs (h0, v0) and (h1, v1). */
