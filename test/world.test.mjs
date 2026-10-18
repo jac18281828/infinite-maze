@@ -499,6 +499,31 @@ test('a split stretch gets its flame at the first path cell at or past half the 
   assert.equal(checked, 1);
 });
 
+// Without the throw, a midpoint on its stretch's own end cell splits nothing and the loop never ends and grows
+// its chain without bound, so the call runs in a child with a short timeout and a heap cap.
+test('a gap limit too small to split a stretch throws an Error naming the limit instead of looping', () => {
+  const world = new URL('../src/world/world.mjs', import.meta.url).href;
+  const script = `
+    import { createWorld } from ${JSON.stringify(world)};
+    const w = createWorld('00000001', { difficulty: 'easy', gapLimitMs: 3000 });
+    try {
+      for (let v = 0; v <= 3; v++) for (let u = -1; u <= 1; u++) w.tombFlames(u, v);
+      console.log(JSON.stringify({ threw: false }));
+    } catch (e) {
+      console.log(JSON.stringify({ threw: true, error: e instanceof Error, message: e.message }));
+    }`;
+  const run = spawnSync(process.execPath, ['--max-old-space-size=256', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20000 });
+  assert.equal(run.error, undefined, `the call returns within 20 s: ${run.error && run.error.message}`);
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.threw, true);
+  assert.equal(out.error, true);
+  assert.match(out.message, /gapLimitMs 3000 is too small/);
+  // Control: the same seed at ULTIMATE splits every stretch of these tombs at a 3.88 s limit.
+  const ok = createWorld('00000001', { gapLimitMs: 3880 });
+  for (let v = 0; v <= 3; v++) for (let u = -1; u <= 1; u++) ok.tombFlames(u, v);
+});
+
 /** The growTree tree of attempt k of board (x, y) in tomb (0, 0), with its primary pair. */
 function attempt(x, y, k) {
   const bd = createWorld('00000000').board(x, y);

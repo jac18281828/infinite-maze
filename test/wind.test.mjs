@@ -167,7 +167,7 @@ test('from every cell of a windy branch the wind leads out along links and doors
   }
 });
 
-test('windy branches are at most 1/5 of branches and 1/4 of cells, and the share falls from dead-end rooms to long stubs to short ones', (t) => {
+test('windy branches are at most 1/5 of branches and 22% of cells, and the share falls from dead-end rooms to long stubs to short ones', (t) => {
   // cls holds [windy, all] for the branches that reach a dead-end board, the
   // others of 8+ cells and those under 8.
   for (const level of DIFFICULTIES) {
@@ -183,7 +183,7 @@ test('windy branches are at most 1/5 of branches and 1/4 of cells, and the share
       }
     }
     t.diagnostic(`${level}: ${all} branches, ${windy} windy (${(100 * windy / all).toFixed(1)}%), ${cells} cells, ${windyCells} windy (${(100 * windyCells / cells).toFixed(1)}%), classes ${JSON.stringify(cls)}`);
-    assert.ok(windy * 5 <= all && windyCells * 4 <= cells);
+    assert.ok(windy * 5 <= all && windyCells * 100 <= 22 * cells);
     const share = cls.map(([w, n]) => w / n);
     assert.ok(share[0] > share[1] && share[1] > share[2], `${level}: shares ${share}`);
   }

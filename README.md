@@ -64,10 +64,11 @@ and no assets.
   150 s and 140 s; a flame or a jar that lifts the torch to half or above hides
   it. A junction holds at most one pointer, and all are always on.
 - No board burns for being a tomb entry. Braziers stand where chance and the
-  gap rule put them: a route's first board burns one time in three, and a
-  route or dead-end flame stands more than 20 s' walk from every other flame
-  its tomb keeps (gap flames are exempt). No stretch of a way on runs more
-  than 150 s between flames, across tomb walls too.
+  gap rule put them: a route's first board is a flame candidate one time in
+  three, and every third board after it is a candidate for certain. A
+  candidate within 20 s' walk of a flame its tomb has kept is dropped, so a
+  candidate can stay dark; gap flames are exempt. No stretch of a way on runs
+  more than 150 s between flames, across tomb walls too.
 - Coins lie on the floors of dead ends, about one dead end in twenty. Touch one
   to take it. Each tomb pays once on this device, the first time a run solves
   it: 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE. A replay pays

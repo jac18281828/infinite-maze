@@ -196,7 +196,8 @@ export function cellPath(links, from, to) {
  * `difficulty` ('easy', 'medium', 'hard' or 'ultimate') sets the tomb size
  * and the ROOMS row, and enters no hash. `gapLimitMs` bounds the walking
  * time between consecutive chain members, half of it at an in-door start or
- * at the way's end; spec section 3 sets 150 s.
+ * at the way's end; spec section 3 sets 150 s. A limit under about 4 s can
+ * leave a stretch unsplittable and throws.
  * `carveCells` sets the cells each board keeps, the level's count by
  * default; NCELL keeps them all. `faults` builds a broken world for the
  * harness's tests: `ignoreWalls` (see createFlow) or `dropTributary` (see
@@ -294,20 +295,28 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
    * until none remains; returns the inserted flames and the final stretch
    * times. A stretch is the walk between consecutive chain members. Its limit
    * is the gap limit, less half of it for each end that is an in-door start
-   * or the way's end, so a tomb crossing never exceeds the gap limit. A
-   * midpoint past the exit door takes the exit door's cell.
+   * or the way's end (an `end` member), so a tomb crossing never exceeds the
+   * gap limit. A midpoint past the exit door takes the exit door's cell. A
+   * midpoint on its own stretch's end cell splits nothing, so it throws: the
+   * gap limit is under about 4 s.
    */
   function splitGaps(span, chain, inDoor) {
     const half = gapLimitMs / 2;
     const added = [], gaps = [];
     for (let i = 0; i + 1 < chain.length;) {
-      const limit = gapLimitMs - (inDoor && i === 0 ? half : 0) - (i + 2 === chain.length ? half : 0);
+      const limit = gapLimitMs - (inDoor && chain[i].kind === 'start' ? half : 0) - (chain[i + 1].kind === 'end' ? half : 0);
       const path = spanPath(span, chain[i], chain[i + 1]);
       if (path.total > limit) {
         let { pos, cell } = path.cells[midpointIndex(path.cum, path.total)];
         if (span[pos].down) { pos--; cell = span[pos].outCell; }
         const bd = span[pos].bd;
         const f = { x: bd.x, y: bd.y, cell, kind: 'gap', pos };
+        // A flame on a neighbouring member's cell leaves a stretch as long as before. Only an in-door
+        // start gains: its straight stretch to Q has limit 0, and the flame gives it half the gap limit.
+        const on = (m) => m.x === f.x && m.y === f.y && m.cell === f.cell;
+        if (on(chain[i + 1]) || (on(chain[i]) && !(inDoor && chain[i].kind === 'start'))) {
+          throw new Error(`gapLimitMs ${gapLimitMs} is too small: a ${path.total} ms stretch splits at its own end cell`);
+        }
         added.push(f);
         chain.splice(i + 1, 0, f);
       } else {
@@ -395,6 +404,7 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
       });
       const first = span[0], last = span[span.length - 1];
       chain.unshift({ x: first.bd.x, y: first.bd.y, cell: first.inCell, kind: 'start', pos: 0 });
+      // Only a world broken by `dropTributary` has a way on that stops short of X, with no Q.
       if (last.down) chain.push({ x: last.bd.x, y: last.bd.y, cell: last.inCell, kind: 'end', pos: span.length - 1 });
       const split = splitGaps(span, chain, !t.source);
       added.push(...split.added);
