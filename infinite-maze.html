@@ -4177,6 +4177,12 @@ const VIEW_H = 180;
 const LIGHT_W = VIEW_W / 4;
 const LIGHT_H = VIEW_H / 4;
 const FLAME_R = 80;
+// Brazier flicker amplitudes; the light reach below is built from them.
+const BRAZIER_FLICKER_A = 0.08;
+const BRAZIER_FLICKER_B = 0.04;
+// The farthest any light reaches: a brazier's radius at its peak flicker, the
+// larger of the brazier's and the sconce's.
+const LIGHT_REACH = FLAME_R * (1 + BRAZIER_FLICKER_A + BRAZIER_FLICKER_B);
 const AMBIENT = [12, 9, 22];
 // The warm step reaches this many boards past the view, one more than the art
 // window, and does this many units of world work a frame (spec section 9).
@@ -4545,7 +4551,7 @@ function createRenderer(canvas, world) {
     for (let y = bgy; y < VIEW_H; y += 128) for (let x = bgx; x < VIEW_W; x += 128) ctx.drawImage(background, x, y);
   }
 
-  /** Draws every board in view, rock outside the band tree; returns the lit boards. */
+  /** Draws every board in view, rock outside the band tree; returns the in-view boards that hold art. */
   function drawBoards(cx, cy, sx, sy) {
     const bx0 = Math.floor((cx - VIEW_W / 2) / BOARD_W), bx1 = Math.floor((cx + VIEW_W / 2) / BOARD_W);
     const by0 = Math.floor((cy - VIEW_H / 2) / BOARD_H), by1 = Math.floor((cy + VIEW_H / 2) / BOARD_H);
@@ -4561,7 +4567,7 @@ function createRenderer(canvas, world) {
   }
 
   /**
-   * Draws the items of the lit boards resting on the floor: the coins that
+   * Draws the items of the in-view boards resting on the floor: the coins that
    * `collected` (a set of coin keys) lacks and the jars that `jars` (the run's
    * taken set) lacks.
    */
@@ -4582,7 +4588,7 @@ function createRenderer(canvas, world) {
     }
   }
 
-  /** Draws the tier-2 skeletons of the lit boards at opacity `alpha`; they sit under the light map like the walls. */
+  /** Draws the tier-2 skeletons of the in-view boards at opacity `alpha`; they sit under the light map like the walls. */
   function drawBoost(lit, sx, sy, alpha) {
     if (alpha <= 0) return;
     ctx.globalAlpha = alpha;
@@ -4594,20 +4600,40 @@ function createRenderer(canvas, world) {
     ctx.globalAlpha = 1;
   }
 
-  function drawFlames(lit, sx, sy, t) {
+  /**
+   * Draws the sconce and brazier sprites of the in-view boards `lit`, and adds
+   * the light of every sconce and brazier whose light reaches the view: those
+   * of the boards within LIGHT_REACH of it, in view or not, so a light never
+   * pops at a board seam. A light farther than its radius adds nothing and
+   * every light centre lies inside its board, so the reach is exact.
+   */
+  function drawFlames(lit, cx, cy, sx, sy, t) {
     for (const [bx, by, art] of lit) {
       const wx = bx * BOARD_W, wy = by * BOARD_H;
       for (const [x, y] of art.sconces) {
         const f = sconceFlames[Math.floor(t * 8 + x) % 3];
         ctx.drawImage(f, Math.round(sx(wx + x)) - 4, Math.round(sy(wy + y + 4)));
-        const fl = 1 + 0.06 * Math.sin(t * 13 + x);
-        addLight(sx(wx + x), sy(wy + y + 2), SCONCE_R * fl, [255, 168, 92], 0.95);
       }
       for (const [x, y] of art.braziers) {
         ctx.drawImage(brazier, Math.round(sx(wx + x)) - 8, Math.round(sy(wy + y + 10)));
         ctx.drawImage(flames[Math.floor(t * 9 + x) % 4], Math.round(sx(wx + x)) - 6, Math.round(sy(wy + y + 21)));
-        const fl = 1 + 0.08 * Math.sin(t * 9 + y) + 0.04 * Math.sin(t * 23 + x);
-        addLight(sx(wx + x), sy(wy + y + 14), FLAME_R * fl, [70, 255, 225], 1.1);
+      }
+    }
+    const bx0 = Math.floor((cx - VIEW_W / 2 - LIGHT_REACH) / BOARD_W), bx1 = Math.floor((cx + VIEW_W / 2 + LIGHT_REACH) / BOARD_W);
+    const by0 = Math.floor((cy - VIEW_H / 2 - LIGHT_REACH) / BOARD_H), by1 = Math.floor((cy + VIEW_H / 2 + LIGHT_REACH) / BOARD_H);
+    for (let by = by0; by <= by1; by++) {
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const art = boardArt(bx, by);
+        if (!art) continue;
+        const wx = bx * BOARD_W, wy = by * BOARD_H;
+        for (const [x, y] of art.sconces) {
+          const fl = 1 + 0.06 * Math.sin(t * 13 + x);
+          addLight(sx(wx + x), sy(wy + y + 2), SCONCE_R * fl, [255, 168, 92], 0.95);
+        }
+        for (const [x, y] of art.braziers) {
+          const fl = 1 + BRAZIER_FLICKER_A * Math.sin(t * 9 + y) + BRAZIER_FLICKER_B * Math.sin(t * 23 + x);
+          addLight(sx(wx + x), sy(wy + y + 14), FLAME_R * fl, [70, 255, 225], 1.1);
+        }
       }
     }
   }
@@ -4665,7 +4691,7 @@ function createRenderer(canvas, world) {
     const lit = drawBoards(cx, cy, sx, sy);
     drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
     if (sim) drawBoost(lit, sx, sy, boostAlpha(sim.burn));
-    drawFlames(lit, sx, sy, t);
+    drawFlames(lit, cx, cy, sx, sy, t);
     const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
     applyLight();
     if (tip) drawDust(sim, tip, t, sx, sy, unsx, unsy);

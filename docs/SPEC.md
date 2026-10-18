@@ -695,8 +695,11 @@ entry reached, and Continue resumes there with a full torch.
 - Sprites and tiles stored as palette-indexed strings in the source.
 
 **Lighting.** A light map at quarter resolution, lit by the torch, the
-sconces and the flames, composited multiplicatively over the scene. Hieroglyph walls scroll
-behind at 0.5× for depth. Dust motes hang in the world, never with the explorer
+sconces and the flames, composited multiplicatively over the scene. A sconce or
+flame lights the view wherever its light reaches it, from a board in view or off
+it: the boards within 89.6 px of the view, the brazier's 80 px radius at its
+peak flicker of 1.12, contribute lights, and only boards in view draw sprites.
+Hieroglyph walls scroll behind at 0.5× for depth. Dust motes hang in the world, never with the explorer
 or the camera, and show in torchlight: drawn inside the torch radius and
 fading toward its edge. While the explorer's cell lies in a windy branch (§4),
 all motes drift together at 12 px/s along the first link or door of the walk
@@ -912,9 +915,11 @@ board unit builds one board. A flames or wind unit builds none of its own,
 but its walks can build up to three beyond the tomb, so a frame builds at
 most six. A board enters the warm window one board of travel before the art
 window: 6 s running, 7 s climbing. The frame then builds one board's art,
-which takes 1.4 ms at the median on the same node and chip; a board in view
-with no art builds it at once. A run's first frame, a resume, a code entry
-and the title preview's first frame build what they show at once.
+which takes 1.4 ms at the median on the same node and chip; a board in view,
+or within the 89.6 px light reach (§8), with no art builds it at once. The art
+window reaches past the light reach, so in play those boards are built ahead.
+A run's first frame, a resume, a code entry and the title preview's first frame
+build what they show at once.
 Audio starts on the first key press or touch, as browser autoplay policy
 requires. A frame that throws logs its first error to the console, shows
 `ERROR  SAVE CODE` and the run's save code over a dark strip across the middle
