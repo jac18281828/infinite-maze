@@ -5,7 +5,7 @@ import { DX, DY } from '../world/board.mjs';
 import { createSim, step, inputEdges } from './sim.mjs';
 
 export const SELFTEST_CODE = '00000000';
-export const SELFTEST_TICKS = 3600;
+export const SELFTEST_TICKS = 5100;
 
 /**
  * Link directions of the cell path from (bd, cell) to (goal, goalCell),

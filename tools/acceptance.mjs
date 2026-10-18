@@ -21,10 +21,10 @@ import { encodeSave, decodeSave } from '../src/world/save.mjs';
 export const SEED = '00000000';
 // Digests of tombs u in [-2, 2], v in [0, 19] for seed 0000-0000, per difficulty.
 export const DIGESTS = {
-  easy: 'f513618db7cc689234a6c1e9443debcf1b8bd9225b6d16cb9d4b240303001381',
-  medium: '287bb293641a9a36280a8afe05918a0f1f53de67bc511ba0ad2569d9d9830049',
-  hard: '53b8582e503a203b7d9de0eb28198ba192e75de773357b3c5d00b4f40331fc93',
-  ultimate: '91801ad980eddd92b08379f4e895fba9abc1d0c89f8f39b8fb89d31f77d83b5d',
+  easy: '6e9570afc1c0053933ac1da1c14775a43031d2e09752d243459815b4540a0ca7',
+  medium: '179bc0cbd986c65ebbc8806ec315ee127be89742e13b0501d814de6561cdf44e',
+  hard: 'b5b6680b38dfbbae329749b1707e294f0d892d325e9072438ea772ccdef175fc',
+  ultimate: 'bb37e4184512eb5850861ce145dfa5599369b07a8e8cf18b9d0fae3a5f49781c',
 };
 export const GAP_LIMIT_MS = 150000;
 // The section 3 and 4 room parameters per level, in ladder order, written
@@ -688,8 +688,6 @@ export function walkMs(world, boards, A, B) {
   return ms[goal] < 0 ? Infinity : ms[goal];
 }
 
-const sameFlame = (f, g) => f.x === g.x && f.y === g.y && f.cell === g.cell;
-
 /**
  * Boards of entry j's way on in tomb shape s: the board path from the entry
  * to X, then the board across the exit door. Empty when cut.
@@ -703,19 +701,43 @@ export function entrySpan(world, s, j) {
 }
 
 /**
- * Chain faults of entry j: wrong ends, flames off the way on or out of
- * order, and unlit chain flames.
+ * The ends of entry j's way on in tomb shape s, read from doors: P, where
+ * the explorer starts (the in-door's cell, or S's flame cell on a source
+ * tomb), and Q, the cell across the exit door on the downstream entry board.
+ */
+function wayEnds(world, s, j, span) {
+  const entry = span[0], down = span[span.length - 1];
+  return {
+    P: { x: entry.x, y: entry.y, cell: s.source ? flameCellOf(world, entry) : s.ins[j].cell },
+    Q: { x: down.x, y: down.y, cell: acrossDoor(s.exitDoor.cell, s.exit) },
+  };
+}
+
+/**
+ * Walking limit in ms of stretch i of a chain of `n` members: 150 s, less 75
+ * s for each end that is an in-door start or the way's end.
+ */
+function stretchLimit(i, n, inDoor) {
+  return GAP_LIMIT_MS - (inDoor && i === 0 ? GAP_LIMIT_MS / 2 : 0) - (i + 2 === n ? GAP_LIMIT_MS / 2 : 0);
+}
+
+/**
+ * Chain faults of entry j: a first member that is not a start at P, a last
+ * that is not an end at Q, and between them flames off the way on or out of
+ * board order, and unlit flames.
  */
 function chainErrors(world, s, j, chain, span) {
   const errors = [];
   const at = `tomb (${s.u},${s.v}) entry ${j + 1}`;
-  const entry = span[0], down = span[span.length - 1];
-  if (!chain.length || chain[0].x !== entry.x || chain[0].y !== entry.y) errors.push(`${at}: chain does not start on the entry board`);
-  const end = chain[chain.length - 1];
-  if (!end || end.x !== down.x || end.y !== down.y) errors.push(`${at}: chain does not end on the downstream entry board`);
+  const { P, Q } = wayEnds(world, s, j, span);
+  const first = chain[0], end = chain[chain.length - 1];
+  if (!first || first.kind !== 'start' || first.x !== P.x || first.y !== P.y || first.cell !== P.cell) errors.push(`${at}: chain does not start at P (${P.x},${P.y}):${P.cell}`);
+  if (!end || end.kind !== 'end' || end.x !== Q.x || end.y !== Q.y || end.cell !== Q.cell) errors.push(`${at}: chain does not end at Q (${Q.x},${Q.y}):${Q.cell}`);
+  const own = span.slice(0, -1);
   let last = 0;
-  for (const f of chain) {
-    const o = span.findIndex((bd) => bd.x === f.x && bd.y === f.y);
+  for (const f of chain.slice(1, -1)) {
+    if (f.kind === 'start' || f.kind === 'end') errors.push(`${at}: chain holds a ${f.kind} between its ends`);
+    const o = own.findIndex((bd) => bd.x === f.x && bd.y === f.y);
     if (o < 0) errors.push(`${at}: chain flame on board (${f.x},${f.y}) is off the way on`);
     else if (o < last) errors.push(`${at}: chain runs backwards at board (${f.x},${f.y})`);
     else last = o;
@@ -725,44 +747,55 @@ function chainErrors(world, s, j, chain, span) {
 }
 
 /**
- * Entries hold flames; along each entry's way on, consecutive chain flames
- * lie <= 150 s apart; every flame on a route board belongs to a chain.
+ * Each entry's chain runs from P to Q, every stretch within its limit
+ * (150 s between flames, 75 s from an in-door or to Q) and every flame on a
+ * route board belongs to a chain of its own tomb. The gaps are the
+ * flame-to-flame stretches, an S start counting as a flame, and each tomb
+ * crossing in the window whole: the upstream chain's trail from its last
+ * flame to Q, plus the downstream chain's lead from the in-door at Q to its
+ * first flame, which stays at or under 150 s.
  */
 export function checkFlames(world, win) {
   const errors = [];
   const gaps = [];
+  const trails = new Map(), leads = new Map();
+  const keyOf = (m) => `${m.x},${m.y},${m.cell}`;
   for (const [u, v] of tombsOf(win)) {
     const s = tombShape(world, u, v);
     errors.push(...s.errors);
     if (s.errors.length) continue;
     const fs = world.tombFlames(u, v);
     if (fs.chains.length !== s.entries.length) errors.push(`tomb (${u},${v}): ${fs.chains.length} chains for ${s.entries.length} entries`);
-    for (const i of s.entries) {
-      const bd = s.boards[i];
-      if (world.flamesAt(bd.x, bd.y).length === 0) errors.push(`tomb (${u},${v}): entry board (${bd.x},${bd.y}) holds no flame`);
-    }
     fs.chains.forEach((chain, j) => {
       if (j >= s.entries.length) return;
+      const at = `tomb (${u},${v}) entry ${j + 1}`;
       const span = entrySpan(world, s, j);
-      if (!span.length) { errors.push(`tomb (${u},${v}) entry ${j + 1}: no way on through doors`); return; }
+      if (!span.length) { errors.push(`${at}: no way on through doors`); return; }
       errors.push(...chainErrors(world, s, j, chain, span));
-      for (let i = 0; i + 1 < chain.length; i++) {
+      const n = chain.length, inDoor = !s.source;
+      for (let i = 0; i + 1 < n; i++) {
         const t = walkMs(world, span, chain[i], chain[i + 1]);
-        gaps.push(t);
-        if (t > GAP_LIMIT_MS) errors.push(`tomb (${u},${v}) entry ${j + 1}: flame gap ${(t / 1000).toFixed(1)} s exceeds 150 s`);
+        const limit = stretchLimit(i, n, inDoor);
+        if (t > limit) errors.push(`${at}: stretch ${(t / 1000).toFixed(1)} s exceeds ${limit / 1000} s`);
+        if (i + 2 === n) trails.set(keyOf(chain[i + 1]), [...(trails.get(keyOf(chain[i + 1])) ?? []), { t, at }]);
+        else if (inDoor && i === 0) leads.set(keyOf(chain[0]), { t, at });
+        else gaps.push(t);
       }
     });
-    // Upstream chains end on this tomb's entry boards.
-    const upstream = s.ins.map((w) => ({ i: w.i, chains: world.tombFlames(u + DX[w.dir], v + DY[w.dir]).chains }));
+    const lit = new Set(fs.chains.flatMap((c) => c.filter((f) => f.kind !== 'start' && f.kind !== 'end').map(keyOf)));
     s.boards.forEach((bd, i) => {
       if (s.routeIndex[i] < 0) return;
       for (const cell of world.flamesAt(bd.x, bd.y)) {
-        const f = { x: bd.x, y: bd.y, cell };
-        const known = fs.chains.some((c) => c.some((g) => sameFlame(f, g)))
-          || upstream.some((w) => w.i === i && w.chains.some((c) => c.some((g) => sameFlame(f, g))));
-        if (!known) errors.push(`tomb (${u},${v}): route flame (${bd.x},${bd.y}):${cell} is missing from every chain`);
+        if (!lit.has(keyOf({ x: bd.x, y: bd.y, cell }))) errors.push(`tomb (${u},${v}): route flame (${bd.x},${bd.y}):${cell} is missing from every chain`);
       }
     });
+  }
+  for (const [k, lead] of leads) {
+    for (const trail of trails.get(k) ?? []) {
+      const whole = trail.t + lead.t;
+      gaps.push(whole);
+      if (whole > GAP_LIMIT_MS) errors.push(`${lead.at}: crossing ${(whole / 1000).toFixed(1)} s from ${trail.at} exceeds 150 s`);
+    }
   }
   return { errors, gaps };
 }

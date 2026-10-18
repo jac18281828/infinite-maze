@@ -104,6 +104,7 @@ the same world on every engine.
 | Floor door between `(x,y)` and `(x,y+1)` | `H("vdoor", x, y)` u32 mod 10 + 1 | cell column `[1, 10]` |
 | Board cell maze | sfc32 of `H("board", x, y, k)`, k = reroll | — |
 | Dead-end flame candidate | `H("flame", x, y)` byte 0 < 128 makes a dead-end board a candidate, which §3 may drop | 50% |
+| Route board-0 flame candidate | `H("flame", x, y)` byte 0 < 85 makes a route's first board a candidate, which §3 may drop | 33% |
 | Flame cell | `H("flame", x, y)` u32 at bytes 4–7 mod 84 | any of the 84 cells |
 | Pointer at a sign junction (§4) | `H("sign", x, y, cell)` u32 mod 1024 | tier-1 skeleton when under `t`, tier-2 skeleton when in `[t, 2t)`, arrow when in `[2t, 2t + a)`, with `t` 94 (EASY), 30 (MEDIUM), 17 (HARD) or 11 (ULTIMATE) and `a` 85, 64, 43 or 32; a candidate within one cell of a pointer already standing gives way, tier 1 first, then arrows, then tier 2, each by cell |
 | Corner of an arrow | `H("sign", x, y, cell)` u32 bit 31 | upper left, upper right |
@@ -149,37 +150,53 @@ holds the exit door.
    candidate remains. Every dead-end branch is therefore at most `D` boards
    deep: `D = 1` at EASY and 2 at MEDIUM, HARD and ULTIMATE.
 5. **Rock.** Board positions left unused are solid rock.
-6. **Flames.** Every `E_j` and `S` holds a flame at its flame cell, an `E_j`
-   already on the trunk included. Number each route's boards from 0 at its
-   entry: the trunk from `E_1` or `S`, a tributary from its `E_j`. Every
-   route board that is not an entry and whose index is a multiple of 3 is a
-   route candidate at its flame cell; half the dead-end boards are
-   dead-end candidates at their deepest cell. Entries always burn. Then the
+6. **Flames.** No board burns for being an entry. Number each route's boards
+   from 0 at its entry: the trunk from `E_1` or `S`, a tributary from its
+   `E_j`; an `E_j` already in the tree has no route of its own and counts by
+   the index of the route it lies on. A route board is a candidate at its
+   flame cell when its index is a positive multiple of 3, and a route's board 0
+   is a candidate when byte 0 of `H("flame", x, y)` is under 85 (33%, §2); half
+   the dead-end boards are dead-end candidates at their deepest cell. The
    generator keeps the route candidates, by route in tomb order and by
-   ascending index within it, and then the dead-end candidates by board
-   index, each unless it stands within 20 s of walking, at the §6 speeds,
-   of a flame already kept or of the flame cell of any entry board of any
-   tomb: the walk follows the cell tree through doors and across board
-   seams and tomb walls. A route or dead-end flame therefore stands more
-   than 20 s' walk from every entry flame and from every other flame its
-   tomb keeps; a dropped candidate burns nowhere, and gap flames are exempt.
-   Then, for each entry in order, the generator walks that entry's chain:
-   from its flame along the cell path through its route, the trunk from the
-   confluence, and across the exit wall to the downstream tomb's entry board
-   there, whose flame always burns. The chain holds the flames on those
-   boards that the routes and earlier chains placed, in the order the walk
-   reaches them. Any gap over 150 s of walking, at the §6 speeds, gets an
-   extra flame at its midpoint cell, and this repeats until no gap exceeds
-   150 s. A board's flames include every flame any tomb's chain places on it.
+   ascending index within it, and then the dead-end candidates by board index,
+   each unless it stands within 20 s of walking, at the §6 speeds, of a flame
+   its tomb has already kept: the walk follows the cell tree through doors and
+   across board seams and tomb walls. A route or dead-end flame therefore
+   stands more than 20 s' walk from every other flame its tomb keeps; a
+   dropped candidate burns nowhere, and gap flames are exempt. Flames of two
+   tombs can stand within 20 s of each other.
+
+   Then, for each entry in order, the generator builds that entry's chain along
+   its way on: the boards from the entry along its route to `X`, then across
+   the exit door. The chain runs from `P` to `Q`. `P` is the start of the way,
+   the flame cell of `S` on a source tomb, burning or not, and the cell of the
+   in-door on the entry board otherwise. `Q` is the cell across the tomb's exit
+   door, on the downstream tomb's entry board; the downstream chain of the same
+   way on starts at it. The chain's first member is a `start` at `P`, then come
+   the flames on the way's boards that the routes and earlier chains placed, in
+   the order the walk reaches them (a flame on `P`'s cell is its own member,
+   after the start), and its last is an `end` at `Q`. A stretch is the walk
+   between consecutive members, at the §6 speeds. Its limit is 150 s, less 75 s
+   for each end that is an in-door `P` or `Q`: 150 s between flames and from
+   `S` to the first flame, 75 s from an in-door to the first flame and from the
+   last flame to `Q`, 75 s from `S` straight to `Q` and 0 s from an in-door
+   straight to `Q`, so every in-door way on holds a flame. A stretch over its
+   limit gains a flame at its midpoint cell, and this repeats until none
+   exceeds its limit. A midpoint past the exit door takes the exit door's cell
+   instead. The gap flames of one chain count as flames for the next. A tomb
+   crossing therefore joins a trail of at most 75 s to a lead of at most 75 s,
+   and no stretch between flames takes over 150 s, across tomb walls too. No
+   chain places a flame past its exit door, so a board's flames are those of
+   its own tomb alone.
 
 Every link in the band tree is a door, and a board holds a door on every tomb
 wall it carries. A board has 1–4 doors, at most one per wall. On a trunk or
 tributary board, the primary pair of §4 is the door toward its own route's
-predecessor (the in-door on `E_j`, the flame cell on `S`) and the door toward
-its successor (the exit door on `X`, the joined tree board on a tributary's
-last board). When the two meet in one cell, on an `S` whose flame cell is the
-door toward its successor, the second cell is the deepest cell from the
-first, as on a dead-end board. §4 exempts branches that hold a door, so a
+predecessor (the in-door on `E_j`, the flame cell on `S`, burning or not) and
+the door toward its successor (the exit door on `X`, the joined tree board on
+a tributary's last board). When the two meet in one cell, on an `S` whose
+flame cell is the door toward its successor, the second cell is the deepest
+cell from the first, as on a dead-end board. §4 exempts branches that hold a door, so a
 confluence board's extra door needs no rule of its own.
 
 ## 4. Board maze
@@ -358,10 +375,10 @@ digest depends on either. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
 
 | Level | Dead-end cells per tree board | Coin | Jars per tree board | Short of the count |
 |---|---|---|---|---|
-| EASY | 4.58 | 6.0% | 1.98 | 9 of 388 |
-| MEDIUM | 6.36 | 5.0% | 1.00 | 0 of 888 |
-| HARD | 6.57 | 4.9% | 1.00 | 0 of 1551 |
-| ULTIMATE | 6.59 | 4.8% | 1.00 | 0 of 2378 |
+| EASY | 4.66 | 5.9% | 1.99 | 5 of 388 |
+| MEDIUM | 6.41 | 5.0% | 1.00 | 0 of 888 |
+| HARD | 6.60 | 5.0% | 1.00 | 0 of 1551 |
+| ULTIMATE | 6.61 | 4.8% | 1.00 | 0 of 2378 |
 
 **Wind.** A route board's **way on** is every cell on the tree path from one of
 its in-cells to the out-door's cell `o`, `o` included, with the in-cells and
@@ -389,14 +406,14 @@ dead-end rooms still. On seed `0000-0000`, tombs `u ∈ [−2, 2]` by
 
 | Level | Branches | Windy | Branch cells | Windy cells | Reach a dead-end board | Other, 8+ cells | Under 8 cells |
 |---|---|---|---|---|---|---|---|
-| EASY | 1258 | 87 (6.9%) | 9385 | 1784 (19.0%) | 26/90 | 28/177 | 33/991 |
-| MEDIUM | 3757 | 228 (6.1%) | 25115 | 4993 (19.9%) | 64/206 | 36/306 | 128/3245 |
-| HARD | 6304 | 399 (6.3%) | 52901 | 7594 (14.4%) | 80/348 | 66/562 | 253/5394 |
-| ULTIMATE | 10250 | 717 (7.0%) | 78718 | 13417 (17.0%) | 131/497 | 132/936 | 454/8817 |
+| EASY | 1258 | 93 (7.4%) | 9385 | 1941 (20.7%) | 28/90 | 32/177 | 33/991 |
+| MEDIUM | 3757 | 234 (6.2%) | 25115 | 5256 (20.9%) | 65/206 | 38/306 | 131/3245 |
+| HARD | 6304 | 399 (6.3%) | 52901 | 7595 (14.4%) | 80/348 | 68/562 | 251/5394 |
+| ULTIMATE | 10250 | 723 (7.1%) | 78718 | 13534 (17.2%) | 132/497 | 136/936 | 455/8817 |
 
 The last three columns give windy branches over all branches of each class.
-A tomb holds 0.87, 2.28, 3.99 and 7.17 windy branches by level. Over
-`u ∈ [−5, 5]` by `v ∈ [0, 39]`, 5.7% to 7.3% of branches and 16.4% to 17.9% of
+A tomb holds 0.93, 2.34, 3.99 and 7.23 windy branches by level. Over
+`u ∈ [−5, 5]` by `v ∈ [0, 39]`, 5.9% to 7.8% of branches and 16.6% to 18.7% of
 branch cells are windy.
 
 ## 5. Save code
@@ -667,9 +684,13 @@ battery.
   s, 1 at 140 s and in the ember. A flame or a jar that lifts the burn to 150 s
   or above hides it on that tick. Tier 1 and the arrows show at every burn.
 
-Every tomb entry holds a flame. No stretch of any entry's way on takes more
-than 150 s to walk between flames, so a full torch covers the longest stretch
-twice, and only real disorientation runs it dry.
+No board burns for being a tomb entry: braziers stand where chance and the gap
+rule put them (§3). No stretch of a way on takes more than 150 s between
+flames, across tomb walls too, so a full torch covers the longest stretch
+twice, and only real disorientation runs it dry. A new run and a resume light
+the torch to full at their start (§5), so the first flame lies within 150 s of
+a source tomb's `S` and within 75 s of an in-door, where the explorer arrives
+carrying burn.
 
 When the burn reaches zero, the torch gutters to an 8 px ember for 10 s, and
 reaching a flame in that time relights it. Otherwise the run ends. The end
@@ -908,18 +929,17 @@ The frame warms the world ahead of the view. The warm window spans two boards
 beyond the view on every side, one more than the window that gets board art,
 and warms its boards nearest the camera first, by row and then column among
 equals. Each frame does two units of world work: building a board, building
-one tree board of a tomb whose flames the board reads (its own and, on an
-entry board, each upstream tomb's), computing one such tomb's flames,
-computing the board's flames, or, on a route board, computing its wind. A
-board unit builds one board. A flames or wind unit builds none of its own,
-but its walks can build up to three beyond the tomb, so a frame builds at
-most six. A board enters the warm window one board of travel before the art
-window: 6 s running, 7 s climbing. The frame then builds one board's art,
-which takes 1.4 ms at the median on the same node and chip; a board in view,
-or within the 89.6 px light reach (§8), with no art builds it at once. The art
-window reaches past the light reach, so in play those boards are built ahead.
-A run's first frame, a resume, a code entry and the title preview's first frame
-build what they show at once.
+one tree board of the board's tomb, whose flames the board reads alone (§3),
+computing that tomb's flames, computing the board's flames, or, on a route
+board, computing its wind. A board unit builds one board. A flames or wind
+unit builds none of its own, but its walks can build up to three beyond the
+tomb, so a frame builds at most six. A board enters the warm window one board
+of travel before the art window: 6 s running, 7 s climbing. The frame then
+builds one board's art, which takes 1.4 ms at the median on the same node and
+chip; a board in view, or within the 89.6 px light reach (§8), with no art
+builds it at once. The art window reaches past the light reach, so in play
+those boards are built ahead. A run's first frame, a resume, a code entry and
+the title preview's first frame build what they show at once.
 Audio starts on the first key press or touch, as browser autoplay policy
 requires. A frame that throws logs its first error to the console, shows
 `ERROR  SAVE CODE` and the run's save code over a dark strip across the middle
@@ -1106,9 +1126,15 @@ link of a room out and back.
   38.4–44.8 at EASY, 43.2–50.4 at MEDIUM and 48–56 at HARD and ULTIMATE. A
   cell is carved when it holds a link, doors aside. The harness reports the
   mean.
-- **Flames:** every tomb entry holds a flame, and along each entry's way on
-  the walking time between consecutive chain flames stays at or under 150 s.
-  The harness reports the maximum and the 99th percentile.
+- **Flames:** each entry's chain runs from a `start` at `P` to an `end` at
+  `Q`; every member between them is lit, lies on the tomb's own way-on boards
+  and runs in walk order; every stretch stays within its limit, 150 s between
+  flames and 75 s from an in-door or to `Q`; every flame on a route board
+  belongs to a chain of its tomb; and every crossing of a tomb wall in the
+  window, the upstream chain's trail plus the downstream chain's lead, takes at
+  most 150 s. The harness reports the maximum and the 99th percentile over the
+  flame-to-flame stretches, an `S` start counting as a flame, with each
+  crossing measured whole.
 - **Solvability:** the harness follows the generator's exits from tomb
   `(0, −50)` until a tomb in row 50, leaving the window sideways if the walk
   does; a breadth-first search over carved cells and doors, confined to those

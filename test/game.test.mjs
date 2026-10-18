@@ -882,7 +882,7 @@ test('a torch burns 300 s, gutters to a 10 s ember, then ends the run', () => {
 });
 
 test('standing in a flame keeps the torch full and the run alive', () => {
-  const f = world.tombFlames(0, 0).chains[0][0];
+  const f = world.tombFlames(0, 0).chains[0].find((m) => m.kind !== 'start' && m.kind !== 'end');
   const s = createSim(world, { board: world.board(f.x, f.y), cell: f.cell });
   run(s, Math.round(330 / TICK), 0, 0);
   assert.equal(s.burn, BURN_S);

@@ -709,10 +709,11 @@ function oneTombOn(g, n, doomAt = 0) {
 }
 
 /**
- * Walks the run of `n` tombs solved at tomb (0, 0)'s exit board to the
- * downstream entry's flame until the tomb count reaches n + 1. Throws
- * `touch ...` when the walk takes a coin or runs out of ticks. It returns the
- * ticks run. With `doomAt` > 0, the torch is an ember that goes out on that tick.
+ * Walks the run of `n` tombs solved at tomb (0, 0)'s exit board to its chain's
+ * last member, Q, the cell across the exit door, until the tomb count reaches
+ * n + 1. Throws `touch ...` when the walk takes a coin or runs out of ticks. It
+ * returns the ticks run. With `doomAt` > 0, the torch is an ember that goes out
+ * on that tick.
  */
 function walkOut(g, n, doomAt = 0) {
   const chain = g.world.tombFlames(0, 0).chains[0];

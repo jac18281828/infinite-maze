@@ -288,7 +288,7 @@ test('a sim climbing two tombs along the way on counts 2, and a sim built from i
   const first = world.tombFlames(0, 0).chains[0];
   const last = first[first.length - 1];
   const second = world.tombFlames(next.u, next.v).chains.find((c) => c[0].x === last.x && c[0].y === last.y && c[0].cell === last.cell);
-  assert.ok(second, 'the downstream tomb has a chain from the flame that ends the first');
+  assert.ok(second, 'the downstream tomb has a chain that starts at the cell that ends the first');
   const sim = createSim(world, world.startPoint());
   assert.equal(tombCount(sim), 0);
   const drive = createAutopilot(world, [...first, ...second]);
@@ -305,7 +305,7 @@ test('a sim climbing two tombs along the way on counts 2, and a sim built from i
   assert.equal(tombCount(sim), 2);
   assert.deepEqual([...sim.solved], ['0,0', `${next.u},${next.v}`], 'the two tombs of the way on');
   assert.ok(afterOne > 0 && afterOne < ticks, 'the first exit scores one tomb before the second');
-  assert.ok(ticks > 5000 && ticks < 20000, `${ticks} ticks`);
+  assert.ok(ticks > 4000 && ticks < 20000, `${ticks} ticks`);
   const carried = createSim(world, world.resumePoint(sim.bd.x, sim.bd.y), runCarry(sim));
   assert.equal(tombCount(carried), 2);
 });

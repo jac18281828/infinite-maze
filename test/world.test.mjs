@@ -16,10 +16,10 @@ import {
 
 // Pinned digests of tombs u in [-2, 2], v in [0, 19] for seed code 0000-0000.
 const DIGESTS = {
-  easy: 'f513618db7cc689234a6c1e9443debcf1b8bd9225b6d16cb9d4b240303001381',
-  medium: '287bb293641a9a36280a8afe05918a0f1f53de67bc511ba0ad2569d9d9830049',
-  hard: '53b8582e503a203b7d9de0eb28198ba192e75de773357b3c5d00b4f40331fc93',
-  ultimate: '91801ad980eddd92b08379f4e895fba9abc1d0c89f8f39b8fb89d31f77d83b5d',
+  easy: '6e9570afc1c0053933ac1da1c14775a43031d2e09752d243459815b4540a0ca7',
+  medium: '179bc0cbd986c65ebbc8806ec315ee127be89742e13b0501d814de6561cdf44e',
+  hard: 'b5b6680b38dfbbae329749b1707e294f0d892d325e9072438ea772ccdef175fc',
+  ultimate: 'bb37e4184512eb5850861ce145dfa5599369b07a8e8cf18b9d0fae3a5f49781c',
 };
 // Each level's dead-end depth and path target, restated apart from the generator.
 const DEPTH = { easy: 1, medium: 2, hard: 2, ultimate: 2 };
@@ -376,27 +376,36 @@ function soundTomb(t) {
   return fs;
 }
 
-test('a tomb with three in-doors joins them all, a tributary included, and every chain keeps gaps to 150 s', () => {
+test('a tomb with three in-doors joins them all, a tributary included, and every chain runs from its in-door to Q', () => {
   const t = findTomb((q) => q.walls.length === 4 && q.routes.length >= 2);
   assert.equal(t.entries.length, 3);
   assert.deepEqual(t.walls.slice(1).map((w) => w.dir), [3, 2, 0]);
   const fs = soundTomb(t);
-  // Every entry holds a flame at its flame cell, and its chain starts there.
+  const X = boardCoords(t.u, t.v, t.X, world.size);
+  const exit = world.board(X.x, X.y).doors.find((d) => d.dir === t.exit).cell;
+  const across = world.step(world.board(X.x, X.y), exit, t.exit);
+  // Each chain starts at its own in-door's cell on the entry board, where the explorer arrives, and ends across the exit door.
   fs.chains.forEach((chain, j) => {
     const e = boardCoords(t.u, t.v, t.entries[j], world.size);
-    assert.deepEqual([chain[0].x, chain[0].y, chain[0].cell], [e.x, e.y, flameCell(world.H, e.x, e.y)]);
+    const door = world.board(e.x, e.y).doors.find((d) => d.dir === t.walls[j + 1].dir).cell;
+    assert.deepEqual([chain[0].kind, chain[0].x, chain[0].y, chain[0].cell], ['start', e.x, e.y, door], `entry ${j + 1} starts at its in-door`);
+    const end = chain[chain.length - 1];
+    assert.deepEqual([end.kind, end.x, end.y, end.cell], ['end', across.board.x, across.board.y, across.cell], `entry ${j + 1} ends across the exit door`);
   });
+  assert.equal(new Set(fs.chains.map((c) => `${c[0].x},${c[0].y},${c[0].cell}`)).size, 3, 'three distinct in-doors');
 });
 
 test('a source tomb starts its trunk at S and builds a tree that keeps gaps to 150 s', () => {
   const t = findTomb((q) => q.source);
   assert.equal(t.entries.length, 1);
   assert.equal(t.walls.length, 1);
-  soundTomb(t);
+  const fs = soundTomb(t);
   const s = boardCoords(t.u, t.v, t.entries[0], world.size);
   const bd = world.board(s.x, s.y);
   assert.equal(bd.a, flameCell(world.H, s.x, s.y));
   assert.equal(bd.aDir, -1);
+  // The chain starts at S's flame cell, which burns only by the route rules.
+  assert.deepEqual([fs.chains[0][0].kind, fs.chains[0][0].x, fs.chains[0][0].y, fs.chains[0][0].cell], ['start', s.x, s.y, bd.a]);
 });
 
 test('a tomb whose first entry board is its exit board builds a one-board trunk with dead ends', () => {
@@ -423,20 +432,27 @@ test('a board whose primary pair meets in one cell measures to its deepest cell'
   }
 });
 
-test('gap splitting adds midpoint flames until every gap fits the limit', () => {
+test('gap splitting adds midpoint flames until every stretch fits its limit, half of it at an in-door start and at Q', () => {
   const limit = 20000;
   const w = createWorld('00000000', { gapLimitMs: limit });
   let extra = 0;
   for (let v = 0; v <= 2; v++) {
     for (let u = -1; u <= 1; u++) {
       const fs = w.tombFlames(u, v);
+      const inDoor = !w.tomb(u, v).source;
       extra += fs.flames.filter((f) => f.kind === 'gap').length;
-      assert.ok(fs.gaps.every((g) => g <= limit), `tomb (${u},${v})`);
-      assert.equal(fs.gaps.length, fs.chains.reduce((n, c) => n + c.length - 1, 0));
+      let o = 0;
+      for (const chain of fs.chains) {
+        for (let i = 0; i + 1 < chain.length; i++, o++) {
+          const half = (inDoor && i === 0 ? limit / 2 : 0) + (i + 2 === chain.length ? limit / 2 : 0);
+          assert.ok(fs.gaps[o] <= limit - half, `tomb (${u},${v}) stretch ${i}: ${fs.gaps[o]} ms`);
+        }
+      }
+      assert.equal(fs.gaps.length, o);
     }
   }
   assert.ok(extra > 0);
-  // The harness re-measures the same gaps through the cell graph.
+  // The harness re-measures the same stretches through the cell graph, with its own 150 s limits.
   const r = checkFlames(w, tombWindow(-1, 1, 0, 2));
   assert.deepEqual(r.errors, []);
   assert.ok(r.gaps.every((g) => g <= limit));
@@ -448,10 +464,13 @@ test('the midpoint index is the first at or past half the total', () => {
   assert.equal(midpointIndex([0, 500, 1500], 1500), 2);
 });
 
-test('a split gap gets its flame at the first path cell at or past half the walk', () => {
-  const u = 0, v = 0;
-  // One below the largest gap: that gap splits once, every other gap stays.
-  const limit = Math.max(...createWorld('00000000').tombFlames(u, v).gaps) - 1;
+test('a split stretch gets its flame at the first path cell at or past half the walk', () => {
+  // Source tomb (4, 0) has one chain and no in-door lead. One below its largest stretch short of the trail:
+  // that stretch splits once, every other stretch stays.
+  const u = 4, v = 0;
+  const base = createWorld('00000000').tombFlames(u, v);
+  assert.ok(world.tomb(u, v).source && base.chains.length === 1);
+  const limit = Math.max(...base.gaps.slice(0, -1)) - 1;
   const w = createWorld('00000000', { gapLimitMs: limit });
   const fs = w.tombFlames(u, v);
   const shape = tombShape(w, u, v);
@@ -477,7 +496,7 @@ test('a split gap gets its flame at the first path cell at or past half the walk
       checked++;
     });
   });
-  assert.ok(checked >= 1);
+  assert.equal(checked, 1);
 });
 
 /** The growTree tree of attempt k of board (x, y) in tomb (0, 0), with its primary pair. */

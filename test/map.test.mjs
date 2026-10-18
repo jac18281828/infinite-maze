@@ -140,11 +140,11 @@ test('the map shows exactly the walked links, stood openings, entered boards and
   {
     const end = chain.at(-1);
     const next = tombOf(end.x, end.y, world.size);
-    const t = world.tomb(next.u, next.v);
-    const j = t.entries.findIndex((i) => { const b = boardCoords(next.u, next.v, i, world.size); return b.x === end.x && b.y === end.y; });
+    const down = world.tombFlames(next.u, next.v).chains.find((c) => c[0].x === end.x && c[0].y === end.y && c[0].cell === end.cell);
+    assert.ok(down, 'the downstream tomb has a chain that starts where the first ends');
     const s = createSim(world, world.startPoint());
     const w = watcher(world, s);
-    const drive = createAutopilot(world, [...chain, ...world.tombFlames(next.u, next.v).chains[j]]);
+    const drive = createAutopilot(world, [...chain, ...down]);
     let ph = 0, pv = 0, left = false;
     for (let i = 0; i < 40000; i++) {
       const [h, v, jump] = drive(s);

@@ -5,11 +5,14 @@ import { makeHasher, worldKey, u32, toHex, writeInt64BE } from './hash.mjs';
 import { sha3_256 } from './keccak.mjs';
 import { BW, BH, NCELL, COST, buildBoardMaze, cellNeighbor, flameCell } from './board.mjs';
 import { DIFFICULTY, BDX, BDY, buildTombTree } from './band.mjs';
-import { createFlow, TDX, TDY } from './flow.mjs';
+import { createFlow } from './flow.mjs';
 
 export const GAP_LIMIT_MS = 150000;
-// A route or dead-end flame stands more than this walk from every kept flame.
+// A route or dead-end flame stands more than this walk from every flame its tomb keeps.
 export const SPACING_MS = 20000;
+// A route's board 0 is a flame candidate when byte 0 of H("flame", x, y) is
+// under this: 85/256, the odds of every third board.
+const FIRST_BOARD_BYTE = 85;
 // Room parameters per level (spec sections 3 and 4): the carve count, the
 // path, junction and side-branch targets, and the dead-end depth in boards.
 export const ROOMS = {
@@ -127,8 +130,8 @@ function boardLinks(t, i) {
 }
 
 /**
- * Cells and cumulative walking times from flame A to flame B along `span`,
- * a list of { bd, inCell, outCell, outDir }, where A.pos <= B.pos.
+ * Cells and cumulative walking times from chain member A to member B along
+ * `span`, a list of { bd, inCell, outCell, outDir }, where A.pos <= B.pos.
  */
 function spanPath(span, A, B) {
   const cells = [], cum = [];
@@ -192,7 +195,8 @@ export function cellPath(links, from, to) {
 /**
  * `difficulty` ('easy', 'medium', 'hard' or 'ultimate') sets the tomb size
  * and the ROOMS row, and enters no hash. `gapLimitMs` bounds the walking
- * time between consecutive chain flames; spec section 3 sets 150 s.
+ * time between consecutive chain members, half of it at an in-door start or
+ * at the way's end; spec section 3 sets 150 s.
  * `carveCells` sets the cells each board keeps, the level's count by
  * default; NCELL keeps them all. `faults` builds a broken world for the
  * harness's tests: `ignoreWalls` (see createFlow) or `dropTributary` (see
@@ -260,16 +264,18 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
   /**
    * The way on of entry j of tomb t: its boards from the entry along the
    * route to X, then across the exit wall to the downstream entry board.
-   * Each step holds the cell it is entered at (the entry's flame cell on
-   * the first), the cell it is left at and the direction it is left by; the
-   * downstream board is left at its flame cell.
+   * Each step holds the cell it is entered at (P, the start of the way, on
+   * the first), the cell it is left at and the direction it is left by. The
+   * downstream step holds Q, the cell across the exit door, and nothing else.
+   * P is the in-door's cell, or S's flame cell on a source tomb.
    */
   function entrySpan(t, j) {
     const path = [t.entries[j]];
     while (t.next[path[path.length - 1]] >= 0) path.push(t.next[path[path.length - 1]]);
     const span = path.map((i, pos) => {
       const bd = boardAt(t, i);
-      const inCell = pos === 0 ? flameCell(H, bd.x, bd.y) : doorCell(H, bd.x, bd.y, dirBetween(i, path[pos - 1]));
+      const inCell = pos > 0 ? doorCell(H, bd.x, bd.y, dirBetween(i, path[pos - 1]))
+        : t.source ? flameCell(H, bd.x, bd.y) : doorCell(H, bd.x, bd.y, t.walls[j + 1].dir);
       const outDir = pos + 1 < path.length ? dirBetween(i, path[pos + 1]) : i === t.X ? t.exit : -1;
       const outCell = outDir >= 0 ? doorCell(H, bd.x, bd.y, outDir) : inCell;
       return { bd, inCell, outCell, outDir };
@@ -277,21 +283,29 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
     const last = span[span.length - 1];
     if (last.outDir >= 0) {
       const bd = board(last.bd.x + BDX[last.outDir], last.bd.y + BDY[last.outDir]);
-      span.push({ bd, inCell: acrossDoor(last.outCell, last.outDir), outCell: flameCell(H, bd.x, bd.y), outDir: -1, down: true });
+      const q = acrossDoor(last.outCell, last.outDir);
+      span.push({ bd, inCell: q, outCell: q, outDir: -1, down: true });
     }
     return span;
   }
 
   /**
-   * Inserts a flame at the midpoint cell of each chain gap over the limit
-   * until none remains; returns the inserted flames and the final gaps.
+   * Inserts a flame at the midpoint cell of each chain stretch over its limit
+   * until none remains; returns the inserted flames and the final stretch
+   * times. A stretch is the walk between consecutive chain members. Its limit
+   * is the gap limit, less half of it for each end that is an in-door start
+   * or the way's end, so a tomb crossing never exceeds the gap limit. A
+   * midpoint past the exit door takes the exit door's cell.
    */
-  function splitGaps(span, chain) {
+  function splitGaps(span, chain, inDoor) {
+    const half = gapLimitMs / 2;
     const added = [], gaps = [];
     for (let i = 0; i + 1 < chain.length;) {
+      const limit = gapLimitMs - (inDoor && i === 0 ? half : 0) - (i + 2 === chain.length ? half : 0);
       const path = spanPath(span, chain[i], chain[i + 1]);
-      if (path.total > gapLimitMs) {
-        const { pos, cell } = path.cells[midpointIndex(path.cum, path.total)];
+      if (path.total > limit) {
+        let { pos, cell } = path.cells[midpointIndex(path.cum, path.total)];
+        if (span[pos].down) { pos--; cell = span[pos].outCell; }
         const bd = span[pos].bd;
         const f = { x: bd.x, y: bd.y, cell, kind: 'gap', pos };
         added.push(f);
@@ -306,16 +320,15 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
 
   /**
    * True when a cell within SPACING_MS of walking from (bd, cell) holds a
-   * flame in `kept` (keys `x,y,cell`) or is the flame cell of an entry board
-   * of any tomb. The cell graph is a tree, so a walk that never turns back
-   * to the cell it came from measures every distance exactly.
+   * flame in `kept` (keys `x,y,cell`). The cell graph is a tree, so a walk
+   * that never turns back to the cell it came from measures every distance
+   * exactly.
    */
   function flameNear(bd, cell, kept) {
     const stack = [{ bd, cell, from: null, ms: 0 }];
     while (stack.length) {
       const { bd: b, cell: c, from, ms } = stack.pop();
       if (kept.has(`${b.x},${b.y},${c}`)) return true;
-      if (b.entry && c === flameCell(H, b.x, b.y)) return true;
       for (let d = 0; d < 8; d++) {
         const n = step(b, c, d);
         if (!n || (from && n.board === from.bd && n.cell === from.cell)) continue;
@@ -327,15 +340,17 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
   }
 
   /**
-   * Flames tomb (u, v) places and one chain per entry. Entries always burn at
-   * their flame cells. A route candidate (every third board along each route,
-   * by route then index) and then a dead-end candidate (half the dead ends,
-   * at their deepest cells, by board) burns unless it stands within
-   * SPACING_MS of walking from a flame the tomb keeps or from an entry
-   * board's flame cell. Each entry's chain runs from its flame along its way
-   * on to the downstream entry's flame, taking the flames on its boards that
-   * the routes and earlier chains placed, and gains a midpoint flame in
-   * every gap over the limit.
+   * Flames tomb (u, v) places and one chain per entry. No board burns for
+   * being an entry. A route candidate (each route's board 0 when its flame
+   * byte is under FIRST_BOARD_BYTE, and every board at a positive multiple
+   * of 3 along it, by route then index) and then a dead-end candidate (half
+   * the dead ends, at their deepest cells, by board) burns unless it stands
+   * within SPACING_MS of walking from a flame the tomb keeps. Each entry's
+   * chain runs from its start P (the in-door's cell, or S's flame cell)
+   * along its way on to Q, the cell across the exit door, taking the flames
+   * on its boards that the routes and earlier chains placed. A stretch over
+   * its limit gains a midpoint flame, so every flame lies on the tomb's own
+   * boards.
    */
   function tombFlames(u, v) {
     const k = tkey(u, v);
@@ -348,17 +363,11 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
       placed.push({ x: bd.x, y: bd.y, cell, kind });
       kept.add(`${bd.x},${bd.y},${cell}`);
     };
-    for (let i = 0; i < t.depth.length; i++) {
-      if (t.entries.includes(i)) {
-        const bd = boardAt(t, i);
-        keep(bd, flameCell(H, bd.x, bd.y), 'entry');
-      }
-    }
     const candidates = [];
     for (const route of t.routes) {
       route.forEach((i, j) => {
-        if (j % 3 === 0 && !t.entries.includes(i)) {
-          const bd = boardAt(t, i);
+        const bd = boardAt(t, i);
+        if (j > 0 ? j % 3 === 0 : H('flame', bd.x, bd.y)[0] < FIRST_BOARD_BYTE) {
           candidates.push({ bd, cell: flameCell(H, bd.x, bd.y), kind: 'route' });
         }
       });
@@ -377,18 +386,17 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
       const chain = [];
       span.forEach((st, pos) => {
         const { bd, down } = st;
+        if (down) return;
         const here = placed.filter((f) => f.kind !== 'dead').concat(added).filter((f) => f.x === bd.x && f.y === bd.y);
         const cells = new Set(here.map((f) => f.cell));
-        // The chain ends at the downstream entry's flame, which always burns.
-        if (down) cells.add(st.outCell);
-        let order = walkOrder(bd, st.inCell, st.outCell, [...cells]);
-        if (down) order = order.slice(0, order.indexOf(st.outCell) + 1);
-        for (const cell of order) {
-          const f = here.find((g) => g.cell === cell);
-          chain.push({ x: bd.x, y: bd.y, cell, kind: f ? f.kind : 'entry', pos });
+        for (const cell of walkOrder(bd, st.inCell, st.outCell, [...cells])) {
+          chain.push({ x: bd.x, y: bd.y, cell, kind: here.find((g) => g.cell === cell).kind, pos });
         }
       });
-      const split = splitGaps(span, chain);
+      const first = span[0], last = span[span.length - 1];
+      chain.unshift({ x: first.bd.x, y: first.bd.y, cell: first.inCell, kind: 'start', pos: 0 });
+      if (last.down) chain.push({ x: last.bd.x, y: last.bd.y, cell: last.inCell, kind: 'end', pos: span.length - 1 });
+      const split = splitGaps(span, chain, !t.source);
       added.push(...split.added);
       gaps.push(...split.gaps);
       chains.push(chain);
@@ -398,17 +406,7 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
     return fs;
   }
 
-  /** The tombs [u, v] whose flames board i of tomb (u, v), tree `t`, reads: its own, then each upstream across an in-wall. */
-  function flameTombs(t, u, v, i) {
-    const from = [[u, v]];
-    for (const w of t.walls.slice(1)) if (w.i === i) from.push([u + TDX[w.dir], v + TDY[w.dir]]);
-    return from;
-  }
-
-  /**
-   * Flame cells on board (x, y), ascending: those its tomb places, and on an
-   * entry board those the upstream tomb's chains place there.
-   */
+  /** Flame cells on board (x, y), ascending: those its own tomb places. */
   function flamesAt(x, y) {
     const p = posOf(x, y);
     let cells = flameCells.get(p);
@@ -418,9 +416,7 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
     const i = boardIndex(x, y, size);
     const set = new Set();
     if (t.depth[i] >= 0) {
-      for (const [fu, fv] of flameTombs(t, u, v, i)) {
-        for (const f of tombFlames(fu, fv).flames) if (f.x === x && f.y === y) set.add(f.cell);
-      }
+      for (const f of tombFlames(u, v).flames) if (f.x === x && f.y === y) set.add(f.cell);
     }
     cells = [...set].sort((p1, p2) => p1 - p2);
     flameCells.set(p, cells);
@@ -476,10 +472,9 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
   /**
    * One unit of cold work toward board (x, y) and its flames, or true,
    * building nothing, when both are cached. The first of: build the board;
-   * build one unbuilt tree board of a tomb `flamesAt` reads (the board's own
-   * and, on an entry board, each upstream tomb's); compute one such tomb's
-   * flames; compute `flamesAt`. A flames unit can still build the few
-   * boards its walks reach past the tomb.
+   * build one unbuilt tree board of its tomb; compute the tomb's flames;
+   * compute `flamesAt`. A flames unit can still build the few boards its
+   * walks reach past the tomb.
    */
   function warm(x, y) {
     const p = posOf(x, y);
@@ -488,17 +483,14 @@ export function createWorld(code, { difficulty = 'ultimate', gapLimitMs = GAP_LI
     if (!have) { board(x, y); return false; }
     const { u, v } = tombOf(x, y, size);
     const t = tomb(u, v), i = boardIndex(x, y, size);
-    if (t.depth[i] >= 0) {
-      const todo = flameTombs(t, u, v, i).filter(([fu, fv]) => !flameSets.has(tkey(fu, fv)));
+    if (t.depth[i] >= 0 && !flameSets.has(tkey(u, v))) {
       // tombFlames reads tree boards only: a rock board has no door to walk through.
-      for (const [fu, fv] of todo) {
-        const ft = tomb(fu, fv);
-        for (let j = 0; j < ft.depth.length; j++) {
-          const at = boardCoords(fu, fv, j, size);
-          if (ft.depth[j] >= 0 && !boards.has(posOf(at.x, at.y))) { board(at.x, at.y); return false; }
-        }
+      for (let j = 0; j < t.depth.length; j++) {
+        const at = boardCoords(u, v, j, size);
+        if (t.depth[j] >= 0 && !boards.has(posOf(at.x, at.y))) { board(at.x, at.y); return false; }
       }
-      if (todo.length) { tombFlames(todo[0][0], todo[0][1]); return false; }
+      tombFlames(u, v);
+      return false;
     }
     flamesAt(x, y);
     return false;

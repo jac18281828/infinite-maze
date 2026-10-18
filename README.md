@@ -51,8 +51,8 @@ and no assets.
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends. Every room holds oil jars on
   dead ends with no coin: two a room at EASY and one at MEDIUM, HARD and
-  ULTIMATE. A room holds 4.6, 6.4, 6.6 and 6.6 dead ends by level, and 6.0%,
-  5.0%, 4.9% and 4.8% of them hold a coin, measured. Touch a jar to add 60 s
+  ULTIMATE. A room holds 4.7, 6.4, 6.6 and 6.6 dead ends by level, and 5.9%,
+  5.0%, 5.0% and 4.8% of them hold a coin, measured. Touch a jar to add 60 s
   of burn, up to a full torch, or to relight an ember. Jars return on every new
   run.
 - Occasional hints mark the way on at a junction with a real choice; a link
@@ -63,10 +63,11 @@ and no assets.
   as many again, shows only while the torch burns under half, fading in between
   150 s and 140 s; a flame or a jar that lifts the torch to half or above hides
   it. A junction holds at most one pointer, and all are always on.
-- Every tomb entry holds a flame, and no stretch of a way on runs more than
-  150 s between flames. A route or dead-end flame stands more than 20 s' walk
-  from every entry flame and from every other flame its tomb keeps; gap
-  flames are exempt.
+- No board burns for being a tomb entry. Braziers stand where chance and the
+  gap rule put them: a route's first board burns one time in three, and a
+  route or dead-end flame stands more than 20 s' walk from every other flame
+  its tomb keeps (gap flames are exempt). No stretch of a way on runs more
+  than 150 s between flames, across tomb walls too.
 - Coins lie on the floors of dead ends, about one dead end in twenty. Touch one
   to take it. Each tomb pays once on this device, the first time a run solves
   it: 1 coin at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE. A replay pays
@@ -143,7 +144,7 @@ largest and 99th percentile flame gaps and the shares of up, left and right
 exits with the mean sideways run. Way up, run once at ULTIMATE, checks that
 every tomb's way on climbs out of the window within 100,000 steps and reports
 how many ways on meet tomb (0, 0)'s. The harness ends with its run time.
-`infinite-maze.html#selftest` boots seed `0000-0000`, drives 3600 ticks of
+`infinite-maze.html#selftest` boots seed `0000-0000`, drives 5100 ticks of
 scripted input and draws the pause map. A second leg resumes at MEDIUM in
 tomb (1, 0), outside board columns 0-2, and fails unless the explorer's room
 draws as maze rather than rock. The self-test then sets `data-selftest` on

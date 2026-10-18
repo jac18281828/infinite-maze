@@ -464,39 +464,53 @@ test('carve rejects a board carved to 49 cells', () => {
   assert.ok(errors.includes(`board (${bd.x},${bd.y}): 49 carved cells, under 50`), errors.join('\n'));
 });
 
-test('flames rejects a removed flame that opens a gap over 150 s', () => {
-  // In seed 0000-0001, tomb (-1, 0), dropping entry 2's chain flame 2 leaves a 153.5 s walk.
+/** A view of `base` whose tomb (u, v) loses the flame `gone` from its flames and every chain. */
+function withoutFlame(base, u, v, gone) {
+  const fs = base.tombFlames(u, v);
+  const same = (f) => f.x === gone.x && f.y === gone.y && f.cell === gone.cell;
+  const w = broken(base, {
+    flames: new Map([[`${u},${v}`, { ...fs, chains: fs.chains.map((c) => c.filter((f) => !same(f))), flames: fs.flames.filter((f) => !same(f)) }]]),
+  });
+  assert.ok(!w.flamesAt(gone.x, gone.y).includes(gone.cell));
+  return w;
+}
+
+test('flames rejects a removed flame that opens a stretch between two flames over 150 s', () => {
+  // In seed 0000-0001, tomb (-1, 0), dropping entry 2's chain flame 3, route flame (-5,3):35, leaves a 153.5 s walk.
   const base = createWorld('00000001');
   const win = tombWindow(-1, -1, 0, 0);
   assert.deepEqual(checkFlames(base, win).errors, []);
-  const fs = base.tombFlames(-1, 0);
-  const gone = fs.chains[1][2];
-  assert.equal(gone.kind, 'route');
-  const same = (f) => f.x === gone.x && f.y === gone.y && f.cell === gone.cell;
-  const w = broken(base, {
-    flames: new Map([['-1,0', { ...fs, chains: fs.chains.map((c) => c.filter((f) => !same(f))), flames: fs.flames.filter((f) => !same(f)) }]]),
-  });
-  assert.ok(!w.flamesAt(gone.x, gone.y).includes(gone.cell));
-  const errors = checkFlames(w, win).errors;
-  assert.ok(errors.some((e) => e.startsWith('tomb (-1,0) entry 2: flame gap 153.5 s exceeds 150 s')), errors.join('\n'));
+  const gone = base.tombFlames(-1, 0).chains[1][3];
+  assert.deepEqual([gone.kind, gone.x, gone.y, gone.cell], ['route', -5, 3, 35]);
+  const errors = checkFlames(withoutFlame(base, -1, 0, gone), win).errors;
+  assert.ok(errors.some((e) => e.startsWith('tomb (-1,0) entry 2: stretch 153.5 s exceeds 150 s')), errors.join('\n'));
 });
 
-test('flames rejects an entry board without a flame', () => {
-  const t = world.tomb(0, 1);
-  const fs = world.tombFlames(0, 1);
-  const e = boardCoords(0, 1, t.entries[0], world.size);
-  const entryFlames = (f) => f.x === e.x && f.y === e.y;
-  // Upstream chains end on the entry board; their flames go too.
-  const flames = new Map([['0,1', { ...fs, flames: fs.flames.filter((f) => !entryFlames(f)) }]]);
-  for (const wl of t.walls.slice(1)) {
-    const k = `${DX[wl.dir]},${1 + DY[wl.dir]}`;
-    const up = world.tombFlames(...k.split(',').map(Number));
-    flames.set(k, { ...up, flames: up.flames.filter((f) => !entryFlames(f)) });
-  }
-  const w = broken(world, { flames });
-  assert.equal(w.flamesAt(e.x, e.y).length, 0);
-  const errors = checkFlames(w, tombWindow(0, 0, 1, 1)).errors;
-  assert.ok(errors.some((err) => err.includes(`entry board (${e.x},${e.y}) holds no flame`)), errors.join('\n'));
+test('flames rejects a removed flame that leaves an in-door lead over 75 s', () => {
+  // In seed 0000-0001, tomb (-1, 0), dropping entry 1's chain flame 1, route flame (-3,2):56, leaves a 132.7 s lead, under 150 s and over 75 s.
+  const base = createWorld('00000001');
+  const win = tombWindow(-1, -1, 0, 0);
+  const gone = base.tombFlames(-1, 0).chains[0][1];
+  assert.deepEqual([gone.kind, gone.x, gone.y, gone.cell], ['route', -3, 2, 56]);
+  const errors = checkFlames(withoutFlame(base, -1, 0, gone), win).errors;
+  assert.ok(errors.some((e) => e.startsWith('tomb (-1,0) entry 1: stretch 132.7 s exceeds 75 s')), errors.join('\n'));
+  assert.ok(!errors.some((e) => e.startsWith('tomb (-1,0) entry 1: stretch') && e.endsWith('exceeds 150 s')), errors.join('\n'));
+});
+
+test('flames rejects a chain whose start member is moved off P', () => {
+  // In seed 0000-0001, tomb (-1, 0), entry 1's start moves to a linked neighbour of its in-door cell.
+  const base = createWorld('00000001');
+  const win = tombWindow(-1, -1, 0, 0);
+  const fs = base.tombFlames(-1, 0);
+  const start = fs.chains[0][0];
+  assert.equal(start.kind, 'start');
+  const bd = base.board(start.x, start.y);
+  const to = [0, 1, 2, 3].map((d) => base.step(bd, start.cell, d)).find((n) => n && n.board === bd);
+  assert.ok(to, 'the start cell has a neighbour on its board');
+  const moved = fs.chains.map((c, j) => (j === 0 ? [{ ...c[0], cell: to.cell }, ...c.slice(1)] : c));
+  const w = broken(base, { flames: new Map([['-1,0', { ...fs, chains: moved }]]) });
+  const errors = checkFlames(w, win).errors;
+  assert.ok(errors.includes(`tomb (-1,0) entry 1: chain does not start at P (${start.x},${start.y}):${start.cell}`), errors.join('\n'));
 });
 
 test('solvability rejects a world cut at a tomb wall', () => {
