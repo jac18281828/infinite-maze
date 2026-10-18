@@ -1001,9 +1001,9 @@ function coinLeg(g, { need, click, press }) {
   need(slot.level === 'medium' && storedCoins().length === 0, 'a touched coin stores the wallet and no coin in the slot');
   need(realUntouched(), 'the self-test leaves the real wallet untouched');
 
-  // Step 2: the coin stays gone for the rest of its run, and lies back on every new run. Each walk to it
-  // starts with the feet out of reach, so the walk runs ticks, and the coins it takes are the pickups the
-  // sim reports, which no merge of the wallet changes.
+  // Step 2: the coin stays taken through pause, the title and the end screen's CONTINUE, and lies back after
+  // a reload and on BEGIN. Each walk to it starts with the feet out of reach, so the walk runs ticks, and
+  // the coins it takes are the pickups the sim reports, which no merge of the wallet changes.
   const origin = g.world.startPoint(), home = { x: origin.board.x, y: origin.board.y, cell: origin.cell };
   const spot = itemPoint(coin);
   const takes = (h) => {
@@ -1023,7 +1023,7 @@ function coinLeg(g, { need, click, press }) {
   endRun(g);
   draw(g, 0);
   click('over', 'continue');
-  need(g.screen === 'play' && g.sim !== run && takes(g) === 1, 'the end screen CONTINUE lays the coin back');
+  need(g.screen === 'play' && g.sim !== run && takes(g) === 0, 'the end screen CONTINUE keeps the coin taken');
   const later = reload();
   resume(later);
   keyTo(later, 'KeyY', 'y');
@@ -1571,9 +1571,9 @@ function appended(set, before) {
   return set.size > before ? [...set].slice(before) : [];
 }
 
-/** A tick took the coins `ids`: pays one each and counts them earned. */
-function collectCoin(g, ids) {
-  g.earned += commit(g, coinPay(ids));
+/** A tick took `coins`, one entry for each of its 'coin' events: pays one each and counts them earned. */
+function collectCoin(g, coins) {
+  g.earned += commit(g, coinPay(coins));
 }
 
 /**
@@ -1662,7 +1662,9 @@ function play(g) {
 
 /**
  * Starts a new run at save position p, or at tomb (0, 0)'s first entry when p
- * is null. The new sim takes no coin or jar: every one lies back.
+ * is null. The new sim keeps the coins and jars taken in the tomb it starts in
+ * and the tomb before it only when the `carry` holds them, as the end screen's
+ * Continue does. Any other start takes none, and every coin and jar lies back.
  */
 function begin(g, p = null, carry = null) {
   let start = g.world.startPoint();
@@ -1934,12 +1936,13 @@ function milestoneHit(was, count, seen) {
 function tick(g) {
   if (g.screen !== 'play') return;
   const s = g.sim;
-  const was = tombCount(s), took = s.collected.size;
+  const was = tombCount(s);
   stepSim(g);
-  // Only the step adds to these sets; a commit leaves both alone.
-  const taken = appended(s.collected, took), solvedNow = appended(s.solved, was);
+  // Only the step adds to the solved set; a commit leaves it alone. Each coin the step takes pushes
+  // one 'coin' event, which a drop of the tomb the explorer left does not undo.
+  const solvedNow = appended(s.solved, was), coins = s.events.filter((ev) => ev === 'coin');
   handleEvents(g);
-  if (taken.length) collectCoin(g, taken);
+  if (coins.length) collectCoin(g, coins);
   const pay = payTombs(g, solvedNow);
   const hit = pay && milestoneHit(was, tombCount(s), pay.seen);
   soundCues(g);

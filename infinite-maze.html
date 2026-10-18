@@ -1917,7 +1917,7 @@ function parsePaid(text) {
 /**
  * The pay rule for floor coins: 1 for each of `ids`, the coins a tick took.
  * The slot lists no coin, and the run's taken set keeps a coin from paying
- * twice in its run.
+ * twice while its tomb is one of the run's two recent tombs.
  */
 function coinPay(ids) {
   return () => ids.length;
@@ -2066,12 +2066,14 @@ return { SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, par
 const __m10 = (() => {
 const { DX, DY, BW, NCELL } = __m2;
 const { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } = __m7;
+const { tombOf } = __m5;
 const { coinId } = __m9;
 // Simulation: the explorer moves along the cell graph, so motion admits
 // exactly the tree's links. A jump is an air state of the current cell: on
 // the ground or in the air, the explorer leaves a cell only along a link or
 // door. A let-go drops from a ladder over its lower cell. Runs on a fixed
 // 60 Hz tick; no DOM.
+
 
 
 
@@ -2172,12 +2174,26 @@ function recordWalk(trail, bd, cell, d, to) {
   b.walked[to.cell] |= 1 << (d ^ 2);
 }
 
-/** Everything a Continue carries into the next run, its start tomb and continue count included. */
+/**
+ * Everything a Continue carries into the next run: its start tomb, continue
+ * count and the takes of the two recent tombs, which read as where the
+ * explorer has just been.
+ */
 function runCarry(s) {
-  return { time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail, start: s.start, continues: s.continues };
+  return {
+    time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail, start: s.start, continues: s.continues,
+    recent: s.recent, collected: s.collected, jars: s.jars,
+  };
 }
 
 const tombKey = (bd) => `${bd.u},${bd.v}`;
+
+/** The tomb "u,v" holding the board that coin or jar id `x,y,n` names. */
+function idTomb(world, id) {
+  const [x, y] = id.split(',', 2).map(Number);
+  const t = tombOf(x, y, world.size);
+  return `${t.u},${t.v}`;
+}
 
 /**
  * True when tomb (u, v) lies on the run's way on: its start tomb, the tomb
@@ -2204,11 +2220,19 @@ function tombCount(s) {
 }
 
 /**
- * A run from `start` = { board, cell }, standing on the door's cell. `collected`
- * is the run's set of the coin ids (`coinId`) taken so far, empty for a new
- * run; the sim adds an id on each pickup and touches no storage.
+ * A run from `start` = { board, cell }, standing on the door's cell. The run
+ * remembers the takes of its two recent tombs, latest first: the one it stands
+ * in and the one before. `collected` is the set of the coin ids (`coinId`) and
+ * `jars` the set of the jar ids taken in those tombs; the sim adds an id on
+ * each pickup, drops a tomb's ids when it leaves the recent tombs and touches
+ * no storage. A carry's recent tombs and takes apply to the tomb the sim
+ * starts in: when it is one of them it moves to the front and both stay;
+ * otherwise it comes first, the carried latest follows and the older tomb's
+ * takes lie back.
  */
 function createSim(world, start, carry = null, { collected = new Set() } = {}) {
+  const here = tombKey(start.board);
+  const recent = [here, ...(carry && carry.recent ? carry.recent.filter((key) => key !== here) : [])].slice(0, 2);
   const s = {
     world, bd: start.board, cell: start.cell,
     mode: 'floor', off: 0, alt: 0, vy: 0, link: -1, to: null, prog: 0, len: 0,
@@ -2228,11 +2252,17 @@ function createSim(world, start, carry = null, { collected = new Set() } = {}) {
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
     },
     collected,
-    // The oil jars taken this run, keyed as coins are; a new sim starts empty.
+    // The oil jars taken in the recent tombs, keyed as coins are.
     jars: new Set(),
+    // The recent tombs' keys "u,v", the explorer's tomb first.
+    recent,
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
+  if (carry) {
+    for (const id of carry.collected || []) if (recent.includes(idTomb(world, id))) collected.add(id);
+    for (const id of carry.jars || []) if (recent.includes(idTomb(world, id))) s.jars.add(id);
+  }
   s.wayOn = { u: s.start.u, v: s.start.v, tombs: new Set([`${s.start.u},${s.start.v}`]) };
   recordStood(s.trail, s.bd, s.cell);
   return s;
@@ -2288,10 +2318,30 @@ function engage(s, d, prog = 0) {
   s.dismount = 0;
 }
 
+/** Removes the ids of tomb `key` from take set `set`. */
+function forget(s, set, key) {
+  for (const id of set) if (idTomb(s.world, id) === key) set.delete(id);
+}
+
+/**
+ * The explorer moves from tomb `from` to the tomb of `bd`: the list becomes
+ * [bd's tomb, from], and a tomb that leaves it lays its takes back.
+ */
+function enterTomb(s, from, bd) {
+  const recent = [tombKey(bd), tombKey(from)];
+  for (const key of s.recent) {
+    if (recent.includes(key)) continue;
+    forget(s, s.collected, key);
+    forget(s, s.jars, key);
+  }
+  s.recent = recent;
+}
+
 /**
  * Crossing a seam. A tomb is solved when the explorer leaves it through its
  * exit door and it lies on the run's way on; a tomb upstream of that way
- * never counts, whatever door the explorer used.
+ * never counts, whatever door the explorer used. A change of tomb moves the
+ * recent tombs.
  */
 function enterBoard(s, bd) {
   if (bd === s.bd) return;
@@ -2305,6 +2355,7 @@ function enterBoard(s, bd) {
       s.solved.add(key);
       s.events.push('solved');
     }
+    enterTomb(s, from, bd);
   }
   if (bd.entry && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
 }
@@ -2535,7 +2586,10 @@ function flameTouch(s) {
   return false;
 }
 
-/** Takes each untaken coin the feet touch, dead-end or row, once, pushing 'coin' for it. */
+/**
+ * Takes each untaken coin the feet touch, dead-end or row, pushing 'coin' for
+ * it. A coin stays taken while its tomb is one of the recent tombs.
+ */
 function coinTouch(s) {
   const [fx, fy] = feet(s);
   for (const bd of touchBoards(s)) {
@@ -2564,9 +2618,9 @@ function coinTouch(s) {
 }
 
 /**
- * Takes each untaken oil jar the feet touch, once per run: burn rises by JAR_S
- * to at most BURN_S, an ember ends, and the event is a brazier's. It runs ahead
- * of the tick's own burn.
+ * Takes each untaken oil jar the feet touch, while its tomb stays recent: burn
+ * rises by JAR_S to at most BURN_S, an ember ends, and the event is a
+ * brazier's. It runs ahead of the tick's own burn.
  */
 function jarTouch(s) {
   const [fx, fy] = feet(s);
@@ -7259,9 +7313,9 @@ function coinLeg(g, { need, click, press }) {
   need(slot.level === 'medium' && storedCoins().length === 0, 'a touched coin stores the wallet and no coin in the slot');
   need(realUntouched(), 'the self-test leaves the real wallet untouched');
 
-  // Step 2: the coin stays gone for the rest of its run, and lies back on every new run. Each walk to it
-  // starts with the feet out of reach, so the walk runs ticks, and the coins it takes are the pickups the
-  // sim reports, which no merge of the wallet changes.
+  // Step 2: the coin stays taken through pause, the title and the end screen's CONTINUE, and lies back after
+  // a reload and on BEGIN. Each walk to it starts with the feet out of reach, so the walk runs ticks, and
+  // the coins it takes are the pickups the sim reports, which no merge of the wallet changes.
   const origin = g.world.startPoint(), home = { x: origin.board.x, y: origin.board.y, cell: origin.cell };
   const spot = itemPoint(coin);
   const takes = (h) => {
@@ -7281,7 +7335,7 @@ function coinLeg(g, { need, click, press }) {
   endRun(g);
   draw(g, 0);
   click('over', 'continue');
-  need(g.screen === 'play' && g.sim !== run && takes(g) === 1, 'the end screen CONTINUE lays the coin back');
+  need(g.screen === 'play' && g.sim !== run && takes(g) === 0, 'the end screen CONTINUE keeps the coin taken');
   const later = reload();
   resume(later);
   keyTo(later, 'KeyY', 'y');
@@ -7829,9 +7883,9 @@ function appended(set, before) {
   return set.size > before ? [...set].slice(before) : [];
 }
 
-/** A tick took the coins `ids`: pays one each and counts them earned. */
-function collectCoin(g, ids) {
-  g.earned += commit(g, coinPay(ids));
+/** A tick took `coins`, one entry for each of its 'coin' events: pays one each and counts them earned. */
+function collectCoin(g, coins) {
+  g.earned += commit(g, coinPay(coins));
 }
 
 /**
@@ -7920,7 +7974,9 @@ function play(g) {
 
 /**
  * Starts a new run at save position p, or at tomb (0, 0)'s first entry when p
- * is null. The new sim takes no coin or jar: every one lies back.
+ * is null. The new sim keeps the coins and jars taken in the tomb it starts in
+ * and the tomb before it only when the `carry` holds them, as the end screen's
+ * Continue does. Any other start takes none, and every coin and jar lies back.
  */
 function begin(g, p = null, carry = null) {
   let start = g.world.startPoint();
@@ -8192,12 +8248,13 @@ function milestoneHit(was, count, seen) {
 function tick(g) {
   if (g.screen !== 'play') return;
   const s = g.sim;
-  const was = tombCount(s), took = s.collected.size;
+  const was = tombCount(s);
   stepSim(g);
-  // Only the step adds to these sets; a commit leaves both alone.
-  const taken = appended(s.collected, took), solvedNow = appended(s.solved, was);
+  // Only the step adds to the solved set; a commit leaves it alone. Each coin the step takes pushes
+  // one 'coin' event, which a drop of the tomb the explorer left does not undo.
+  const solvedNow = appended(s.solved, was), coins = s.events.filter((ev) => ev === 'coin');
   handleEvents(g);
-  if (taken.length) collectCoin(g, taken);
+  if (coins.length) collectCoin(g, coins);
   const pay = payTombs(g, solvedNow);
   const hit = pay && milestoneHit(was, tombCount(s), pay.seen);
   soundCues(g);

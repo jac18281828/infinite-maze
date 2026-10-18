@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { worlds, sample } from './sample.mjs';
-import { DX, DY } from '../src/world/board.mjs';
-import { floorItems, itemSpot, coinRows, rowSpot } from '../src/world/floor.mjs';
+import { DX, DY, NCELL } from '../src/world/board.mjs';
+import { boardCoords, tombOf } from '../src/world/world.mjs';
+import { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } from '../src/world/floor.mjs';
 import { textWidth } from '../src/game/touch.mjs';
-import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges } from '../src/game/sim.mjs';
+import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges, BURN_S } from '../src/game/sim.mjs';
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
   SLOT_KEY, LEGACY_KEYS, COIN_RATE, TOMB_ID, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot,
@@ -588,4 +589,176 @@ test('drawOver draws a COINS row inside its panel, 11 px from the y of every oth
   for (const r of rows) assert.ok(r.y >= py + 3 && r.y + r.h <= py + ph - 3, `${r.text} at ${r.y} lies inside the panel ${py}..${py + ph}`);
   assert.ok(px <= 40 && px + pw >= 280, 'the panel keeps its x extents');
   for (const other of rows.filter((r) => r !== coins[0])) assert.ok(Math.abs(other.y - y) >= 11, `${other.text} at ${other.y}`);
+});
+
+/** The items of tomb `key` from floorItems and coinRows: jars, dead-end coins, then row coins. */
+function orderOf(world, key) {
+  const [u, v] = key.split(',').map(Number);
+  const jars = [], coins = [], rows = [];
+  for (let i = 0; i < world.size.w * world.size.h; i++) {
+    const { x, y } = boardCoords(u, v, i, world.size);
+    const bd = world.board(x, y);
+    for (const it of floorItems(world, bd)) (it.kind === 'oil' ? jars : coins).push(coinId(bd, it.cell));
+    for (const cell of coinRows(world, bd)) for (let k = 0; k < ROW_COINS; k++) rows.push(coinId(bd, cell, k));
+  }
+  return { ids: [...jars, ...coins, ...rows], jars: jars.length };
+}
+
+/** Board, cell and floor point of coin or jar `id`: `x,y,cell` for a dead end, `x,y,NCELL + 3 cell + i` for a row coin. */
+function locate(world, id) {
+  const [x, y, n] = id.split(',').map(Number);
+  const bd = world.board(x, y);
+  if (n < NCELL) return { bd, cell: n, spot: itemSpot(bd, n) };
+  const cell = Math.floor((n - NCELL) / ROW_COINS);
+  return { bd, cell, spot: rowSpot(bd, cell, (n - NCELL) % ROW_COINS) };
+}
+
+const tombKeyOf = (world, id) => {
+  const [x, y] = id.split(',').map(Number);
+  const t = tombOf(x, y, world.size);
+  return `${t.u},${t.v}`;
+};
+
+/**
+ * The self-test seed's way on: A = (0, 0), B the tomb A's exit leads to, C the
+ * tomb B's exit leads to, `qa` and `qb` the cells across A's and B's exit doors,
+ * and `gate` the cell of A's exit board that its exit door opens from.
+ */
+function route(world) {
+  const away = (t) => { const d = world.exit(t.u, t.v); return { u: t.u + DX[d], v: t.v + DY[d] }; };
+  const key = (t) => `${t.u},${t.v}`;
+  const a = { u: 0, v: 0 }, b = away(a), c = away(b);
+  const same = (m, n) => m.x === n.x && m.y === n.y && m.cell === n.cell;
+  const qa = world.tombFlames(a.u, a.v).chains[0].at(-1);
+  const qb = world.tombFlames(b.u, b.v).chains.find((chain) => same(chain[0], qa)).at(-1);
+  const t = world.tomb(a.u, a.v);
+  const at = boardCoords(a.u, a.v, t.X, world.size), xb = world.board(at.x, at.y);
+  const gate = { x: xb.x, y: xb.y, cell: xb.doors.find((d) => d.dir === t.exit).cell };
+  return { A: key(a), B: key(b), C: key(c), qa, qb, gate };
+}
+
+/** The tomb `key`'s first entry, where a restore of a serial in the tomb starts. */
+function entryOf(world, key) {
+  const [u, v] = key.split(',').map(Number);
+  const at = boardCoords(u, v, world.tomb(u, v).entries[0], world.size);
+  return world.resumePoint(at.x, at.y);
+}
+
+/**
+ * Steers `sim` by `input` until `done()`, tick by tick. The torch is set to
+ * `pin` before every tick, so `sim.burn` after the walk is the last tick's
+ * burn. `each` runs after every tick.
+ */
+function drive(sim, input, done, each = () => {}, pin = BURN_S) {
+  let ph = 0, pv = 0;
+  for (let i = 0; i < 60000 && !done(); i++) {
+    const [h, v, jump] = input(sim);
+    sim.burn = pin;
+    step(sim, h, v, jump, inputEdges(ph, pv, h, v));
+    ph = h;
+    pv = v;
+    each();
+  }
+  assert.ok(done(), 'the walk ends within its ticks');
+}
+
+/** Walks `sim` along the cells `goals`, to the last one. */
+function walkCells(sim, goals, each, pin) {
+  const last = goals.at(-1), auto = createAutopilot(sim.world, goals);
+  drive(sim, auto, () => sim.bd.x === last.x && sim.bd.y === last.y && sim.cell === last.cell && sim.mode === 'floor', each, pin);
+}
+
+/** Walks `sim` to the cell of item `id`, then toward its floor point until the feet come within 12 px of it. */
+function reach(sim, id, each, pin) {
+  const { bd, cell, spot } = locate(sim.world, id);
+  const side = Math.sign(spot[0] - nodeXY(bd, cell)[0]);
+  const auto = createAutopilot(sim.world, [{ x: bd.x, y: bd.y, cell }]);
+  const here = (s) => s.bd.x === bd.x && s.bd.y === bd.y && s.cell === cell && s.mode === 'floor';
+  const near = () => { const [fx, fy] = feet(sim); return Math.abs(fx - spot[0]) <= 12 && Math.abs(fy - spot[1]) <= 12; };
+  drive(sim, (s) => (here(s) ? [side, 0, false] : auto(s)), near, each, pin);
+}
+
+/**
+ * A per-tick check: the step pushed one 'coin' event for each coin id it added,
+ * which the game's tick counts; the recent tombs lead with the explorer's tomb;
+ * and every take lies in a recent tomb.
+ */
+function coinEvents(sim) {
+  let before = new Set(sim.collected);
+  return () => {
+    const gained = [...sim.collected].filter((id) => !before.has(id)).length;
+    assert.equal(sim.events.filter((ev) => ev === 'coin').length, gained, 'one coin event for each coin taken');
+    before = new Set(sim.collected);
+    assert.equal(sim.recent[0], `${sim.bd.u},${sim.bd.v}`, 'the explorer\'s tomb leads');
+    assert.ok([...sim.collected, ...sim.jars].every((id) => sim.recent.includes(tombKeyOf(sim.world, id))), 'every take lies in a recent tomb');
+  };
+}
+
+test('a run keeps the coins and jars of its two recent tombs: A, B, A keeps both takes, A, B, C lays A\'s back and the walk back takes them afresh', () => {
+  const world = worlds.medium, { A, B, C, qa, qb, gate } = route(world);
+  const { ids, jars } = orderOf(world, A);
+  const coin = ids[jars], jar = ids[0];
+  assert.equal(tombKeyOf(world, coin), A);
+  const sim = createSim(world, world.startPoint());
+  const seen = coinEvents(sim);
+  assert.deepEqual(sim.recent, [A]);
+  reach(sim, coin, seen);
+  reach(sim, jar, seen);
+  assert.ok(sim.collected.has(coin) && sim.jars.has(jar), 'a coin and a jar of A taken');
+  walkCells(sim, [qa], seen);
+  assert.deepEqual(sim.recent, [B, A]);
+  walkCells(sim, [gate], seen);
+  assert.deepEqual(sim.recent, [A, B]);
+  assert.ok(sim.collected.has(coin) && sim.jars.has(jar), 'A, B, A keeps both takes');
+  walkCells(sim, [qa, qb], seen);
+  assert.deepEqual(sim.recent, [C, B]);
+  assert.ok(!sim.collected.has(coin) && !sim.jars.has(jar), 'A, B, C lays A\'s takes back');
+  assert.ok([...sim.collected, ...sim.jars].every((id) => tombKeyOf(world, id) !== A), 'no id of A is left');
+  // The walk back takes the coin once, with one coin event, and the jar again.
+  const hits = [];
+  reach(sim, coin, () => {
+    seen();
+    if (!hits.length && sim.collected.has(coin)) hits.push(sim.events.filter((ev) => ev === 'coin').length);
+  });
+  assert.deepEqual(hits, [1], 'the coin\'s take raises one coin event');
+  assert.ok(!sim.jars.has(jar), 'the jar still lies on its floor');
+  reach(sim, jar, seen);
+  assert.ok(sim.jars.has(jar), 'the jar is taken again');
+  assert.deepEqual(sim.recent, [A, B]);
+});
+
+test('a sim built from a carry applies the recent tombs to the tomb it starts in', () => {
+  const world = worlds.medium, { A, B, C } = route(world);
+  const pick = (key) => { const { ids, jars } = orderOf(world, key); return { coin: ids[jars], jar: ids[0] }; };
+  const a = pick(A), b = pick(B);
+  const carry = () => ({ recent: [B, A], collected: new Set([a.coin, b.coin]), jars: new Set([a.jar, b.jar]) });
+  const sorted = (set) => [...set].sort();
+  // Starting in A or in B, one of the carried tombs, moves it to the front and keeps both.
+  for (const [key, recent] of [[A, [A, B]], [B, [B, A]]]) {
+    const sim = createSim(world, entryOf(world, key), carry());
+    assert.deepEqual(sim.recent, recent, key);
+    assert.deepEqual(sorted(sim.collected), [a.coin, b.coin].sort(), key);
+    assert.deepEqual(sorted(sim.jars), [a.jar, b.jar].sort(), key);
+  }
+  // Starting in C puts C first behind the carried latest, B, and lays A's takes back.
+  const c = createSim(world, entryOf(world, C), carry());
+  assert.deepEqual(c.recent, [C, B]);
+  assert.deepEqual([...c.collected], [b.coin]);
+  assert.deepEqual([...c.jars], [b.jar]);
+  // A carry with one recent tomb gives two, and the carry stays as it was.
+  const one = createSim(world, entryOf(world, B), { recent: [A], collected: new Set([a.coin]), jars: new Set() });
+  assert.deepEqual(one.recent, [B, A]);
+  assert.ok(one.collected.has(a.coin));
+  const kept = carry();
+  createSim(world, entryOf(world, C), kept);
+  assert.deepEqual([kept.recent, kept.collected.size, kept.jars.size], [[B, A], 2, 2], 'the carried sets and list are not shared');
+  // No carry, a carry without the fields and runCarry of a fresh sim give nothing taken.
+  const fresh = createSim(world, entryOf(world, B));
+  for (const sim of [fresh, createSim(world, entryOf(world, B), { time: 5 }), createSim(world, entryOf(world, B), runCarry(fresh))]) {
+    assert.deepEqual([sim.recent, sim.collected.size, sim.jars.size], [[B], 0, 0]);
+  }
+  // runCarry hands over the recent tombs and their takes.
+  const sim = createSim(world, entryOf(world, A), carry());
+  const out = runCarry(sim);
+  assert.deepEqual([out.recent, sorted(out.collected), sorted(out.jars)], [[A, B], [a.coin, b.coin].sort(), [a.jar, b.jar].sort()]);
 });

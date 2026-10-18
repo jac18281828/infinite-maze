@@ -143,17 +143,18 @@ test('walking away and back from a taken jar adds nothing', () => {
   }
 });
 
-test('a new sim, fresh or from runCarry, finds the jar back and takes it again', () => {
+test('a fresh sim finds the jar back and takes it again; a sim from runCarry in the same tomb finds it taken and adds nothing', () => {
   for (const jar of jars) {
     const first = walk(worlds.medium, jar, { burn: 100 });
     assert.equal(first.takenOn, true);
     const fresh = walk(worlds.medium, jar, { burn: 100 });
+    assert.equal(fresh.takenBefore, false, 'fresh');
     assert.equal(fresh.takenOn, true, 'fresh');
     assert.ok(near(fresh.after - fresh.before, JAR_S - TICK));
     const carried = walk(worlds.medium, jar, { burn: 100, carry: runCarry(first.sim) });
-    assert.equal(carried.takenBefore, false, 'runCarry carries no jars');
-    assert.equal(carried.takenOn, true, 'carried');
-    assert.ok(near(carried.after - carried.before, JAR_S - TICK));
-    assert.ok(!('jars' in runCarry(first.sim)));
+    assert.equal(carried.takenBefore, true, 'runCarry carries the jar');
+    assert.ok(near(carried.after - carried.before, -TICK), 'and the contact tick adds nothing');
+    assert.deepEqual([...runCarry(first.sim).jars], [first.id]);
+    assert.deepEqual([...carried.sim.jars], [first.id]);
   }
 });

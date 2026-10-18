@@ -1226,8 +1226,11 @@ test('createSim carries the trail and every field runCarry returns; a fresh run 
   s.time = 42;
   s.solved.add('3,5');
   s.continues = 3;
+  const taken = `${start.bd.x},${start.bd.y},${start.cell}`;
+  s.collected.add(taken);
+  s.jars.add(`${start.bd.x},${start.bd.y},${start.cell + 1}`);
   const c = runCarry(s);
-  assert.deepEqual(Object.keys(c).sort(), ['continues', 'lastEntry', 'solved', 'start', 'time', 'trail']);
+  assert.deepEqual(Object.keys(c).sort(), ['collected', 'continues', 'jars', 'lastEntry', 'recent', 'solved', 'start', 'time', 'trail']);
   const before = stoodCells(s);
   const next = world.resumePoint(start.bd.x, start.bd.y);
   const n = createSim(world, next, c);
@@ -1240,9 +1243,14 @@ test('createSim carries the trail and every field runCarry returns; a fresh run 
   assert.equal(n.lastEntry, s.lastEntry);
   assert.equal(n.start, s.start);
   assert.equal(n.continues, 3);
+  assert.deepEqual(n.recent, s.recent);
+  assert.deepEqual([...n.collected], [...s.collected]);
+  assert.deepEqual([...n.jars], [...s.jars]);
+  assert.notEqual(n.collected, s.collected, 'the new sim owns its sets');
   const fresh = createSim(world, next);
   assert.deepEqual(fresh.start, { u: next.board.u, v: next.board.v });
   assert.equal(fresh.continues, 0);
+  assert.deepEqual([fresh.collected.size, fresh.jars.size], [0, 0]);
   assert.equal(stoodCells(fresh), 1);
   assert.equal(walkedEnds(fresh), 0);
   assert.notEqual(fresh.trail, s.trail);

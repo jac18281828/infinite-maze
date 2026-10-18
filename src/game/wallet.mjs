@@ -93,7 +93,7 @@ export function parsePaid(text) {
 /**
  * The pay rule for floor coins: 1 for each of `ids`, the coins a tick took.
  * The slot lists no coin, and the run's taken set keeps a coin from paying
- * twice in its run.
+ * twice while its tomb is one of the run's two recent tombs.
  */
 export function coinPay(ids) {
   return () => ids.length;

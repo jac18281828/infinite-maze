@@ -591,7 +591,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['  if (o) {\n', '  if (o) {\n    g.confirm = { slot: readSlot() };\n    return;\n', /^fail: touch RESUME of an open run continues without asking/],
       ["if (e.code === 'KeyY' || e.key === 'Enter') {", "if (e.code === 'KeyY' || e.code === 'KeyN' || e.key === 'Enter') {", /^fail: touch N returns to the title with no coins/],
       ['function confirmKey(g, e) {\n  if (e.repeat) return;\n', 'function confirmKey(g, e) {\n', /^fail: touch CONTINUE\? ignores a repeated key/],
-      ['if (taken.length) collectCoin(g, taken);', 'if (false) collectCoin(g, taken);', /^fail: touch touching the first coin adds one to the wallet/],
+      ['if (coins.length) collectCoin(g, coins);', 'if (false) collectCoin(g, coins);', /^fail: touch touching the first coin adds one to the wallet/],
       ['const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1, ultimate: 10 };', /^fail: touch a tomb solved first on this device pays 5 at HARD/],
       ['      if (!tombs.has(id)) {', '      if (true) {', /^fail: touch a replay of a solved tomb pays nothing at EASY/],
       ['      if (!tombs.has(id)) {', '      if (!tombs.has(id) && count > record) {', /^fail: touch a new tomb pays under the record at EASY/],
@@ -618,7 +618,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['  if (same) {\n    state.wallet = Math.max(state.wallet, was.wallet);\n    for (const id of was.tombs) state.tombs.add(id);\n    state.record = Math.max(state.record, was.record);\n    state.continues = Math.max(state.continues, was.continues);\n  }\n', '', /^fail: touch two games on one slot keep both coins/],
       ['beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues });', 'beginSaved(g, at.p, null);', /^fail: touch RESUME after a reload continues at TOMB/],
       // A new run takes every coin back: the mutation hands the outgoing sim's taken set to the sim it creates.
-      ['g.sim = createSim(g.world, start, carry);', 'g.sim = createSim(g.world, start, carry, { collected: g.sim ? g.sim.collected : undefined });', /^fail: touch the end screen CONTINUE lays the coin back/],
+      ['g.sim = createSim(g.world, start, carry);', 'g.sim = createSim(g.world, start, carry, { collected: g.sim ? g.sim.collected : undefined });', /^fail: touch BEGIN lays the coin back/],
       // Only a death raises the continue count: Continue carries it unchanged, and the slot's write from a dead run drops its plus one.
       ['begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', 'begin(g, s.lastEntry, runCarry(s));', /^fail: touch a death and CONTINUE raise the continue count to 1/],
       ["continues: state === 'over' ? continues + 1 : continues", 'continues', /^fail: touch a second death stores 2 in the slot while the end screen shows 1/],
