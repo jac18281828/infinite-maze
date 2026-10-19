@@ -2198,7 +2198,15 @@ const TOUCH = 12;
 
 /** World position of a cell's standing point (centre, on the floor). */
 function nodeXY(bd, cell) {
-  return [bd.x * BOARD_W + (cell % BW) * CELL + 24, bd.y * BOARD_H + ((cell / BW) | 0) * CELL + 8];
+  return [nodeX(bd, cell), nodeY(bd, cell)];
+}
+
+function nodeX(bd, cell) {
+  return bd.x * BOARD_W + (cell % BW) * CELL + 24;
+}
+
+function nodeY(bd, cell) {
+  return bd.y * BOARD_H + ((cell / BW) | 0) * CELL + 8;
 }
 
 /** Light radius: the lit area, radius squared, falls linearly from 96 px full to 24 px at 10% burn. */
@@ -2645,13 +2653,24 @@ function airMove(s, h, v, dt) {
   }
 }
 
+/** Feet x in world px; allocates nothing. */
+function feetX(s) {
+  const nx = nodeX(s.bd, s.cell);
+  if (s.mode !== 'link') return nx + s.off;
+  return nx + DX[s.link] * ((CELL * s.prog) / s.len);
+}
+
+/** Feet y in world px; allocates nothing. */
+function feetY(s) {
+  const ny = nodeY(s.bd, s.cell);
+  if (s.mode === 'floor') return ny;
+  if (s.mode === 'air') return ny + s.alt;
+  return ny + DY[s.link] * ((CELL * s.prog) / s.len);
+}
+
 /** Feet position in world px. */
 function feet(s) {
-  const [nx, ny] = nodeXY(s.bd, s.cell);
-  if (s.mode === 'floor') return [nx + s.off, ny];
-  if (s.mode === 'air') return [nx + s.off, ny + s.alt];
-  const k = (CELL * s.prog) / s.len;
-  return [nx + DX[s.link] * k, ny + DY[s.link] * k];
+  return [feetX(s), feetY(s)];
 }
 
 /** The boards the feet touch: the current one, and the far one while a link crosses a seam. */
@@ -2787,26 +2806,26 @@ function pose(s) {
   if (s.burn <= 0) return { anim: 'gasp', frame: Math.floor(s.time * 3) % 2 };
   return { anim: 'idle', frame: Math.floor(s.time * 4) % 4 };
 }
-return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, JAR_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, runCarry, tombCount, createSim, canGo, feet, step, pose };
+return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, JAR_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, runCarry, tombCount, createSim, canGo, feetX, feetY, feet, step, pose };
 })();
 
 // src/game/camera.mjs
 const __m11 = (() => {
-const { feet } = __m10;
+const { feetX, feetY } = __m10;
 // The camera: where it follows the explorer and which whole-pixel camera a frame draws at.
 
 
 function snapCam(cam, sim) {
-  const [x, y] = feet(sim);
-  cam.x = x;
-  cam.y = y + 18;
+  cam.x = feetX(sim);
+  cam.y = feetY(sim) + 18;
 }
 
 /**
  * The whole-pixel camera `[cx, cy]` a frame draws at. With the explorer at
  * feet `at` the offset from the camera rounds once, so the sprite stands
- * round(at.x - cam.x) right of the view centre and round(cam.y - at.y) below
- * it, on the world pixel round(at). A whole camera comes back unchanged.
+ * round(at[0] - cam.x) right of the view centre and round(cam.y - at[1]) below
+ * it, on the world column round(at[0]) and row -round(-at[1]). A whole camera
+ * comes back unchanged.
  * With no explorer the camera rounds as is.
  */
 function pixelCam(cam, at) {
@@ -2817,20 +2836,32 @@ function pixelCam(cam, at) {
   ];
 }
 
+/** `pixelCam`'s x for the explorer `sim` (none: the camera as is); allocates nothing. */
+function pixelCamX(cam, sim) {
+  if (!sim) return Math.round(cam.x);
+  const x = feetX(sim);
+  return Math.round(x) - Math.round(x - cam.x);
+}
+
+/** `pixelCam`'s y for the explorer `sim` (none: the camera as is); allocates nothing. */
+function pixelCamY(cam, sim) {
+  if (!sim) return Math.round(cam.y);
+  const y = feetY(sim);
+  return Math.round(cam.y - y) - Math.round(-y);
+}
+
 // Lerp toward a target held inside a deadzone around the view centre. An axis the
 // deadzone holds stores its whole-pixel camera, so the world stands still.
 function followCam(cam, sim) {
-  const at = feet(sim);
-  const [x, y] = at;
-  const tx = x, ty = y + 18;
+  const tx = feetX(sim), ty = feetY(sim) + 18;
   let gx = cam.x, gy = cam.y;
   if (tx - cam.x > 20) gx = tx - 20; else if (cam.x - tx > 20) gx = tx + 20;
   if (ty - cam.y > 12) gy = ty - 12; else if (cam.y - ty > 12) gy = ty + 12;
-  const [px, py] = pixelCam(cam, at);
+  const px = pixelCamX(cam, sim), py = pixelCamY(cam, sim);
   if (gx === cam.x) cam.x = px; else cam.x += (gx - cam.x) * 0.16;
   if (gy === cam.y) cam.y = py; else cam.y += (gy - cam.y) * 0.16;
 }
-return { snapCam, pixelCam, followCam };
+return { snapCam, pixelCam, pixelCamX, pixelCamY, followCam };
 })();
 
 // src/game/art.mjs
@@ -4392,7 +4423,7 @@ return { mapCells, frameOf, panFrame, sameFrame, mapModel };
 // src/game/render.mjs
 const __m18 = (() => {
 const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS } = __m12;
-const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m10;
+const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feetX, feetY, pose, BURN_S } = __m10;
 const { BW, BH, DX, DY } = __m2;
 const { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } = __m13;
 const { boardOfPos } = __m5;
@@ -4402,7 +4433,7 @@ const { coinId } = __m9;
 const { boardMask } = __m15;
 const { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } = __m16;
 const { mapCells } = __m17;
-const { pixelCam } = __m11;
+const { pixelCamX, pixelCamY } = __m11;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 
@@ -4893,7 +4924,7 @@ function createRenderer(canvas, world) {
 
   /** Draws the explorer and adds the torch light; returns the torch tip on screen. */
   function drawExplorer(sim, sx, sy, t) {
-    const [fx, fy] = feet(sim);
+    const fx = feetX(sim), fy = feetY(sim);
     const { anim, frame } = pose(sim);
     const flip = sim.facing < 0;
     const px = Math.round(sx(fx)) - 8, py = Math.round(sy(fy)) - 24;
@@ -4935,7 +4966,7 @@ function createRenderer(canvas, world) {
    * world pixel.
    */
   function scene(sim, cam, t) {
-    const [cx, cy] = pixelCam(cam, sim ? feet(sim) : null);
+    const cx = pixelCamX(cam, sim), cy = pixelCamY(cam, sim);
     const sx = (wx) => wx - cx + VIEW_W / 2;
     const sy = (wy) => cy - wy + VIEW_H / 2;
     const unsx = (px) => px + cx - VIEW_W / 2;

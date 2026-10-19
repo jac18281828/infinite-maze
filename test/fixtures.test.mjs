@@ -1174,8 +1174,9 @@ test('hud draws the wallet under TOMB n: the coin sprite, then the count right-a
 });
 
 // The camera.
-const camBoard = boards.find(({ bd }) => bd.links.some((m, c) => m && c % BW === 6 && ((c / BW) | 0) === 3)).bd;
-const camCell = camBoard.links.findIndex((m, c) => m && c % BW === 6 && ((c / BW) | 0) === 3);
+const camMid = (m, c) => m && c % BW === 6 && ((c / BW) | 0) === 3;
+const camBoard = boards.find(({ bd }) => bd.links.some(camMid)).bd;
+const camCell = camBoard.links.findIndex(camMid);
 const camMotions = [
   { name: 'run east', place: (s, k) => { s.facing = 1; s.off = RUN_SPEED * TICK * k; } },
   { name: 'run west', place: (s, k) => { s.facing = -1; s.off = -RUN_SPEED * TICK * k; } },
@@ -1184,8 +1185,7 @@ const camMotions = [
 ];
 for (const { name, place } of camMotions) {
   test(`the explorer and its torch tip hold one view position along a ${name} at the steady lag, on the world pixel its feet round to`, () => {
-    const bd = camBoard;
-    const sim = createSim(world, { board: bd, cell: camCell });
+    const sim = createSim(world, { board: camBoard, cell: camCell });
     const cam = { x: 0, y: 0 };
     place(sim, 0);
     snapCam(cam, sim);
@@ -1195,14 +1195,14 @@ for (const { name, place } of camMotions) {
       place(sim, k);
       followCam(cam, sim);
       const [fx, fy] = feet(sim);
-      const { art, tip } = renderBoard(bd, sim, cam, 0);
+      const { art, tip } = renderBoard(camBoard, sim, cam, 0);
       const sprites = view.draws.filter(([src, ...a]) => src.width === 16 && src.height === 24 && a.length === 2);
       assert.equal(sprites.length, 1, 'one explorer sprite');
       const [, sx, sy] = sprites[0];
       const board = view.draws.find(([src]) => src === art);
-      assert.equal(sx - board[1], Math.round(fx) - 8 - bd.x * 576, `feet ${fx}: left edge on the world pixel`);
+      assert.equal(sx - board[1], Math.round(fx) - 8 - camBoard.x * 576, `feet ${fx}: left edge on the world pixel`);
       // The sprite's bottom row is the world row of the feet.
-      assert.equal(bd.y * 336 + 335 - (sy + 23 - board[2]), -Math.round(-fy), `feet ${fy}: feet on the world row`);
+      assert.equal(camBoard.y * 336 + 335 - (sy + 23 - board[2]), -Math.round(-fy), `feet ${fy}: feet on the world row`);
       seen.add(`${sx},${sy},${tip}`);
     }
     assert.equal(seen.size, 1, `sprite and torch tip stand at ${[...seen].join(' | ')}`);

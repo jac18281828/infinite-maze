@@ -4,7 +4,7 @@ import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
   BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS,
 } from './art.mjs';
-import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } from './sim.mjs';
+import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feetX, feetY, pose, BURN_S } from './sim.mjs';
 import { BW, BH, DX, DY } from '../world/board.mjs';
 import { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
@@ -14,7 +14,7 @@ import { coinId } from './wallet.mjs';
 import { boardMask } from './mask.mjs';
 import { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
-import { pixelCam } from './camera.mjs';
+import { pixelCamX, pixelCamY } from './camera.mjs';
 
 export const VIEW_W = 320;
 export const VIEW_H = 180;
@@ -491,7 +491,7 @@ export function createRenderer(canvas, world) {
 
   /** Draws the explorer and adds the torch light; returns the torch tip on screen. */
   function drawExplorer(sim, sx, sy, t) {
-    const [fx, fy] = feet(sim);
+    const fx = feetX(sim), fy = feetY(sim);
     const { anim, frame } = pose(sim);
     const flip = sim.facing < 0;
     const px = Math.round(sx(fx)) - 8, py = Math.round(sy(fy)) - 24;
@@ -533,7 +533,7 @@ export function createRenderer(canvas, world) {
    * world pixel.
    */
   function scene(sim, cam, t) {
-    const [cx, cy] = pixelCam(cam, sim ? feet(sim) : null);
+    const cx = pixelCamX(cam, sim), cy = pixelCamY(cam, sim);
     const sx = (wx) => wx - cx + VIEW_W / 2;
     const sy = (wy) => cy - wy + VIEW_H / 2;
     const unsx = (px) => px + cx - VIEW_W / 2;

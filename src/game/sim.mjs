@@ -48,7 +48,15 @@ const TOUCH = 12;
 
 /** World position of a cell's standing point (centre, on the floor). */
 export function nodeXY(bd, cell) {
-  return [bd.x * BOARD_W + (cell % BW) * CELL + 24, bd.y * BOARD_H + ((cell / BW) | 0) * CELL + 8];
+  return [nodeX(bd, cell), nodeY(bd, cell)];
+}
+
+function nodeX(bd, cell) {
+  return bd.x * BOARD_W + (cell % BW) * CELL + 24;
+}
+
+function nodeY(bd, cell) {
+  return bd.y * BOARD_H + ((cell / BW) | 0) * CELL + 8;
 }
 
 /** Light radius: the lit area, radius squared, falls linearly from 96 px full to 24 px at 10% burn. */
@@ -495,13 +503,24 @@ function airMove(s, h, v, dt) {
   }
 }
 
+/** Feet x in world px; allocates nothing. */
+export function feetX(s) {
+  const nx = nodeX(s.bd, s.cell);
+  if (s.mode !== 'link') return nx + s.off;
+  return nx + DX[s.link] * ((CELL * s.prog) / s.len);
+}
+
+/** Feet y in world px; allocates nothing. */
+export function feetY(s) {
+  const ny = nodeY(s.bd, s.cell);
+  if (s.mode === 'floor') return ny;
+  if (s.mode === 'air') return ny + s.alt;
+  return ny + DY[s.link] * ((CELL * s.prog) / s.len);
+}
+
 /** Feet position in world px. */
 export function feet(s) {
-  const [nx, ny] = nodeXY(s.bd, s.cell);
-  if (s.mode === 'floor') return [nx + s.off, ny];
-  if (s.mode === 'air') return [nx + s.off, ny + s.alt];
-  const k = (CELL * s.prog) / s.len;
-  return [nx + DX[s.link] * k, ny + DY[s.link] * k];
+  return [feetX(s), feetY(s)];
 }
 
 /** The boards the feet touch: the current one, and the far one while a link crosses a seam. */

@@ -1,9 +1,10 @@
+import v8 from 'node:v8';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld } from '../src/world/world.mjs';
 import { BW } from '../src/world/board.mjs';
 import { createSim, feet, TICK, RUN_SPEED, LADDER_SPEED, CELL } from '../src/game/sim.mjs';
-import { snapCam, followCam, pixelCam } from '../src/game/camera.mjs';
+import { snapCam, followCam, pixelCam, pixelCamX, pixelCamY } from '../src/game/camera.mjs';
 
 const world = createWorld('00000000');
 const mid = (m, c) => m && c % BW === 6 && ((c / BW) | 0) === 3;
@@ -16,10 +17,10 @@ const cell = bd.links.findIndex(mid);
 const run = RUN_SPEED * TICK, climb = LADDER_SPEED * TICK;
 
 /**
- * Drives the camera through a motion that turns at once. `place(sim, k)` puts
- * the feet for tick k of the motion; `held(f, cam)` tells whether the deadzone
- * holds the camera on the motion's axis. Returns the pixelCam value of every
- * held tick after the turn.
+ * Drives the camera through a motion that turns at once. `first(sim, k)` and
+ * `second(sim, k)` put the feet for tick k of the first and the second motion;
+ * `held(f, cam)` tells whether the deadzone holds the camera on the motion's
+ * axis. Returns the pixelCam value of every held tick after the turn.
  */
 function turn(first, second, held) {
   const sim = createSim(world, { board: bd, cell });
@@ -45,7 +46,8 @@ test('a run that turns at once draws one world position while the deadzone holds
   const west = (s, k) => { s.facing = -1; s.off = run * 60 - run * k; };
   const span = turn(east, west, heldX);
   assert.ok(span.length >= 10, `held ${span.length} ticks`);
-  assert.deepEqual([...new Set(span.map(String))].length, 1, `the world steps: ${[...new Set(span.map(String))].join(' | ')}`);
+  const seen = new Set(span.map(String));
+  assert.equal(seen.size, 1, `the world steps: ${[...seen].join(' | ')}`);
 });
 
 test('a climb that turns at once draws one world position while the deadzone holds the camera', () => {
@@ -54,7 +56,8 @@ test('a climb that turns at once draws one world position while the deadzone hol
   const down = (s, k) => { s.cell = cell + BW; s.mode = 'link'; s.link = 3; s.len = CELL; s.prog = climb * k; };
   const span = turn(up, down, heldY);
   assert.ok(span.length >= 10, `held ${span.length} ticks`);
-  assert.deepEqual([...new Set(span.map(String))].length, 1, `the world steps: ${[...new Set(span.map(String))].join(' | ')}`);
+  const seen = new Set(span.map(String));
+  assert.equal(seen.size, 1, `the world steps: ${[...seen].join(' | ')}`);
 });
 
 test('pixelCam returns a whole camera unchanged for feet on a grid that includes the half pixel, and rounds the camera without an explorer', () => {
@@ -72,4 +75,66 @@ test('pixelCam returns a whole camera unchanged for feet on a grid that includes
   }
   assert.deepEqual(pixelCam({ x: 3.4, y: -7.6 }, null), [3, -8]);
   assert.deepEqual(pixelCam({ x: 2.5, y: 0.5 }, null), [3, 1]);
+});
+
+test('the camera step equals pixelCam of the feet in floor, air and link modes, and of no explorer', () => {
+  const fractions = [0, 0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9];
+  const sim = createSim(world, { board: bd, cell });
+  const place = {
+    floor: (a) => { sim.mode = 'floor'; sim.off = a * 10 - 5; },
+    air: (a, b) => { sim.mode = 'air'; sim.off = a * 10 - 5; sim.alt = b * 7; },
+    link: (a) => { sim.mode = 'link'; sim.link = 1; sim.len = CELL; sim.prog = a * 7; },
+  };
+  const cams = [{ x: -300.5, y: -80.25 }, { x: 0, y: 0 }, { x: 7.5, y: 3.4 }, { x: 1234.75, y: 999.5 }];
+  for (const mode of ['floor', 'air', 'link']) {
+    for (const a of fractions) {
+      for (const b of fractions) {
+        place[mode](a, b);
+        for (const cam of cams) {
+          const want = pixelCam(cam, feet(sim));
+          assert.deepEqual([pixelCamX(cam, sim), pixelCamY(cam, sim)], want, `${mode} (${a}, ${b}) cam (${cam.x}, ${cam.y})`);
+        }
+      }
+    }
+  }
+  for (const cam of [{ x: 3.4, y: -7.6 }, { x: 2.5, y: 0.5 }]) {
+    assert.deepEqual([pixelCamX(cam, null), pixelCamY(cam, null)], pixelCam(cam, null));
+  }
+});
+
+const allocated = () => v8.getHeapStatistics().total_allocated_bytes;
+
+/** The least bytes a call of `step` allocates over 3 windows of 100,000 calls, after a warm-up of as many. */
+function bytesPerCall(step) {
+  for (let i = 0; i < 100000; i++) step();
+  const per = [];
+  for (let w = 0; w < 3; w++) {
+    const before = allocated();
+    for (let i = 0; i < 100000; i++) step();
+    per.push((allocated() - before) / 100000);
+  }
+  return Math.min(...per);
+}
+
+/** A steady explorer on the floor at a half pixel, and a camera that holds it. */
+function steady() {
+  const sim = createSim(world, { board: bd, cell });
+  sim.off = 0.5;
+  const cam = { x: 0, y: 0 };
+  snapCam(cam, sim);
+  return { sim, cam };
+}
+
+test('the frame\'s camera step allocates under 32 bytes a call', () => {
+  const { sim, cam } = steady();
+  let sink = 0;
+  const per = bytesPerCall(() => { sink += pixelCamX(cam, sim) + pixelCamY(cam, sim); });
+  assert.ok(sink !== 0);
+  assert.ok(per < 32, `${per} bytes a call`);
+});
+
+test('followCam allocates under 32 bytes a call', () => {
+  const { sim, cam } = steady();
+  const per = bytesPerCall(() => followCam(cam, sim));
+  assert.ok(per < 32, `${per} bytes a call`);
 });

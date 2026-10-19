@@ -276,7 +276,7 @@ function explorer(world, burn) {
   return { sim, cam: { x, y } };
 }
 
-test('a steady play frame allocates under 8 KB', () => {
+test('a steady play frame allocates under 8 KB', (t) => {
   withDocument(() => nullCanvas(), () => {
     const world = createWorld(CODE, { difficulty: 'medium' });
     const renderer = createRenderer(nullCanvas(), world);
@@ -285,6 +285,7 @@ test('a steady play frame allocates under 8 KB', () => {
     const before = allocated();
     for (let f = 5000; f < 10000; f++) renderer.scene(sim, cam, f / 60);
     const per = (allocated() - before) / 5000;
+    t.diagnostic(`${per.toFixed(0)} bytes a frame`);
     assert.ok(per < 8192, `${per.toFixed(0)} bytes a frame`);
   });
 });
