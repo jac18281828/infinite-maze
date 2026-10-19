@@ -1010,9 +1010,15 @@ panel ignores auto-repeated keydowns, so a held key answers nothing, and
 ignores every other key, Space and P included, except M, which mutes as on
 every screen.
 
-**Camera.** Follows the explorer with a lerp and a deadzone, snapped to whole
-pixels. It scrolls freely across board seams, and rock fills every position
-outside the band trees.
+**Camera.** The camera follows the explorer with a lerp and a deadzone. The
+frame draws at a whole-pixel camera derived from the explorer's feet `f`,
+`round(f.x) − round(f.x − cam.x)` across and `round(cam.y − f.y) − round(−f.y)`
+up, so a steady lag draws the explorer and its torch light at one screen
+position, on the world pixel its feet round to. A camera the deadzone holds
+stores that whole-pixel position, so the world stands still while the explorer
+moves inside the deadzone. With no explorer the camera rounds as is. It scrolls
+freely across board seams, and rock fills every position outside the band
+trees.
 
 **Explorer.** A khaki-clad figure in a fedora, carrying a torch, with these
 animations:

@@ -14,6 +14,7 @@ import { coinId } from './wallet.mjs';
 import { boardMask } from './mask.mjs';
 import { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
+import { pixelCam } from './camera.mjs';
 
 export const VIEW_W = 320;
 export const VIEW_H = 180;
@@ -527,10 +528,12 @@ export function createRenderer(canvas, world) {
 
   /**
    * Draws the world around `cam` with the explorer `sim` (or none).
-   * `t` is seconds of wall time, used for flicker and animation.
+   * `t` is seconds of wall time, used for flicker and animation. With an
+   * explorer the offset rounds once, so a steady lag draws it still on its
+   * world pixel.
    */
   function scene(sim, cam, t) {
-    const cx = Math.round(cam.x), cy = Math.round(cam.y);
+    const [cx, cy] = pixelCam(cam, sim ? feet(sim) : null);
     const sx = (wx) => wx - cx + VIEW_W / 2;
     const sy = (wy) => cy - wy + VIEW_H / 2;
     const unsx = (px) => px + cx - VIEW_W / 2;

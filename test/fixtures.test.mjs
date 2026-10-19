@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
-import { createSim, step, nodeXY, torchRadius } from '../src/game/sim.mjs';
+import { createSim, step, nodeXY, torchRadius, feet, TICK, RUN_SPEED, LADDER_SPEED, CELL } from '../src/game/sim.mjs';
+import { snapCam, followCam } from '../src/game/camera.mjs';
 import { RGB, idx, ARROWS, SKELETONS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot } from '../src/world/floor.mjs';
 import { coinId } from '../src/game/wallet.mjs';
@@ -255,9 +256,9 @@ function renderBoard(bd, sim = null, cam = { x: bd.x * 576 + 288, y: bd.y * 336 
   const ctx = view.getContext('2d');
   view.draws.length = 0;
   view.fills.length = 0;
-  renderer.scene(sim, cam, t);
+  const tip = renderer.scene(sim, cam, t);
   const art = view.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
-  return { art, ctx };
+  return { art, ctx, tip };
 }
 
 const isColour = (d, i, ch) => {
@@ -1171,3 +1172,39 @@ test('hud draws the wallet under TOMB n: the coin sprite, then the count right-a
   assert.equal(tomb.length, 6, 'TOMB 0 draws six glyphs');
   assert.equal(view.draws.find(isCoin)[1], tomb[3][1]);
 });
+
+// The camera.
+const camBoard = boards.find(({ bd }) => bd.links.some((m, c) => m && c % BW === 6 && ((c / BW) | 0) === 3)).bd;
+const camCell = camBoard.links.findIndex((m, c) => m && c % BW === 6 && ((c / BW) | 0) === 3);
+const camMotions = [
+  { name: 'run east', place: (s, k) => { s.facing = 1; s.off = RUN_SPEED * TICK * k; } },
+  { name: 'run west', place: (s, k) => { s.facing = -1; s.off = -RUN_SPEED * TICK * k; } },
+  { name: 'climb up', place: (s, k) => { s.mode = 'link'; s.link = 1; s.len = CELL; s.prog = LADDER_SPEED * TICK * k; } },
+  { name: 'climb down', place: (s, k) => { s.mode = 'link'; s.link = 3; s.len = CELL; s.prog = LADDER_SPEED * TICK * k; } },
+];
+for (const { name, place } of camMotions) {
+  test(`the explorer and its torch tip hold one view position along a ${name} at the steady lag, on the world pixel its feet round to`, () => {
+    const bd = camBoard;
+    const sim = createSim(world, { board: bd, cell: camCell });
+    const cam = { x: 0, y: 0 };
+    place(sim, 0);
+    snapCam(cam, sim);
+    for (let k = 1; k <= 90; k++) { place(sim, k); followCam(cam, sim); }
+    const seen = new Set();
+    for (let k = 91; k <= 100; k++) {
+      place(sim, k);
+      followCam(cam, sim);
+      const [fx, fy] = feet(sim);
+      const { art, tip } = renderBoard(bd, sim, cam, 0);
+      const sprites = view.draws.filter(([src, ...a]) => src.width === 16 && src.height === 24 && a.length === 2);
+      assert.equal(sprites.length, 1, 'one explorer sprite');
+      const [, sx, sy] = sprites[0];
+      const board = view.draws.find(([src]) => src === art);
+      assert.equal(sx - board[1], Math.round(fx) - 8 - bd.x * 576, `feet ${fx}: left edge on the world pixel`);
+      // The sprite's bottom row is the world row of the feet.
+      assert.equal(bd.y * 336 + 335 - (sy + 23 - board[2]), -Math.round(-fy), `feet ${fy}: feet on the world row`);
+      seen.add(`${sx},${sy},${tip}`);
+    }
+    assert.equal(seen.size, 1, `sprite and torch tip stand at ${[...seen].join(' | ')}`);
+  });
+}
