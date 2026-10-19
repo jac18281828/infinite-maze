@@ -2790,8 +2790,33 @@ function pose(s) {
 return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, BURN_S, EMBER_S, JAR_S, R_FULL, R_LOW, R_EMBER, SCONCE_R, JUMP_SPEED, GRAVITY, ROOM_CLEAR, SHAFT_REACH, STAIR_REACH, BUFFER_TICKS, KEY, nodeXY, torchRadius, inputEdges, createTrail, trailAt, recordStood, runCarry, tombCount, createSim, canGo, feet, step, pose };
 })();
 
-// src/game/art.mjs
+// src/game/camera.mjs
 const __m11 = (() => {
+const { feet } = __m10;
+// The camera follow, DOM-free so tests drive the real one.
+
+
+function snapCam(cam, sim) {
+  const [x, y] = feet(sim);
+  cam.x = x;
+  cam.y = y + 18;
+}
+
+// Lerp toward a target held inside a deadzone around the view centre.
+function followCam(cam, sim) {
+  const [x, y] = feet(sim);
+  const tx = x, ty = y + 18;
+  let gx = cam.x, gy = cam.y;
+  if (tx - cam.x > 20) gx = tx - 20; else if (cam.x - tx > 20) gx = tx + 20;
+  if (ty - cam.y > 12) gy = ty - 12; else if (cam.y - ty > 12) gy = ty + 12;
+  cam.x += (gx - cam.x) * 0.16;
+  cam.y += (gy - cam.y) * 0.16;
+}
+return { snapCam, followCam };
+})();
+
+// src/game/art.mjs
+const __m12 = (() => {
 
 // Palette-indexed art. Each character indexes PALETTE in base 32
 // ('0'-'9', 'a'-'v'); '.' is transparent.
@@ -3669,7 +3694,7 @@ return { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCON
 })();
 
 // src/world/signs.mjs
-const __m12 = (() => {
+const __m13 = (() => {
 const { BW, NCELL, cellNeighbor } = __m2;
 const { BDX, BDY } = __m3;
 const { u32 } = __m1;
@@ -3843,11 +3868,11 @@ return { SIGN_MOD, SKELETON_THRESHOLD, ARROW_THRESHOLD, wayOn, junctions, skelet
 })();
 
 // src/world/wind.mjs
-const __m13 = (() => {
+const __m14 = (() => {
 const { NCELL } = __m2;
 const { BDX, BDY } = __m3;
 const { u32 } = __m1;
-const { wayOn } = __m12;
+const { wayOn } = __m13;
 // Wind (spec section 4): some dead-end branches of a route board are windy,
 // and the dust drifts toward such a branch's entrance. Wind derives from built
 // boards and the hash alone; it enters no board, band or digest.
@@ -3964,7 +3989,7 @@ return { WIND_MOD, WIND_CAP, windBranches, windDir };
 })();
 
 // src/game/mask.mjs
-const __m14 = (() => {
+const __m15 = (() => {
 const { BW, NCELL } = __m2;
 // Rock mask of one board, 576x336 px, row 0 at the top; 1 is rock. Each
 // opening joins exactly the cells of one tree link or door:
@@ -4029,10 +4054,10 @@ return { MASK_W, MASK_H, CELL_PX, boardMask, rockAt };
 })();
 
 // src/game/fixtures.mjs
-const __m15 = (() => {
+const __m16 = (() => {
 const { BW, NCELL } = __m2;
-const { boardMask, MASK_W, MASK_H, CELL_PX } = __m14;
-const { LADDER, SCONCE, ARROWS, SKELETONS, idx } = __m11;
+const { boardMask, MASK_W, MASK_H, CELL_PX } = __m15;
+const { LADDER, SCONCE, ARROWS, SKELETONS, idx } = __m12;
 // Pixel geometry of a board's drawn fixtures and of the dust, DOM-free. Board
 // pixels, y up: X = col * 48, Y = row * 48. A north-east flight from cell c
 // has t = x - (X + 24) over [X + 24, X + 72); a north-west flight mirrors
@@ -4273,7 +4298,7 @@ return { STEPS, STEP_W, maskRow, ladderPixels, sconcePixels, arrowSpot, arrowPix
 })();
 
 // src/game/map.mjs
-const __m16 = (() => {
+const __m17 = (() => {
 const { BW, BH, NCELL } = __m2;
 const { tombOf } = __m5;
 // The pause-screen map: what the explorer's trail shows of one tomb. DOM-free.
@@ -4347,18 +4372,18 @@ return { mapCells, frameOf, panFrame, sameFrame, mapModel };
 })();
 
 // src/game/render.mjs
-const __m17 = (() => {
-const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS } = __m11;
+const __m18 = (() => {
+const { PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME, BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS } = __m12;
 const { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feet, pose, BURN_S } = __m10;
 const { BW, BH, DX, DY } = __m2;
-const { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } = __m12;
+const { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } = __m13;
 const { boardOfPos } = __m5;
 const { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } = __m7;
-const { windDir, windBranches } = __m13;
+const { windDir, windBranches } = __m14;
 const { coinId } = __m9;
-const { boardMask } = __m14;
-const { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } = __m15;
-const { mapCells } = __m16;
+const { boardMask } = __m15;
+const { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } = __m16;
+const { mapCells } = __m17;
 // Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
 // sprites, a quarter-resolution light map multiplied over the scene, dust.
 
@@ -5028,7 +5053,7 @@ return { VIEW_W, VIEW_H, MAP_SCALE, BOOST_FADE_S, boostAlpha, WIND_SPEED, shade,
 })();
 
 // src/game/audio.mjs
-const __m18 = (() => {
+const __m19 = (() => {
 
 // WebAudio music and sound, synthesized; starts on the first key press or touch.
 // Music: Hijaz on E (E F G# A B C D), an 8th-note bass ostinato and a frame
@@ -5346,7 +5371,7 @@ return { createAudio };
 })();
 
 // src/game/autopilot.mjs
-const __m19 = (() => {
+const __m20 = (() => {
 const { DX, DY } = __m2;
 const { createSim, step, inputEdges } = __m10;
 // Scripted input for the self-test: walks the explorer along tomb (0, 0)'s
@@ -5453,7 +5478,7 @@ return { SELFTEST_CODE, SELFTEST_TICKS, pathTo, createAutopilot, runScript };
 })();
 
 // src/game/gamepad.mjs
-const __m20 = (() => {
+const __m21 = (() => {
 
 // Controller layer. A standard-mapped gamepad's buttons and left stick become
 // the keyboard's own key events, so the key handlers serve a controller
@@ -5563,9 +5588,9 @@ return { STICK_ON, STICK_OFF, createGamepad };
 })();
 
 // src/game/touch.mjs
-const __m21 = (() => {
-const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m11;
-const { VIEW_W, VIEW_H } = __m17;
+const __m22 = (() => {
+const { FONT, FONT_W, FONT_H, PALETTE, RGB } = __m12;
+const { VIEW_W, VIEW_H } = __m18;
 // Touch layer. Every control feeds the keyboard's own path: it dispatches
 // keydown and keyup KeyboardEvents on window, so the key handlers, the held
 // Up, the jump edge and the tap buffer serve touch unchanged.
@@ -6255,7 +6280,7 @@ return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, layout, padSide, titleF
 })();
 
 // src/game/clipboard.mjs
-const __m22 = (() => {
+const __m23 = (() => {
 
 // Clipboard writes for the save and seed codes. The clipboard arrives as an
 // argument and no global is read, so node tests this module with a fake.
@@ -6288,7 +6313,7 @@ return { copyText, copyWithStatus, saveLabel };
 })();
 
 // src/game/loop.mjs
-const __m23 = (() => {
+const __m24 = (() => {
 
 // The frame guard. One frame's exception never stops the loop: the next frame
 // is requested whatever the frame's work does. DOM-free, so node drives it
@@ -6344,7 +6369,7 @@ return { errorLine, createGuard };
 })();
 
 // src/game/storage.mjs
-const __m24 = (() => {
+const __m25 = (() => {
 
 // Guarded storage over a backend the caller supplies. `area()` returns the
 // `getItem`, `setItem` and `removeItem` object, and runs inside each guard,
@@ -6379,27 +6404,29 @@ return { createStorage };
 })();
 
 // src/game/main.mjs
-const __m25 = (() => {
+const __m26 = (() => {
 const { createWorld, boardOfPos, boardCoords } = __m5;
 const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m6;
 const { floorItems, itemSpot, coinRows, rowSpot } = __m7;
 const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
-const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m17;
-const { createAudio } = __m18;
-const { runScript, createAutopilot, SELFTEST_CODE } = __m19;
+const { snapCam, followCam } = __m11;
+const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } = __m18;
+const { createAudio } = __m19;
+const { runScript, createAutopilot, SELFTEST_CODE } = __m20;
 const { SLOT_KEY, LEGACY_KEYS, COIN_RATE, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot, legacySlot, newSlotId, packRecent, unpackRecent } = __m9;
-const { createGamepad } = __m20;
-const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m21;
+const { createGamepad } = __m21;
+const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m22;
 const { MILESTONE, rankName } = __m8;
-const { copyWithStatus, saveLabel } = __m22;
-const { createGuard, errorLine } = __m23;
-const { createStorage } = __m24;
-const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m16;
-const { RGB, idx } = __m11;
+const { copyWithStatus, saveLabel } = __m23;
+const { createGuard, errorLine } = __m24;
+const { createStorage } = __m25;
+const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m17;
+const { RGB, idx } = __m12;
 // Boot, input, the fixed 60 Hz loop and the title, play, pause, end and
 // milestone splash screens. `#selftest` in the URL runs the self-test instead.
+
 
 
 
@@ -6556,23 +6583,6 @@ function rollCode() {
   const b = new Uint8Array(5);
   globalThis.crypto.getRandomValues(b);
   return codeFromBytes(b);
-}
-
-function snapCam(cam, sim) {
-  const [x, y] = feet(sim);
-  cam.x = x;
-  cam.y = y + 18;
-}
-
-// Lerp toward a target held inside a deadzone around the view centre.
-function followCam(cam, sim) {
-  const [x, y] = feet(sim);
-  const tx = x, ty = y + 18;
-  let gx = cam.x, gy = cam.y;
-  if (tx - cam.x > 20) gx = tx - 20; else if (cam.x - tx > 20) gx = tx + 20;
-  if (ty - cam.y > 12) gy = ty - 12; else if (cam.y - ty > 12) gy = ty + 12;
-  cam.x += (gx - cam.x) * 0.16;
-  cam.y += (gy - cam.y) * 0.16;
 }
 
 function clock(s) {

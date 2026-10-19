@@ -8,6 +8,7 @@ import { floorItems, itemSpot, coinRows, rowSpot } from '../world/floor.mjs';
 import {
   createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
 } from './sim.mjs';
+import { snapCam, followCam } from './camera.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
@@ -161,23 +162,6 @@ function rollCode() {
   const b = new Uint8Array(5);
   globalThis.crypto.getRandomValues(b);
   return codeFromBytes(b);
-}
-
-function snapCam(cam, sim) {
-  const [x, y] = feet(sim);
-  cam.x = x;
-  cam.y = y + 18;
-}
-
-// Lerp toward a target held inside a deadzone around the view centre.
-function followCam(cam, sim) {
-  const [x, y] = feet(sim);
-  const tx = x, ty = y + 18;
-  let gx = cam.x, gy = cam.y;
-  if (tx - cam.x > 20) gx = tx - 20; else if (cam.x - tx > 20) gx = tx + 20;
-  if (ty - cam.y > 12) gy = ty - 12; else if (cam.y - ty > 12) gy = ty + 12;
-  cam.x += (gx - cam.x) * 0.16;
-  cam.y += (gy - cam.y) * 0.16;
 }
 
 function clock(s) {
