@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
-import { createSim, step, nodeXY, torchRadius, feet, TICK, RUN_SPEED, LADDER_SPEED, CELL } from '../src/game/sim.mjs';
-import { snapCam, followCam } from '../src/game/camera.mjs';
-import { RGB, idx, ARROWS, SKELETONS, SCONCE_FLAME, COIN, EXPLORER, JAR } from '../src/game/art.mjs';
+import { createSim, step, nodeXY, torchRadius, feetX, feetY, pose, TICK, RUN_SPEED, LADDER_SPEED, CELL } from '../src/game/sim.mjs';
+import { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, LAYER_MARGIN } from '../src/game/camera.mjs';
+import { RGB, idx, ARROWS, SKELETONS, SCONCE_FLAME, COIN, EXPLORER, JAR, torchTip } from '../src/game/art.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot } from '../src/world/floor.mjs';
 import { coinId } from '../src/game/wallet.mjs';
 import {
@@ -185,10 +185,15 @@ test('each ladder box matches L1, or L2 where it reaches a stair cell, and each 
 // A 2D canvas stub: pixel buffers with source-over drawing, enough for the
 // renderer to build and draw a scene. Each canvas keeps the last putImageData
 // as `shaded` and flags the pixels drawn after it in `touched`. A draw record
-// is [src, ...args] and carries the context's globalAlpha as `.alpha`.
-function stubCanvas() {
+// is [src, ...args] and carries the context's globalAlpha as `.alpha`. With
+// `pixels` false the canvas only logs its draws and fills.
+function stubCanvas(pixels = true) {
   const canvas = { w: 0, h: 0, data: null, shaded: null, touched: null, fills: [], draws: [] };
-  const size = () => { canvas.data = new Uint8ClampedArray(canvas.w * canvas.h * 4); canvas.touched = new Uint8Array(canvas.w * canvas.h); };
+  const size = () => {
+    if (!pixels) return;
+    canvas.data = new Uint8ClampedArray(canvas.w * canvas.h * 4);
+    canvas.touched = new Uint8Array(canvas.w * canvas.h);
+  };
   Object.defineProperties(canvas, {
     width: { get: () => canvas.w, set: (v) => { canvas.w = v; size(); } },
     height: { get: () => canvas.h, set: (v) => { canvas.h = v; size(); } },
@@ -217,8 +222,15 @@ function stubCanvas() {
       canvas.shaded = Uint8ClampedArray.from(img.data);
       canvas.touched.fill(0);
     },
+    clearRect(x, y, w, h) {
+      if (!pixels) return;
+      for (let yy = Math.max(0, y); yy < Math.min(canvas.h, y + h); yy++) {
+        canvas.data.fill(0, (yy * canvas.w + Math.max(0, x)) * 4, (yy * canvas.w + Math.min(canvas.w, x + w)) * 4);
+      }
+    },
     fillRect(x, y, w, h) {
       canvas.fills.push([x, y, w, h, ctx.fillStyle]);
+      if (!pixels) return;
       const [r, g, b, a] = colour(ctx.fillStyle);
       for (let yy = Math.max(0, y); yy < Math.min(canvas.h, y + h); yy++) {
         for (let xx = Math.max(0, x); xx < Math.min(canvas.w, x + w); xx++) over((yy * canvas.w + xx) * 4, r, g, b, a);
@@ -228,7 +240,7 @@ function stubCanvas() {
       const record = [src, ...a];
       record.alpha = ctx.globalAlpha;
       canvas.draws.push(record);
-      if (ctx.globalCompositeOperation !== 'source-over') return;
+      if (!pixels || ctx.globalCompositeOperation !== 'source-over') return;
       const [sx, sy, sw, sh, dx, dy, dw, dh] = a.length === 2 ? [0, 0, src.width, src.height, a[0], a[1], src.width, src.height]
         : a.length === 4 ? [0, 0, src.width, src.height, ...a] : a;
       for (let j = 0; j < dh; j++) {
@@ -249,17 +261,41 @@ globalThis.document = { createElement: () => stubCanvas() };
 const view = document.createElement('canvas');
 view.width = 320;
 view.height = 180;
-const renderer = createRenderer(view, world);
+// The iPad's 8.6x display; its log holds the composite.
+const display = stubCanvas(false);
+display.width = 2752;
+display.height = 1548;
+const renderer = createRenderer(view, world, display);
+const layer = renderer.layers.world;
 
-/** Draws `bd` centred in the view; returns the board's art canvas and the view's draw log. */
+/**
+ * Renders and composites a frame with `bd` centred in the view; returns the
+ * board's art canvas and the torch tip. The world layer's and the display's
+ * logs hold the frame's draws.
+ */
 function renderBoard(bd, sim = null, cam = { x: bd.x * 576 + 288, y: bd.y * 336 + 168 }, t = 0) {
-  const ctx = view.getContext('2d');
-  view.draws.length = 0;
-  view.fills.length = 0;
+  for (const c of [layer, display]) { c.draws.length = 0; c.fills.length = 0; }
   const tip = renderer.scene(sim, cam, t);
-  const art = view.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
-  return { art, ctx, tip };
+  renderer.composite();
+  const art = layer.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
+  return { art, tip };
 }
+
+/** The frame the renderer places at `cam` on display `d`. */
+function frameAt(cam, d = display) {
+  const f = createFrame();
+  placeFrame(f, cam, d.width, d.height, 320, 180);
+  return f;
+}
+/** World point (x, y) in the world layer of frame `f`, and back. */
+const inLayer = (f, x, y) => [x - f.wx + 160 + LAYER_MARGIN, f.wy - y + 90 + LAYER_MARGIN];
+const fromLayer = (f, lx, ly) => [lx + f.wx - 160 - LAYER_MARGIN, f.wy + 90 + LAYER_MARGIN - ly];
+const isLight = ([src, ...a]) => src === renderer.layers.light && a.length === 4;
+/** Whether the display drew the world layer, then the light map over it. */
+const lightOverWorld = () => {
+  const w = display.draws.findIndex(([src]) => src === layer);
+  return w >= 0 && display.draws.findIndex(isLight) > w;
+};
 
 const isColour = (d, i, ch) => {
   const c = RGB[idx(ch)];
@@ -480,7 +516,7 @@ test('in either corner a drawn skeleton\'s fingertip lies in the box row or colu
   const tip = RGB[idx('9')];
   for (const level of DIFFICULTIES) {
     const w = createWorld('00000000', { difficulty: level });
-    const rend = createRenderer(view, w);
+    const rend = createRenderer(view, w, display);
     for (let v = 0; v <= 19 && need.size; v++) {
       for (let u = -2; u <= 2 && need.size; u++) {
         for (let i = 0; i < w.size.w * w.size.h && need.size; i++) {
@@ -489,9 +525,9 @@ test('in either corner a drawn skeleton\'s fingertip lies in the box row or colu
           const found = skeletons(w, bd).map(({ cell, dir }) => ({ cell, dir, side: skeletonSide(w, bd, cell, dir) }))
             .filter(({ dir, side }) => need.has(`${side} ${keyOf(dir)}`));
           if (!found.length) continue;
-          view.draws.length = 0;
+          rend.layers.world.draws.length = 0;
           rend.scene(null, { x: bd.x * 576 + 288, y: bd.y * 336 + 168 }, 0);
-          const art = view.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
+          const art = rend.layers.world.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
           for (const { cell, dir, side } of found) {
             const key = keyOf(dir);
             if (!need.has(`${side} ${key}`)) continue;
@@ -533,14 +569,14 @@ test('in either corner a drawn skeleton\'s fingertip lies in the box row or colu
 const skelSprites = SKELETONS.map((rows) => [spriteCanvas(rows), spriteCanvas(rows, true)]);
 const sameSprite = (a, b) => a.width === b.width && a.height === b.height && Buffer.from(a.data).equals(Buffer.from(b.data));
 const isSkeleton = ([src]) => src.width === 7 && src.height === 10 && skelSprites.flat().some((c) => sameSprite(c, src));
-const skeletonDraws = () => view.draws.filter(isSkeleton);
+const skeletonDraws = () => layer.draws.filter(isSkeleton);
 
-/** Where the scene under `cam` draws the skeleton `{ cell, dir }` of `bd`, and which sprite. */
+/** Where the scene under `cam` draws the skeleton `{ cell, dir }` of `bd` in the world layer, and which sprite. */
 function skeletonDraw(bd, { cell, dir }, cam) {
   const side = skeletonSide(world, bd, cell, dir), [X, Y] = cellXY(cell);
   const pose = poseIn(POSE_IDX[dir], side);
   return {
-    at: [bd.x * 576 + X + (side ? 32 : 9) - Math.round(cam.x) + 160, Math.round(cam.y) - (bd.y * 336 + Y + 18) + 90],
+    at: inLayer(frameAt(cam), bd.x * 576 + X + (side ? 32 : 9), bd.y * 336 + Y + 18),
     sprite: skelSprites[pose][side],
   };
 }
@@ -600,8 +636,8 @@ test('the scene draws a board\'s tier-2 skeletons, at their spots and poses, exa
   for (const [burn, ember, alpha] of [[300, 0, 0], [150, 0, 0], [145, 0, 0.5], [140, 0, 1], [60, 0, 1], [0, 5, 1]]) {
     renderBoard(bd, simAt(bd, burn, ember), cam, 0);
     // Each frame restores the alpha, and no draw but a skeleton's records another.
-    assert.equal(view.getContext('2d').globalAlpha, 1, `burn ${burn}: the alpha is restored`);
-    assert.ok(view.draws.filter((d) => !isSkeleton(d)).every((d) => d.alpha === 1), `burn ${burn}: only skeletons draw translucent`);
+    assert.equal(layer.getContext('2d').globalAlpha, 1, `burn ${burn}: the alpha is restored`);
+    assert.ok([...layer.draws, ...display.draws].filter((d) => !isSkeleton(d)).every((d) => d.alpha === 1), `burn ${burn}: only skeletons draw translucent`);
     const drawn = skeletonDraws();
     if (!alpha) { assert.equal(drawn.length, 0, `burn ${burn}: no tier-2 skeleton`); continue; }
     for (const d of drawn) {
@@ -609,9 +645,8 @@ test('the scene draws a board\'s tier-2 skeletons, at their spots and poses, exa
       assert.ok(expected.some((e) => e.at[0] === d[1] && e.at[1] === d[2] && sameSprite(e.sprite, d[0])), `burn ${burn}: a drawn skeleton at ${d[1]}, ${d[2]} is no tier-2 spot`);
     }
     for (const e of own) assert.ok(drawn.some((d) => d[1] === e.at[0] && d[2] === e.at[1] && sameSprite(e.sprite, d[0])), `burn ${burn}: the skeleton at ${e.at} is drawn in its pose`);
-    // The scene draws them before the light map, which multiplies the scene last.
-    const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
-    assert.ok(view.draws.findIndex(isSkeleton) < lit, 'tier 2 draws before the light map');
+    // The scene draws them on the world layer, which the light map multiplies on the display.
+    assert.ok(lightOverWorld(), 'tier 2 draws under the light map');
   }
   renderBoard(bd, null, cam, 0);
   assert.equal(skeletonDraws().length, 0, 'with no sim, tier 2 draws nothing');
@@ -658,9 +693,9 @@ const boneChar = (d, o) => [...'56789'].find((ch) => isColour(d, o, ch)) || '?';
 
 /** `drawn(c, r)` for tier 1: the board art's pixel under box pixel (c, r), '.' where the art leaves it untouched. */
 function artDrawn(rend, bd, side, x0, Y) {
-  view.draws.length = 0;
+  rend.layers.world.draws.length = 0;
   rend.scene(null, { x: bd.x * 576 + 288, y: bd.y * 336 + 168 }, 0);
-  const art = view.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
+  const art = rend.layers.world.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
   return (c, r) => {
     const k = px(side ? x0 + 6 - c : x0 + c, Y + 17 - r);
     return art.touched[k] ? boneChar(art.data, k * 4) : '.';
@@ -672,10 +707,10 @@ function spriteDrawn(rend, w, bd, side, x0, X, Y, where) {
   const sim = createSim(w, { board: bd, cell: bd.a });
   sim.burn = 0;
   const cam = { x: bd.x * 576 + X + 12, y: bd.y * 336 + Y + 13 };
-  view.draws.length = 0;
+  rend.layers.world.draws.length = 0;
   rend.scene(sim, cam, 0);
-  const at = [bd.x * 576 + x0 - cam.x + 160, cam.y - (bd.y * 336 + Y + 18) + 90];
-  const d = view.draws.find((dr) => dr[0].width === 7 && dr[0].height === 10 && dr[1] === at[0] && dr[2] === at[1]);
+  const at = inLayer(frameAt(cam), bd.x * 576 + x0, bd.y * 336 + Y + 18);
+  const d = rend.layers.world.draws.find((dr) => dr[0].width === 7 && dr[0].height === 10 && dr[1] === at[0] && dr[2] === at[1]);
   assert.ok(d, `${where}: the scene draws the skeleton`);
   const sprite = d[0];
   return (c, r) => {
@@ -693,7 +728,7 @@ function scanWay(dir, check) {
   const found = [];
   for (const level of DIFFICULTIES) {
     const w = createWorld('00000000', { difficulty: level });
-    const rend = createRenderer(view, w);
+    const rend = createRenderer(view, w, display);
     const left = { 1: PER_TIER, 2: PER_TIER };
     for (let v = 0; v <= 39 && (left[1] || left[2]); v++) {
       for (let u = -5; u <= 5 && (left[1] || left[2]); u++) {
@@ -982,13 +1017,14 @@ test('the renderer draws the motes of its world position, whatever the explorer 
     const [nx, ny] = nodeXY(bd, cell);
     const cam = { x: nx + camX, y: ny + 20 + camY };
     renderBoard(bd, sim, cam, 5.5);
-    const dots = view.fills.filter((f) => f[4].startsWith('rgba(255,226,170') && f[2] === 1 && f[3] === 1);
+    const dots = display.fills.filter((f) => f[4].startsWith('rgba(255,226,170'));
     assert.ok(dots.length > 5, 'the torch lights motes');
-    const cx = Math.round(cam.x), cy = Math.round(cam.y);
-    const all = dustMotes(cx - 200, cy - 120, cx + 200, cy + 120, 5.5);
+    const f = frameAt(cam);
+    const all = dustMotes(cam.x - 200, cam.y - 120, cam.x + 200, cam.y + 120, 5.5);
+    // A mote's corner lands on the device pixel nearest it.
     for (const [x, y] of dots) {
-      const wx = x + cx - 160, wy = cy + 90 - y;
-      assert.ok(all.some((m) => Math.abs(m.x - wx) <= 0.51 && Math.abs(m.y - wy) <= 0.51), `mote at ${wx}, ${wy} is not in the world`);
+      const wx = (x - f.ox) / f.sx, wy = (f.oy - y) / f.sy;
+      assert.ok(all.some((m) => Math.abs(m.x - wx) <= 0.51 / f.sx && Math.abs(m.y - wy) <= 0.51 / f.sy), `mote at ${wx}, ${wy} is not in the world`);
     }
   }
 });
@@ -998,21 +1034,26 @@ test('the renderer draws the motes of its world position, whatever the explorer 
 // windy and spans two dead-end boards.
 const isMote = (f) => f[4].startsWith('rgba(255,226,170') && f[2] === 1 && f[3] === 1;
 
+/** A renderer with its own 320 x 180 display, one device px a game px, as the view was. */
 function driftRenderer() {
   const v = document.createElement('canvas');
   v.width = 320;
   v.height = 180;
-  return { v, r: createRenderer(v, world) };
+  const d = stubCanvas(false);
+  d.width = 320;
+  d.height = 180;
+  return { d, r: createRenderer(v, world, d) };
 }
 
 /** Draws one frame; returns the torch tip and the mote pixels. */
-function frame({ v, r }, bd, cell, t) {
+function frame({ d, r }, bd, cell, t) {
   const sim = createSim(world, { board: bd, cell });
   const [nx, ny] = nodeXY(bd, cell);
-  v.draws.length = 0;
-  v.fills.length = 0;
+  d.draws.length = 0;
+  d.fills.length = 0;
   const tip = r.scene(sim, { x: nx, y: ny + 20 }, t);
-  return { tip, r: torchRadius(sim.burn), dots: v.fills.filter(isMote).map(([x, y]) => [x, y]) };
+  r.composite();
+  return { tip, r: torchRadius(sim.burn), dots: d.fills.filter(isMote).map(([x, y]) => [x, y]) };
 }
 
 /**
@@ -1134,19 +1175,17 @@ test('a scene draws the coin sprite at each uncollected coin\'s floor point, and
   for (const { cell } of coinsOf(bd)) {
     const [wx, wy] = itemSpot(bd, cell);
     const cam = { x: wx, y: wy + 18 };
-    const cx = Math.round(cam.x), cy = Math.round(cam.y);
     // The 6x6 sprite rests on the floor point: bottom row at the point's pixel row.
-    const want = [Math.round(wx) - cx + 160 - 3, cy - Math.round(wy) + 90 - 6];
-    const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isCoin).map(([, x, y]) => [x, y]); };
+    const [lx, ly] = inLayer(frameAt(cam), Math.round(wx), Math.round(wy));
+    const want = [lx - 3, ly - 6];
+    const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return layer.draws.filter(isCoin).map(([, x, y]) => [x, y]); };
     const taken = new Set();
     const sim = createSim(world, { board: bd, cell: bd.a }, null, { collected: taken });
     assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `coin at cell ${cell} drawn at ${want}`);
     assert.ok(drawn(null).some(([x, y]) => x === want[0] && y === want[1]), 'a scene with no explorer draws it too');
-    // The light map multiplies the scene last, so a coin drawn after it would stay bright in the dark.
+    // The light map multiplies the composite, so a coin drawn over it would stay bright in the dark.
     renderBoard(bd, sim, cam, 0);
-    const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
-    const coin = view.draws.findIndex(isCoin);
-    assert.ok(coin >= 0 && lit > coin, `coin draw ${coin} precedes the light map draw ${lit}`);
+    assert.ok(layer.draws.some(isCoin) && lightOverWorld(), 'the coin draws on the world layer, under the light map');
     taken.add(`${bd.x},${bd.y},${cell}`);
     assert.ok(!drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `collected coin at cell ${cell} is gone`);
   }
@@ -1161,19 +1200,18 @@ test('a scene draws the coin sprite at each untaken row coin\'s floor point, bef
     for (let i = 0; i < 3; i++) {
       const [wx, wy] = rowSpot(bd, cell, i);
       const cam = { x: wx, y: wy + 18 };
-      const cx = Math.round(cam.x), cy = Math.round(cam.y);
       // The 6x6 sprite rests on the floor point: bottom row at the point's pixel row.
-      const want = [Math.round(wx) - cx + 160 - 3, cy - Math.round(wy) + 90 - 6];
-      const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isCoin).map(([, x, y]) => [x, y]); };
+      const [lx, ly] = inLayer(frameAt(cam), Math.round(wx), Math.round(wy));
+      const want = [lx - 3, ly - 6];
+      const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return layer.draws.filter(isCoin).map(([, x, y]) => [x, y]); };
       const taken = new Set();
       const sim = createSim(world, { board: bd, cell: bd.a }, null, { collected: taken });
       assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `coin ${i} of the row east of cell ${cell} drawn at ${want}`);
       assert.ok(drawn(null).some(([x, y]) => x === want[0] && y === want[1]), 'a scene with no explorer draws it too');
-      // The light map multiplies the scene last, so a coin drawn after it would stay bright in the dark.
+      // The light map multiplies the composite, so a coin drawn over it would stay bright in the dark.
       renderBoard(bd, sim, cam, 0);
-      const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
-      const coin = view.draws.findIndex((d) => isCoin(d) && d[1] === want[0] && d[2] === want[1]);
-      assert.ok(coin >= 0 && lit > coin, `row coin draw ${coin} precedes the light map draw ${lit}`);
+      const coin = layer.draws.findIndex((d) => isCoin(d) && d[1] === want[0] && d[2] === want[1]);
+      assert.ok(coin >= 0 && lightOverWorld(), `row coin draw ${coin} lies on the world layer, under the light map`);
       // Taking its neighbours leaves it drawn; taking it removes it.
       for (const k of [0, 1, 2]) if (k !== i) taken.add(coinId(bd, cell, k));
       assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), 'the row\'s other coins do not hide it');
@@ -1217,19 +1255,17 @@ test('a scene draws the jar sprite at each untaken jar\'s floor point, before th
   for (const { cell } of jarsOf(bd)) {
     const [wx, wy] = itemSpot(bd, cell);
     const cam = { x: wx, y: wy + 18 };
-    const cx = Math.round(cam.x), cy = Math.round(cam.y);
     // The 9x12 sprite rests on the floor point, bottom row at the point's pixel row, and fills the
     // room's columns 8..16 at the west spot and 31..39 at the east.
     const east = wx > nodeXY(bd, cell)[0];
-    const want = [Math.round(wx) - cx + 160 - (east ? 5 : 4), cy - Math.round(wy) + 90 - 12];
-    const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return view.draws.filter(isJar).map(([, x, y]) => [x, y]); };
+    const [lx, ly] = inLayer(frameAt(cam), Math.round(wx), Math.round(wy));
+    const want = [lx - (east ? 5 : 4), ly - 12];
+    const drawn = (sim) => { renderBoard(bd, sim, cam, 0); return layer.draws.filter(isJar).map(([, x, y]) => [x, y]); };
     const sim = createSim(world, { board: bd, cell: bd.a });
     assert.ok(drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `jar at cell ${cell} drawn at ${want}`);
     assert.ok(drawn(null).some(([x, y]) => x === want[0] && y === want[1]), 'a scene with no explorer draws it too');
     renderBoard(bd, sim, cam, 0);
-    const lit = view.draws.findIndex(([src, ...a]) => src.width === 80 && src.height === 45 && a.length === 4);
-    const jar = view.draws.findIndex(isJar);
-    assert.ok(jar >= 0 && lit > jar, `jar draw ${jar} precedes the light map draw ${lit}`);
+    assert.ok(layer.draws.some(isJar) && lightOverWorld(), 'the jar draws on the world layer, under the light map');
     sim.jars.add(`${bd.x},${bd.y},${cell}`);
     assert.ok(!drawn(sim).some(([x, y]) => x === want[0] && y === want[1]), `taken jar at cell ${cell} is gone`);
     // A collected coin key never hides a jar: the two sets are separate.
@@ -1261,14 +1297,14 @@ test('every drawn jar of the sample covers only room air of its cell, 9 px acros
       const [wx, wy] = itemSpot(bd, cell);
       const cam = { x: wx, y: wy + 18 };
       renderBoard(bd, createSim(world, { board: bd, cell: bd.a }), cam, 0);
-      const cx = Math.round(cam.x), cy = Math.round(cam.y);
-      const row = cy - Math.round(wy) + 90 - 12;
-      const here = ([, x, y]) => Math.abs(x - 160) < 12 && y === row;
-      const at = view.draws.filter(isJar).filter(here);
+      const f = frameAt(cam), [mid, row] = inLayer(f, cam.x, Math.round(wy) + 12);
+      const here = ([, x, y]) => Math.abs(x - mid) < 12 && y === row;
+      const at = layer.draws.filter(isJar).filter(here);
       assert.equal(at.length, 1, 'one jar at the spot');
       const [, dx, dy] = at[0];
-      // Screen pixel (dx + c, dy + r) is the board pixel of column x and row y above the board's floor.
-      const X0 = (dx - 160 + cx) - bd.x * 576, Ytop = (cy + 90 - dy - 1) - bd.y * 336;
+      // Layer pixel (dx + c, dy + r) is the board pixel of column x and row y above the board's floor.
+      const [wx0, wy0] = fromLayer(f, dx, dy + 1);
+      const X0 = wx0 - bd.x * 576, Ytop = wy0 - bd.y * 336;
       const [cX, cY] = [(cell % BW) * 48, ((cell / BW) | 0) * 48];
       for (const { r, c } of opaque(JAR)) {
         const x = X0 + c, y = Ytop - r;
@@ -1314,7 +1350,7 @@ const camMotions = [
   { name: 'climb down', place: (s, k) => { s.mode = 'link'; s.link = 3; s.len = CELL; s.prog = LADDER_SPEED * TICK * k; } },
 ];
 for (const { name, place } of camMotions) {
-  test(`the explorer and its torch tip hold one view position along a ${name} at the steady lag, on the world pixel its feet round to`, () => {
+  test(`the explorer and its torch tip hold one device position along a ${name} at the steady lag`, () => {
     const sim = createSim(world, { board: camBoard, cell: camCell });
     const cam = { x: 0, y: 0 };
     place(sim, 0);
@@ -1324,17 +1360,59 @@ for (const { name, place } of camMotions) {
     for (let k = 91; k <= 100; k++) {
       place(sim, k);
       followCam(cam, sim);
-      const [fx, fy] = feet(sim);
-      const { art, tip } = renderBoard(camBoard, sim, cam, 0);
-      const sprites = view.draws.filter(([src, ...a]) => src.width === 16 && src.height === 24 && a.length === 2);
+      const { tip } = renderBoard(camBoard, sim, cam, 0);
+      const sprites = display.draws.filter(([src]) => src.width === 16 && src.height === 24);
       assert.equal(sprites.length, 1, 'one explorer sprite');
+      const f = frameAt(cam), x = deviceX(f, feetX(sim)), y = deviceY(f, feetY(sim));
       const [, sx, sy] = sprites[0];
-      const board = view.draws.find(([src]) => src === art);
-      assert.equal(sx - board[1], Math.round(fx) - 8 - camBoard.x * 576, `feet ${fx}: left edge on the world pixel`);
-      // The sprite's bottom row is the world row of the feet.
-      assert.equal(camBoard.y * 336 + 335 - (sy + 23 - board[2]), -Math.round(-fy), `feet ${fy}: feet on the world row`);
-      seen.add(`${sx},${sy},${tip}`);
+      assert.deepEqual([sx, sy], [Math.round(x - 8 * f.sx), Math.round(y - 24 * f.sy)], `feet ${feetX(sim)}, ${feetY(sim)}: the sprite stands at the helper's placement`);
+      seen.add(`${sprites[0].slice(1)},${tip.map((v) => Math.round(v))}`);
     }
     assert.equal(seen.size, 1, `sprite and torch tip stand at ${[...seen].join(' | ')}`);
   });
 }
+
+/** Device rect [x, y, w, h] of a w x h game px sprite with its top-left corner at device (x0, y0), each edge rounded once. */
+const deviceRect = (f, x0, y0, w, h) => {
+  const x = Math.round(x0), y = Math.round(y0);
+  return [x, y, Math.round(x0 + w * f.sx) - x, Math.round(y0 + h * f.sy) - y];
+};
+
+test('at a fractional camera the back wall, the world layer, the light map, a mote and the explorer draw at the helper\'s placements, and the torch and its tip keep their offsets from the feet, scaled, facing either way', () => {
+  const t = 0.7;
+  for (const facing of [1, -1]) {
+    // A fresh renderer, so the dust has not drifted.
+    const r = createRenderer(view, world, display);
+    const sim = createSim(world, { board: camBoard, cell: camCell });
+    sim.facing = facing;
+    sim.off = 3.3;
+    const fx = feetX(sim), fy = feetY(sim);
+    const cam = { x: fx + 13.37, y: fy + 22.61 };
+    display.draws.length = 0;
+    display.fills.length = 0;
+    const tip = r.scene(sim, cam, t);
+    r.composite();
+    const f = frameAt(cam);
+    assert.ok(f.sx === 8.6 && f.sy === 8.6 && f.wx !== cam.x && f.wy !== cam.y, 'a fractional camera on the 8.6x display');
+    const drawOf = (src) => display.draws.find(([s]) => s === src).slice(1);
+    assert.deepEqual(drawOf(r.layers.wall), [f.wallX, f.wallY, f.w, f.h], 'the back wall');
+    assert.deepEqual(drawOf(r.layers.world), [f.worldX, f.worldY, f.w, f.h], 'the world layer');
+    assert.deepEqual(drawOf(r.layers.light), [f.worldX, f.worldY, f.w, f.h], 'the light map');
+    const x = deviceX(f, fx), y = deviceY(f, fy);
+    const body = display.draws.find(([s]) => s.width === 16 && s.height === 24);
+    assert.deepEqual(body.slice(1), deviceRect(f, x - 8 * f.sx, y - 24 * f.sy, 16, 24), `facing ${facing}: the explorer`);
+    // The tip's offset from the feet in game px: the sprite's left edge 8 px left of them, its top 24 px above.
+    const { anim, frame } = pose(sim), [tx, ty] = torchTip(anim, frame);
+    const ox = -8 + (facing < 0 ? 15 - tx : tx), oy = -24 + ty;
+    const near = (got, want, what) => assert.ok(Math.abs(got[0] - want[0]) <= 1 && Math.abs(got[1] - want[1]) <= 1, `facing ${facing}: ${what} at ${got}, not ${want}`);
+    near(tip, [x + ox * f.sx, y + oy * f.sy], 'the tip');
+    const torch = display.draws.find(([s]) => s.width === 5 && s.height === 4);
+    near(torch.slice(1, 3), [x + (ox - 2) * f.sx, y + (oy - 4) * f.sy], 'the torch');
+    // A mote: one game px, its top-left corner at the mote.
+    const wx = fx + ox, wy = fy - oy, rad = torchRadius(sim.burn);
+    const lit = dustMotes(wx - rad, wy - rad, wx + rad, wy + rad, t).filter((m) => Math.hypot(m.x - wx, m.y - wy) < 0.9 * rad);
+    const want = lit.map((m) => deviceRect(f, deviceX(f, m.x), deviceY(f, m.y), 1, 1).join());
+    const motes = display.fills.filter((fl) => fl[4].startsWith('rgba(255,226,170'));
+    assert.ok(motes.length > 0 && want.includes(motes[0].slice(0, 4).join()), `facing ${facing}: the mote at ${motes[0]} lies at no placement`);
+  }
+});

@@ -8,7 +8,7 @@ import { floorItems, itemSpot, coinRows, rowSpot } from '../world/floor.mjs';
 import {
   createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
 } from './sim.mjs';
-import { snapCam, followCam } from './camera.mjs';
+import { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY } from './camera.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
@@ -60,6 +60,7 @@ const realUntouched = () => realKeys().every((v, i) => v === realAtStart[i]);
 
 const display = document.getElementById('screen');
 const dctx = display.getContext('2d');
+// The overlay: the HUD and the screens at whole game px, over the scene.
 const view = document.createElement('canvas');
 view.width = VIEW_W;
 view.height = VIEW_H;
@@ -153,7 +154,9 @@ function writeSave(g, text) {
   commit(g, () => 0);
 }
 
-function present() {
+/** Composites renderer `r`'s scene onto the display, then the overlay over it. */
+function present(r) {
+  r.composite();
   dctx.imageSmoothingEnabled = false;
   dctx.drawImage(view, 0, 0, display.width, display.height);
 }
@@ -179,15 +182,15 @@ function selftest() {
     const { sim, reason } = runScript(world);
     if (reason) { finish(`fail: ${reason}`); return; }
     fit();
-    const r = createRenderer(view, world);
+    const r = createRenderer(view, world, display);
     const cam = { x: 0, y: 0 };
     snapCam(cam, sim);
     r.scene(sim, cam, 0);
     r.hud(sim);
     // Draws the pause screen over the scene, so a draw-time error fails the gate.
     drawPause({ renderer: r, world, sim, code: SELFTEST_CODE, copied: '', audio: { muted: false }, frame: frameOf(sim.bd, world.size), pauseMap: null, pausedAt: null });
-    present();
-    const px = view.getContext('2d').getImageData(0, 0, VIEW_W, VIEW_H).data;
+    present(r);
+    const px = dctx.getImageData(0, 0, display.width, display.height).data;
     const colours = new Set();
     for (let i = 0; i < px.length && colours.size < 2; i += 4) colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
     if (colours.size < 2) { finish('fail: canvas holds one colour'); return; }
@@ -217,12 +220,17 @@ function planeLeg(world) {
   if (sim.bd.x < w) throw new Error(`plane leg: board (${sim.bd.x},${sim.bd.y}) lies in columns 0-${w - 1}`);
   const cam = { x: 0, y: 0 };
   snapCam(cam, sim);
-  // The inner 28x28 px of the explorer's 32 px room, in view pixels (y down).
+  // The inner 28x28 px of the explorer's 32 px room, on the display.
   const [nx, ny] = nodeXY(sim.bd, sim.cell);
-  const x0 = nx - 14 - Math.round(cam.x) + VIEW_W / 2, y0 = Math.round(cam.y) - (ny + 30) + VIEW_H / 2;
+  const f = createFrame();
+  placeFrame(f, cam, display.width, display.height, VIEW_W, VIEW_H);
+  const x0 = Math.round(deviceX(f, nx - 14)), x1 = Math.round(deviceX(f, nx + 14));
+  const y0 = Math.round(deviceY(f, ny + 30)), y1 = Math.round(deviceY(f, ny + 2));
   const room = (wd) => {
-    createRenderer(view, wd).scene(sim, cam, 0);
-    return view.getContext('2d').getImageData(x0, y0, 28, 28).data;
+    const r = createRenderer(view, wd, display);
+    r.scene(sim, cam, 0);
+    r.composite();
+    return dctx.getImageData(x0, y0, x1 - x0, y1 - y0).data;
   };
   const rockBoard = { ...sim.bd, kind: 'rock', links: null, doors: [], doorMask: null };
   const maze = room(world);
@@ -345,7 +353,9 @@ function driveTouch(copied, fake) {
   const lay = layout({ ...viewport(), touch: true });
   // The preview's feet as the scene draws them, in view px.
   const [fx, fy] = feet(g.preview), [wantX, wantY] = titleFeet(lay);
-  need(Math.abs(fx - Math.round(g.cam.x) + VIEW_W / 2 - wantX) <= 1 && Math.abs(Math.round(g.cam.y) - fy + VIEW_H / 2 - wantY) <= 1,
+  const f = createFrame();
+  placeFrame(f, g.cam, display.width, display.height, VIEW_W, VIEW_H);
+  need(Math.abs(deviceX(f, fx) / f.sx - wantX) <= 1 && Math.abs(deviceY(f, fy) / f.sy - wantY) <= 1,
     'the title explorer stands at its spot');
   need(display.width === lay.backing.w && display.height === lay.backing.h, 'canvas backing size follows the layout');
   // Layout rounds to 1/64 CSS px, so the laid-out box matches within that.
@@ -1695,7 +1705,7 @@ function titleCam(g) {
 function useCode(g, code) {
   g.code = code;
   g.world = createWorld(code, { difficulty: g.difficulty });
-  g.renderer = createRenderer(view, g.world);
+  g.renderer = createRenderer(view, g.world, display);
   g.preview = createSim(g.world, g.world.startPoint());
   titleCam(g);
 }
@@ -2168,7 +2178,7 @@ function draw(g, t) {
     else if (g.screen === 'splash') drawSplash(g);
   }
   if (guard.shown()) paintError(g);
-  present();
+  present(g.renderer);
   if (touch) touch.refresh();
 }
 
@@ -2205,7 +2215,7 @@ function runLoop(g) {
     start: performance.now(),
     // The self-test fails on the first frame exception, as an uncaught one did.
     log: (e) => { console.error(e); if (SELFTEST) reportError(e); },
-    onFail: () => { paintError(g); present(); },
+    onFail: () => { paintError(g); present(g.renderer); },
   });
   window.addEventListener('keydown', (e) => { if (!e.repeat) guard.release(); });
   function frame(now) {

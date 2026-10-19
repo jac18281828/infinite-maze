@@ -1,5 +1,7 @@
-// Canvas rendering at 320x180: board pre-renders, 0.5x parallax glyph wall,
-// sprites, a quarter-resolution light map multiplied over the scene, dust.
+// Canvas rendering: board pre-renders, a 0.5x parallax glyph wall, sprites
+// and a quarter-resolution light map in layers at game resolution, composited
+// with the explorer and the dust onto the display through one world-to-device
+// transform; the HUD and the screens on a 320x180 overlay.
 import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
   BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS,
@@ -14,12 +16,18 @@ import { coinId } from './wallet.mjs';
 import { boardMask } from './mask.mjs';
 import { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
-import { pixelCamX, pixelCamY } from './camera.mjs';
+import { LAYER_MARGIN, createFrame, placeFrame, deviceX, deviceY } from './camera.mjs';
 
 export const VIEW_W = 320;
 export const VIEW_H = 180;
-const LIGHT_W = VIEW_W / 4;
-const LIGHT_H = VIEW_H / 4;
+// The back-wall, world and light layers span the view and LAYER_MARGIN more on
+// every side, so the light map's quarter resolution divides them.
+const LAYER_W = VIEW_W + 2 * LAYER_MARGIN;
+const LAYER_H = VIEW_H + 2 * LAYER_MARGIN;
+const HALF_W = LAYER_W / 2;
+const HALF_H = LAYER_H / 2;
+const LIGHT_W = LAYER_W / 4;
+const LIGHT_H = LAYER_H / 4;
 const FLAME_R = 80;
 // Brazier flicker amplitudes; the light reach below is built from them.
 const BRAZIER_FLICKER_A = 0.08;
@@ -153,9 +161,15 @@ function shadePixels(data, mask, p, stairs, ledge) {
   }
 }
 
-export function createRenderer(canvas, world) {
+/**
+ * A renderer of `world`. `scene` renders a frame's layers and `composite`
+ * draws them onto `display`; `canvas` is the 320x180 overlay that the HUD,
+ * the text and the panels draw on, and `ctx` its context.
+ */
+export function createRenderer(canvas, world, display) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
+  const dctx = display.getContext('2d');
   // One buffer serves every board: putImageData copies it.
   let shadeImg = null;
   const sprites = {};
@@ -177,6 +191,16 @@ export function createRenderer(canvas, world) {
   const background = buildBackground();
   const rockCanvas = buildBoardCanvas(null);
   const boards = new Map();
+  // The layers, y down: world point (x, y) lands at world-layer point
+  // (x − wx + HALF_W, wy − y + HALF_H) of the frame `tf`, and the back wall
+  // likewise at its own camera.
+  const wall = makeCanvas(LAYER_W, LAYER_H);
+  const wallCtx = wall.getContext('2d');
+  const layer = makeCanvas(LAYER_W, LAYER_H);
+  const lctx = layer.getContext('2d');
+  wallCtx.imageSmoothingEnabled = false;
+  lctx.imageSmoothingEnabled = false;
+  const tf = createFrame();
   const light = makeCanvas(LIGHT_W, LIGHT_H);
   const lightCtx = light.getContext('2d');
   const lightImg = lightCtx.createImageData(LIGHT_W, LIGHT_H);
@@ -389,21 +413,22 @@ export function createRenderer(canvas, world) {
     ctx.fillRect(x + 2, y + 2, w - 4, 1); ctx.fillRect(x + 2, y + h - 3, w - 4, 1);
   }
 
-  // Back wall offset is half the camera position, wrapped to its 128 px pattern.
-  function drawBackground(cx, cy) {
-    const bgx = -(((Math.floor(cx / 2) % 128) + 128) % 128), bgy = ((Math.floor(cy / 2) % 128) + 128) % 128 - 128;
-    for (let y = bgy; y < VIEW_H; y += 128) for (let x = bgx; x < VIEW_W; x += 128) ctx.drawImage(background, x, y);
+  // The back wall renders at its whole camera (bx, by), its 128 px pattern wrapped.
+  function drawBackground(bx, by) {
+    const x0 = -((((bx - LAYER_MARGIN) % 128) + 128) % 128), y0 = (((by + LAYER_MARGIN) % 128) + 128) % 128 - 128;
+    wallCtx.clearRect(0, 0, LAYER_W, LAYER_H);
+    for (let y = y0; y < LAYER_H; y += 128) for (let x = x0; x < LAYER_W; x += 128) wallCtx.drawImage(background, x, y);
   }
 
-  /** Draws every board in view, rock outside the band tree; returns the in-view boards that hold art. */
+  /** Draws every board the world layer shows, rock outside the band tree; returns those that hold art. */
   function drawBoards(cx, cy, sx, sy) {
-    const bx0 = Math.floor((cx - VIEW_W / 2) / BOARD_W), bx1 = Math.floor((cx + VIEW_W / 2) / BOARD_W);
-    const by0 = Math.floor((cy - VIEW_H / 2) / BOARD_H), by1 = Math.floor((cy + VIEW_H / 2) / BOARD_H);
+    const bx0 = Math.floor((cx - HALF_W) / BOARD_W), bx1 = Math.floor((cx + HALF_W) / BOARD_W);
+    const by0 = Math.floor((cy - HALF_H) / BOARD_H), by1 = Math.floor((cy + HALF_H) / BOARD_H);
     const lit = [];
     for (let by = by0; by <= by1; by++) {
       for (let bx = bx0; bx <= bx1; bx++) {
         const art = boardArt(bx, by);
-        ctx.drawImage(art ? art.canvas : rockCanvas.canvas, sx(bx * BOARD_W), sy((by + 1) * BOARD_H));
+        lctx.drawImage(art ? art.canvas : rockCanvas.canvas, sx(bx * BOARD_W), sy((by + 1) * BOARD_H));
         if (art) lit.push([bx, by, art]);
       }
     }
@@ -411,7 +436,7 @@ export function createRenderer(canvas, world) {
   }
 
   /**
-   * Draws the items of the in-view boards resting on the floor: the dead-end
+   * Draws the items of the shown boards resting on the floor: the dead-end
    * and row coins that `collected` (the run's set of coin ids) lacks and the
    * jars that `jars` (the run's taken set) lacks.
    */
@@ -422,56 +447,56 @@ export function createRenderer(canvas, world) {
         const taken = kind === 'coin' ? collected : jars;
         if (taken && taken.has(coinId(bd, cell))) continue;
         const [x, y] = itemSpot(bd, cell);
-        if (kind === 'coin') ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
+        if (kind === 'coin') lctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
         else {
           // The 9 px jar fills room columns 8..16 at the west spot and 31..39 at the east.
           const east = x > nodeXY(bd, cell)[0];
-          ctx.drawImage(jar, Math.round(sx(x)) - (east ? 5 : 4), Math.round(sy(y)) - 12);
+          lctx.drawImage(jar, Math.round(sx(x)) - (east ? 5 : 4), Math.round(sy(y)) - 12);
         }
       }
       for (const cell of coinRows(world, bd)) {
         for (let i = 0; i < ROW_COINS; i++) {
           if (collected && collected.has(coinId(bd, cell, i))) continue;
           const [x, y] = rowSpot(bd, cell, i);
-          ctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
+          lctx.drawImage(coin, Math.round(sx(x)) - 3, Math.round(sy(y)) - 6);
         }
       }
     }
   }
 
-  /** Draws the tier-2 skeletons of the in-view boards at opacity `alpha`; they sit under the light map like the walls. */
+  /** Draws the tier-2 skeletons of the shown boards at opacity `alpha`; they sit under the light map like the walls. */
   function drawBoost(lit, sx, sy, alpha) {
     if (alpha <= 0) return;
-    ctx.globalAlpha = alpha;
+    lctx.globalAlpha = alpha;
     for (const [bx, by] of lit) {
       for (const spot of boostSpots(world.board(bx, by))) {
-        ctx.drawImage(skeletonSprite(spot), sx(bx * BOARD_W + spot[0]), sy(by * BOARD_H + spot[1] + 1));
+        lctx.drawImage(skeletonSprite(spot), sx(bx * BOARD_W + spot[0]), sy(by * BOARD_H + spot[1] + 1));
       }
     }
-    ctx.globalAlpha = 1;
+    lctx.globalAlpha = 1;
   }
 
   /**
-   * Draws the sconce and brazier sprites of the in-view boards `lit`, and adds
-   * the light of every sconce and brazier whose light reaches the view: those
-   * of the boards within LIGHT_REACH of it, in view or not, so a light never
-   * pops at a board seam. A light farther than its radius adds nothing and
-   * every light centre lies inside its board, so the reach is exact.
+   * Draws the sconce and brazier sprites of the shown boards `lit`, and adds
+   * the light of every sconce and brazier whose light reaches the light map:
+   * those of the boards within LIGHT_REACH of it, shown or not, so a light
+   * never pops at a board seam. A light farther than its radius adds nothing
+   * and every light centre lies inside its board, so the reach is exact.
    */
   function drawFlames(lit, cx, cy, sx, sy, t) {
     for (const [bx, by, art] of lit) {
       const wx = bx * BOARD_W, wy = by * BOARD_H;
       for (const [x, y] of art.sconces) {
         const f = sconceFlames[Math.floor(t * 8 + x) % 3];
-        ctx.drawImage(f, Math.round(sx(wx + x)) - 4, Math.round(sy(wy + y + 4)));
+        lctx.drawImage(f, Math.round(sx(wx + x)) - 4, Math.round(sy(wy + y + 4)));
       }
       for (const [x, y] of art.braziers) {
-        ctx.drawImage(brazier, Math.round(sx(wx + x)) - 8, Math.round(sy(wy + y + 10)));
-        ctx.drawImage(flames[Math.floor(t * 9 + x) % 4], Math.round(sx(wx + x)) - 6, Math.round(sy(wy + y + 21)));
+        lctx.drawImage(brazier, Math.round(sx(wx + x)) - 8, Math.round(sy(wy + y + 10)));
+        lctx.drawImage(flames[Math.floor(t * 9 + x) % 4], Math.round(sx(wx + x)) - 6, Math.round(sy(wy + y + 21)));
       }
     }
-    const bx0 = Math.floor((cx - VIEW_W / 2 - LIGHT_REACH) / BOARD_W), bx1 = Math.floor((cx + VIEW_W / 2 + LIGHT_REACH) / BOARD_W);
-    const by0 = Math.floor((cy - VIEW_H / 2 - LIGHT_REACH) / BOARD_H), by1 = Math.floor((cy + VIEW_H / 2 + LIGHT_REACH) / BOARD_H);
+    const bx0 = Math.floor((cx - HALF_W - LIGHT_REACH) / BOARD_W), bx1 = Math.floor((cx + HALF_W + LIGHT_REACH) / BOARD_W);
+    const by0 = Math.floor((cy - HALF_H - LIGHT_REACH) / BOARD_H), by1 = Math.floor((cy + HALF_H + LIGHT_REACH) / BOARD_H);
     for (let by = by0; by <= by1; by++) {
       for (let bx = bx0; bx <= bx1; bx++) {
         const art = boardArt(bx, by);
@@ -489,66 +514,105 @@ export function createRenderer(canvas, world) {
     }
   }
 
-  /** Draws the explorer and adds the torch light; returns the torch tip on screen. */
-  function drawExplorer(sim, sx, sy, t) {
-    const fx = feetX(sim), fy = feetY(sim);
+  // The explorer `scene` last rendered (or null), its time, sprite and torch
+  // tip in world px, for `composite`.
+  let shown = null, shownT = 0, body = null, tipX = 0, tipY = 0;
+
+  /** Sets the sprite and torch tip of the explorer `sim` from its pose and adds the torch light at the tip. */
+  function poseExplorer(sim, sx, sy, t) {
     const { anim, frame } = pose(sim);
     const flip = sim.facing < 0;
-    const px = Math.round(sx(fx)) - 8, py = Math.round(sy(fy)) - 24;
+    body = sprites[anim][frame][flip ? 1 : 0];
     const [tx, ty] = torchTip(anim, frame);
-    const tip = [px + (flip ? 15 - tx : tx), py + ty];
-    ctx.drawImage(sprites[anim][frame][flip ? 1 : 0], px, py);
+    // The sprite's left edge stands 8 px left of the feet, its top 24 px above them.
+    tipX = feetX(sim) - 8 + (flip ? 15 - tx : tx);
+    tipY = feetY(sim) + 24 - ty;
     if (sim.burn > 0) {
-      ctx.drawImage(torches[Math.floor(t * 12) % 3], tip[0] - 2, tip[1] - 4);
       // Flicker amplitude grows as the burn falls.
       const amp = 1.5 + 7 * (1 - sim.burn / BURN_S);
       const flick = amp * (0.6 * Math.sin(t * 17.3) + 0.4 * Math.sin(t * 41.9 + 1.7));
-      addLight(tip[0], tip[1], Math.max(4, torchRadius(sim.burn) + flick), [255, 196, 128], 1.25);
+      addLight(sx(tipX), sy(tipY), Math.max(4, torchRadius(sim.burn) + flick), [255, 196, 128], 1.25);
     } else {
-      ctx.drawImage(ember, tip[0] - 1, tip[1] - 1);
-      addLight(tip[0], tip[1], 8 + Math.sin(t * 20), [255, 110, 50], 1.2);
+      addLight(sx(tipX), sy(tipY), 8 + Math.sin(t * 20), [255, 110, 50], 1.2);
     }
-    return tip;
   }
 
-  // The light map multiplies the scene; only this upscale is smoothed.
-  function applyLight() {
+  /** Draws `img` on the display, its top-left corner at device (x, y), each edge on the device pixel nearest its true position. */
+  function blit(img, x, y) {
+    const x0 = Math.round(x), y0 = Math.round(y);
+    dctx.drawImage(img, x0, y0, Math.round(x + img.width * tf.sx) - x0, Math.round(y + img.height * tf.sy) - y0);
+  }
+
+  /** Draws the explorer `sim` and its flame on the display, each at its art offset from the true feet, scaled. */
+  function drawExplorer(sim, t) {
+    const x = deviceX(tf, feetX(sim)), y = deviceY(tf, feetY(sim));
+    blit(body, x - 8 * tf.sx, y - 24 * tf.sy);
+    const tx = deviceX(tf, tipX), ty = deviceY(tf, tipY);
+    if (sim.burn > 0) blit(torches[Math.floor(t * 12) % 3], tx - 2 * tf.sx, ty - 4 * tf.sy);
+    else blit(ember, tx - tf.sx, ty - tf.sy);
+  }
+
+  /** Writes the light map: ambient plus every light the frame added. */
+  function shadeLight() {
     const d = lightImg.data;
     for (let i = 0, o = 0; i < acc.length; i += 3, o += 4) {
       d[o] = AMBIENT[0] + acc[i]; d[o + 1] = AMBIENT[1] + acc[i + 1]; d[o + 2] = AMBIENT[2] + acc[i + 2]; d[o + 3] = 255;
     }
     lightCtx.putImageData(lightImg, 0, 0);
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(light, 0, 0, VIEW_W, VIEW_H);
-    ctx.restore();
-    ctx.imageSmoothingEnabled = false;
+  }
+
+  // The light map multiplies the composite at the world layer's placement; only this upscale is smoothed.
+  function applyLight() {
+    dctx.save();
+    dctx.globalCompositeOperation = 'multiply';
+    dctx.imageSmoothingEnabled = true;
+    dctx.drawImage(light, tf.worldX, tf.worldY, tf.w, tf.h);
+    dctx.restore();
+    dctx.imageSmoothingEnabled = false;
   }
 
   /**
-   * Draws the world around `cam` with the explorer `sim` (or none).
-   * `t` is seconds of wall time, used for flicker and animation. With an
-   * explorer the offset rounds once, so a steady lag draws it still on its
-   * world pixel.
+   * Starts a frame around `cam` with the explorer `sim` (or none): clears the
+   * overlay and renders the back-wall, world and light layers at game
+   * resolution for `composite`. `t` is seconds of wall time, used for flicker
+   * and animation. Returns the torch tip on the display, or null.
    */
   function scene(sim, cam, t) {
-    const cx = pixelCamX(cam, sim), cy = pixelCamY(cam, sim);
-    const sx = (wx) => wx - cx + VIEW_W / 2;
-    const sy = (wy) => cy - wy + VIEW_H / 2;
-    const unsx = (px) => px + cx - VIEW_W / 2;
-    const unsy = (py) => cy - py + VIEW_H / 2;
+    ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+    placeFrame(tf, cam, display.width, display.height, VIEW_W, VIEW_H);
+    const cx = tf.wx, cy = tf.wy;
+    const sx = (wx) => wx - cx + HALF_W;
+    const sy = (wy) => cy - wy + HALF_H;
     prepare(cam);
     acc.fill(0);
-    drawBackground(cx, cy);
+    drawBackground(tf.bx, tf.by);
+    lctx.clearRect(0, 0, LAYER_W, LAYER_H);
     const lit = drawBoards(cx, cy, sx, sy);
     drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
     if (sim) drawBoost(lit, sx, sy, boostAlpha(sim.burn));
     drawFlames(lit, cx, cy, sx, sy, t);
-    const tip = sim ? drawExplorer(sim, sx, sy, t) : null;
+    if (sim) {
+      poseExplorer(sim, sx, sy, t);
+      stepDrift(windDir(world, sim.bd, sim.cell), t);
+    }
+    shadeLight();
+    shown = sim;
+    shownT = t;
+    return sim ? [deviceX(tf, tipX), deviceY(tf, tipY)] : null;
+  }
+
+  /**
+   * Draws the frame `scene` rendered onto the display: the back wall, the
+   * world layer over it, the explorer, the light map multiplying all three,
+   * then the dust.
+   */
+  function composite() {
+    dctx.imageSmoothingEnabled = false;
+    dctx.drawImage(wall, tf.wallX, tf.wallY, tf.w, tf.h);
+    dctx.drawImage(layer, tf.worldX, tf.worldY, tf.w, tf.h);
+    if (shown) drawExplorer(shown, shownT);
     applyLight();
-    if (tip) drawDust(sim, tip, t, sx, sy, unsx, unsy);
-    return tip;
+    if (shown) drawDust(shown);
   }
 
   /**
@@ -571,25 +635,23 @@ export function createRenderer(canvas, world) {
 
   // Motes hang in the world and show only inside the torch radius. One drift
   // carries them all, set by the explorer's cell.
-  let dustTip = null, dustR = 0, dustSx = null, dustSy = null;
+  let dustR = 0;
 
-  /** Draws the mote at world (mx, my) when the torch lights it; allocates nothing. */
+  /** Draws the mote at world (mx, my) on the display when the torch lights it; allocates nothing. */
   function drawMote(mx, my) {
-    const x = dustSx(mx), y = dustSy(my);
-    const a = 1 - Math.hypot(x - dustTip[0], y - dustTip[1]) / (dustR * 0.9);
+    const a = 1 - Math.hypot(mx - tipX, my - tipY) / (dustR * 0.9);
     if (a <= 0) return;
     const v = a * 0.7 * 1000, n = Math.round(v);
     // The table holds toFixed(3) away from a rounding tie, where the double decides.
-    ctx.fillStyle = DUST_STYLE[n] !== undefined && Math.abs(v - n) < 0.4999 ? DUST_STYLE[n] : `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
-    ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+    dctx.fillStyle = DUST_STYLE[n] !== undefined && Math.abs(v - n) < 0.4999 ? DUST_STYLE[n] : `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
+    // One game px, its top-left corner at the mote.
+    const x = deviceX(tf, mx), y = deviceY(tf, my), x0 = Math.round(x), y0 = Math.round(y);
+    dctx.fillRect(x0, y0, Math.round(x + tf.sx) - x0, Math.round(y + tf.sy) - y0);
   }
 
-  function drawDust(sim, tip, t, sx, sy, unsx, unsy) {
-    stepDrift(windDir(world, sim.bd, sim.cell), t);
-    const r = sim.burn > 0 ? torchRadius(sim.burn) : 8;
-    const x0 = unsx(tip[0]), y0 = unsy(tip[1]);
-    dustTip = tip; dustR = r; dustSx = sx; dustSy = sy;
-    eachMote(x0 - r, y0 - r, x0 + r, y0 + r, t, drift.ox, drift.oy, drawMote);
+  function drawDust(sim) {
+    dustR = sim.burn > 0 ? torchRadius(sim.burn) : 8;
+    eachMote(tipX - dustR, tipY - dustR, tipX + dustR, tipY + dustR, shownT, drift.ox, drift.oy, drawMote);
   }
 
   /** The torch bar, TOMB n, and under it the wallet: the coin sprite, then the count growing leftward. */
@@ -667,5 +729,6 @@ export function createRenderer(canvas, world) {
     if (model.explorer && Math.floor(t * 3) % 2 === 0) block(model.explorer, pal('p'));
   }
 
-  return { ctx, scene, hud, text, panel, prepare, drawMap };
+  // `layers` hands the layer canvases to the tests.
+  return { ctx, scene, composite, hud, text, panel, prepare, drawMap, layers: { wall, world: layer, light } };
 }

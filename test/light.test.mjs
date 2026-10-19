@@ -4,11 +4,13 @@ import assert from 'node:assert/strict';
 import { createRenderer } from '../src/game/render.mjs';
 import { fixtureSets } from '../src/game/fixtures.mjs';
 import { nodeXY, BOARD_W, BOARD_H } from '../src/game/sim.mjs';
+import { createFrame, placeFrame, LAYER_MARGIN } from '../src/game/camera.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
 import { worlds, sample } from './sample.mjs';
 
 const T = 1.3;
-const LIGHT_W = 80, LIGHT_H = 45;
+// The light map covers the world layer, the view and LAYER_MARGIN more on every side, at a quarter of its resolution.
+const LIGHT_W = (320 + 2 * LAYER_MARGIN) / 4, LIGHT_H = (180 + 2 * LAYER_MARGIN) / 4;
 // A light centre this near a seam counts as beside it.
 const NEAR = 40;
 // A brazier's light centre sits 14 px above its art point, a sconce's 2 px.
@@ -25,7 +27,7 @@ function withDocument(body) {
       const canvas = { width: 0, height: 0, shaded: null };
       const ctx = {
         canvas, fillStyle: '', globalAlpha: 1, globalCompositeOperation: 'source-over', imageSmoothingEnabled: false,
-        save() {}, restore() {}, drawImage() {}, fillRect() {},
+        save() {}, restore() {}, drawImage() {}, fillRect() {}, clearRect() {},
         createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
         putImageData(img) { if (img.width === LIGHT_W) canvas.shaded = Uint8ClampedArray.from(img.data); },
       };
@@ -47,7 +49,10 @@ function lightRig(world, made) {
   const view = document.createElement('canvas');
   view.width = 320;
   view.height = 180;
-  const renderer = createRenderer(view, world);
+  const display = document.createElement('canvas');
+  display.width = 1280;
+  display.height = 720;
+  const renderer = createRenderer(view, world, display);
   const light = made.find((c) => c.width === LIGHT_W && c.height === LIGHT_H);
   return (cam) => {
     renderer.scene(null, cam, T);
@@ -55,11 +60,13 @@ function lightRig(world, made) {
   };
 }
 
-/** Whether board `bd` lies in the window `drawBoards` draws at `cam`. */
+/** Whether board `bd` lies in the window `drawBoards` draws at `cam`: the world layer's, at the frame's whole camera. */
 function inView(bd, cam) {
-  const cx = Math.round(cam.x), cy = Math.round(cam.y);
-  return bd.x >= Math.floor((cx - 160) / BOARD_W) && bd.x <= Math.floor((cx + 160) / BOARD_W)
-    && bd.y >= Math.floor((cy - 90) / BOARD_H) && bd.y <= Math.floor((cy + 90) / BOARD_H);
+  const f = createFrame();
+  placeFrame(f, cam, 1280, 720, 320, 180);
+  const hw = 160 + LAYER_MARGIN, hh = 90 + LAYER_MARGIN;
+  return bd.x >= Math.floor((f.wx - hw) / BOARD_W) && bd.x <= Math.floor((f.wx + hw) / BOARD_W)
+    && bd.y >= Math.floor((f.wy - hh) / BOARD_H) && bd.y <= Math.floor((f.wy + hh) / BOARD_H);
 }
 
 /** Each kind and side's first source on the tree boards of `sample(d, 3)` whose light centre lies within NEAR of the seam facing the view. */

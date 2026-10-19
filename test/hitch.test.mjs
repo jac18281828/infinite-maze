@@ -11,6 +11,7 @@ import { fixtureSets, dustMotes } from '../src/game/fixtures.mjs';
 import { createRenderer } from '../src/game/render.mjs';
 import { RGB, idx, ROCK } from '../src/game/art.mjs';
 import { BOARD_W, BOARD_H, createSim, feet, torchRadius } from '../src/game/sim.mjs';
+import { createFrame, placeFrame, deviceX, deviceY } from '../src/game/camera.mjs';
 
 const CODE = '00000000';
 const LEVELS = ['easy', 'medium', 'hard', 'ultimate'];
@@ -83,7 +84,7 @@ function nullCanvas(copy = false, fills = null) {
   const canvas = { width: 0, height: 0, shaded: null };
   const ctx = {
     canvas, fillStyle: '', globalAlpha: 1, globalCompositeOperation: 'source-over', imageSmoothingEnabled: false,
-    save() {}, restore() {}, drawImage() {},
+    save() {}, restore() {}, drawImage() {}, clearRect() {},
     fillRect(x, y, w, h) { if (fills) fills.push([x, y, w, h, ctx.fillStyle]); },
     createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
     putImageData(img) {
@@ -93,6 +94,14 @@ function nullCanvas(copy = false, fills = null) {
   };
   canvas.getContext = () => ctx;
   return canvas;
+}
+
+/** A null canvas the size of the iPad's 8.6x display; with `fills` it logs each fillRect. */
+function display(fills = null) {
+  const d = nullCanvas(false, fills);
+  d.width = 2752;
+  d.height = 1548;
+  return d;
 }
 
 /** Tree boards of tombs u -1..1, v 0..2 at `difficulty`, with their masks and fixture sets. */
@@ -124,10 +133,10 @@ test('board art equals the reference shading byte for byte over the sample', () 
   withDocument(make, () => {
     for (const difficulty of ['medium', 'ultimate']) {
       const world = createWorld(CODE, { difficulty });
-      const view = nullCanvas();
+      const renderer = createRenderer(nullCanvas(), world, display());
+      // The world layer draws the boards.
       const draws = [];
-      view.getContext().drawImage = (src) => draws.push(src);
-      const renderer = createRenderer(view, world);
+      renderer.layers.world.getContext().drawImage = (src) => draws.push(src);
       for (const { bd, mask, stairs, ledge } of sampleBoards(world)) {
         draws.length = 0;
         renderer.scene(null, centre(bd), 0);
@@ -156,7 +165,7 @@ test('a board-art build takes at most a quarter of the reference shading time', 
       const world = createWorld(CODE, { difficulty });
       const sample = sampleBoards(world);
       for (const pass of [0, 1]) {
-        const renderer = createRenderer(view, world);
+        const renderer = createRenderer(view, world, display());
         for (const { bd, mask, stairs, ledge } of sample) {
           if (pass === 1) reference.push(timed(() => referenceShade(mask, bd.p, stairs, ledge)));
           // Each prepare builds at most one board's art; a build shows as one shade.
@@ -184,7 +193,7 @@ function seamWalks(difficulty) {
   withDocument(() => nullCanvas(), () => {
     for (const [, dx, dy, speed, span] of walks) {
       const world = createWorld(CODE, { difficulty });
-      const renderer = createRenderer(nullCanvas(), world);
+      const renderer = createRenderer(nullCanvas(), world, display());
       const tombW = world.size.w * BOARD_W, tombH = world.size.h * BOARD_H;
       const cam = { x: tombW / 2, y: 2 * tombH + tombH / 2 };
       const tombAt = () => tombOf(Math.floor(cam.x / BOARD_W), Math.floor(cam.y / BOARD_H), world.size);
@@ -251,7 +260,7 @@ const allocated = () => v8.getHeapStatistics().total_allocated_bytes;
 test('an idle prepare allocates under 256 bytes', () => {
   withDocument(() => nullCanvas(), () => {
     const world = createWorld(CODE, { difficulty: 'ultimate' });
-    const renderer = createRenderer(nullCanvas(), world);
+    const renderer = createRenderer(nullCanvas(), world, display());
     const bd = world.startPoint().board;
     const cam = centre(bd);
     for (let i = 0; i < 5000; i++) renderer.prepare(cam);
@@ -279,11 +288,17 @@ function explorer(world, burn) {
 test('a steady play frame allocates under 8 KB', (t) => {
   withDocument(() => nullCanvas(), () => {
     const world = createWorld(CODE, { difficulty: 'medium' });
-    const renderer = createRenderer(nullCanvas(), world);
+    const renderer = createRenderer(nullCanvas(), world, display());
     const { sim, cam } = explorer(world, 300);
-    for (let f = 0; f < 5000; f++) renderer.scene(sim, cam, f / 60);
+    // Every draw of a play frame: the layers, the composite and the HUD.
+    const frame = (f) => {
+      renderer.scene(sim, cam, f / 60);
+      renderer.composite();
+      renderer.hud(sim, 0);
+    };
+    for (let f = 0; f < 5000; f++) frame(f);
     const before = allocated();
-    for (let f = 5000; f < 10000; f++) renderer.scene(sim, cam, f / 60);
+    for (let f = 5000; f < 10000; f++) frame(f);
     const per = (allocated() - before) / 5000;
     t.diagnostic(`${per.toFixed(0)} bytes a frame`);
     assert.ok(per < 8192, `${per.toFixed(0)} bytes a frame`);
@@ -295,22 +310,26 @@ test('the dust draws the motes dustMotes lists, each with the toFixed(3) fill', 
     const world = createWorld(CODE, { difficulty: 'medium' });
     for (const burn of [300, 150, 40]) {
       const fills = [];
-      const renderer = createRenderer(nullCanvas(false, fills), world);
+      const renderer = createRenderer(nullCanvas(), world, display(fills));
       const { sim, cam } = explorer(world, burn);
       assert.equal(windDir(world, sim.bd, sim.cell), -1, 'no wind, so the dust does not drift');
-      const cx = Math.round(cam.x), cy = Math.round(cam.y);
+      const tf = createFrame();
+      placeFrame(tf, cam, 2752, 1548, 320, 180);
       let drawn = 0;
       for (let f = 0; f < 600; f++) {
         const t = f / 60;
         fills.length = 0;
         const tip = renderer.scene(sim, cam, t);
+        renderer.composite();
         const r = torchRadius(burn);
-        const x0 = tip[0] + cx - 160, y0 = cy - tip[1] + 90;
+        // The torch tip in world px.
+        const x0 = (tip[0] - tf.ox) / tf.sx, y0 = (tf.oy - tip[1]) / tf.sy;
         const want = [];
         for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, 0, 0)) {
-          const x = m.x - cx + 160, y = cy - m.y + 90;
-          const a = 1 - Math.hypot(x - tip[0], y - tip[1]) / (r * 0.9);
-          if (a > 0) want.push([Math.round(x), Math.round(y), 1, 1, `rgba(255,226,170,${(a * 0.7).toFixed(3)})`]);
+          const a = 1 - Math.hypot(m.x - x0, m.y - y0) / (r * 0.9);
+          // One game px, its top-left corner at the mote, each edge rounded once.
+          const x = deviceX(tf, m.x), y = deviceY(tf, m.y), px = Math.round(x), py = Math.round(y);
+          if (a > 0) want.push([px, py, Math.round(x + tf.sx) - px, Math.round(y + tf.sy) - py, `rgba(255,226,170,${(a * 0.7).toFixed(3)})`]);
         }
         const got = fills.filter((fill) => fill[4].startsWith('rgba(255,226,170,'));
         assert.deepEqual(got, want, `burn ${burn}, frame ${f}`);

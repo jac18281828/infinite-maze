@@ -815,9 +815,14 @@ full torch and adds one to the count.
 ## 8. Presentation
 
 **Graphics.**
-- Canvas 2D at a 320×180 internal resolution, with `imageSmoothingEnabled =
-  false`. In keyboard mode the view scales up by the largest whole multiple of
-  CSS pixels, centred.
+- Canvas 2D, with `imageSmoothingEnabled = false`. The view spans 320×180
+  game pixels, and the art, drawn in game pixels, scales nearest-neighbour. In
+  keyboard mode the view scales up by the largest whole multiple of CSS
+  pixels, centred.
+- The world, the back wall, the explorer, the light and the dust draw through
+  one world-to-device transform at device-pixel precision: a layer's pixel
+  edges and a sprite's outer edges land on the device pixels nearest their
+  true positions. The HUD and the screens stay on whole game pixels.
 - In touch mode (§9) the view fills the safe area at a fractional scale; the
   page background fills the letterbox. The canvas's backing store is in device
   pixels, so a game pixel spans ⌊s⌋ or ⌈s⌉ of them and the nearest-neighbour
@@ -831,10 +836,14 @@ full torch and adds one to the count.
 - Sprites and tiles stored as palette-indexed strings in the source.
 
 **Lighting.** A light map at quarter resolution, lit by the torch, the
-sconces and the flames, composited multiplicatively over the scene. A sconce or
-flame lights the view wherever its light reaches it, from a board in view or off
-it: the boards within 89.6 px of the view, the brazier's 80 px radius at its
-peak flicker of 1.12, contribute lights, and only boards in view draw sprites.
+sconces and the flames, composited multiplicatively over the scene. The light
+map renders in the world layer's frame (§9) and rides the same transform, so a
+sconce's light and its sprite round together and the torch's light centres on
+the torch tip. A sconce or flame lights the light map wherever its light
+reaches it, from a board the world layer shows or not: the boards within
+89.6 px of the light map, the brazier's 80 px radius at its peak flicker of
+1.12, contribute lights, and only the boards the world layer shows draw
+sprites.
 Hieroglyph walls scroll behind at 0.5× for depth. Dust motes hang in the world, never with the explorer
 or the camera, and show in torchlight: drawn inside the torch radius and
 fading toward its edge. While the explorer's cell lies in a windy branch (§4),
@@ -1022,15 +1031,14 @@ panel ignores auto-repeated keydowns, so a held key answers nothing, and
 ignores every other key, Space and P included, except M, which mutes as on
 every screen.
 
-**Camera.** The camera follows the explorer with a lerp and a deadzone. The
-frame draws at a whole-pixel camera derived from the explorer's feet `f`,
-`round(f.x) − round(f.x − cam.x)` across and `round(cam.y − f.y) − round(−f.y)`
-up, so a steady lag draws the explorer and its torch light at one screen
-position, on the world pixel its feet round to. A camera the deadzone holds
-stores that whole-pixel position, so the world stands still while the explorer
-moves inside the deadzone. With no explorer the camera rounds as is. It scrolls
-freely across board seams, and rock fills every position outside the band
-trees.
+**Camera.** The camera follows the explorer with a lerp and a deadzone and is
+never rounded. The frame maps the world to device pixels through it and rounds
+only at the draw, so at a constant speed a world point's step a tick varies by
+at most one device pixel, the explorer and its torch light hold still at a
+steady lag, and the world stands still while the deadzone holds the camera.
+The explorer draws from its true feet, within a device pixel of them. It
+scrolls freely across board seams, and rock fills every position outside the
+band trees.
 
 **Explorer.** A khaki-clad figure in a fedora, carrying a torch, with these
 animations:
@@ -1062,9 +1070,15 @@ torch sputtering at low burn.
 ## 9. Runtime
 
 The simulation runs on a fixed 60 Hz timestep, with rendering on
-`requestAnimationFrame`. Building a board takes 0.7 ms on average and 17 ms
-at most, and a tomb's board tree 0.04 ms on average and under 1 ms at most,
-measured on node 26.7.0 and an Apple M3 Max.
+`requestAnimationFrame`. The frame draws the back-wall, world and light layers
+at game resolution, each spanning the view and 2 px more on every side: the
+world and light layers at the whole camera ⌊cam⌋ and the back wall at
+⌊cam / 2⌋. It then composites them, the explorer and the dust onto the display
+through the world-to-device transform (§8), the light map multiplying the back
+wall, the world and the explorer, and draws the overlay of the HUD and the
+screens over them at the display's size. Building a board takes 0.7 ms on
+average and 17 ms at most, and a tomb's board tree 0.04 ms on average and
+under 1 ms at most, measured on node 26.7.0 and an Apple M3 Max.
 The frame warms the world ahead of the view. The warm window spans two boards
 beyond the view on every side, one more than the window that gets board art,
 and warms its boards nearest the camera first, by row and then column among
