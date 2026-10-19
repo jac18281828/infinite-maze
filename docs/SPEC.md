@@ -892,19 +892,28 @@ the room's side edge is a doorway, the skeleton sits beside it.
   sign junctions. A corner box holds room air, solid floor beneath it and no
   ladder, stair, stair-ledge, sconce or sconce-flame pixel exactly when its
   side is not blocked.
-- **Poses.** Four poses, drawn for the left corner with column 0 at the side
+- **Poses.** Six poses, drawn for the left corner with column 0 at the side
   edge and column 6 toward the room, each with its skull in rows 1 to 3 and
-  one `9` pixel, the fingertip. Right: the arm out at shoulder height, the
-  fingertip in column 6, row 3 to 5. Left: the arm across the body toward the
-  side edge, the fingertip in column 0, row 3 to 5. Up: the arm raised above the
-  skull, the fingertip in row 0. Down: the arm reaching down in front of the
-  legs, the fingertip in row 8. Every neighbour of the fingertip inside the
-  sprite is transparent except the arm pixel above it, so one row of room air
-  separates the fingertip from the floor's top row and one column of air from
-  the legs. The galleries fold to the key the player presses: a north,
-  north-east or north-west link is up and a south, south-west or south-east link
-  down. The right corner draws each pose mirrored, column `c` to `6 − c`, so its
-  left pose stands for right and its right pose for left.
+  one `9` pixel, the fingertip. Row 0 is the top row and sits at room row
+  `Y + 17`, so sprite row `r` sits at `Y + 17 − r`. Right: the arm out at
+  shoulder height, the fingertip at row 4, column 6. Up: the arm raised beside
+  the skull, the fingertip at row 1, column 5. Left: the arm across the body
+  toward the side edge, the fingertip at row 4, column 0. Down: the arm
+  reaching down in front of the legs, the fingertip at row 7, column 5.
+  Down-right: the arm slanting down and out, the fingertip at row 7, column 5.
+  Up-right: the arm slanting up and out, the fingertip at row 2, column 5.
+  Every fingertip but left's has one opaque neighbour of its eight inside the
+  sprite, the arm pixel it extends from: orthogonal on right, up and down,
+  diagonal on up-right and down-right. Left's fingertip touches its arm pixel
+  and its rib pixel at row 5, column 1. Down's and down-right's fingertips sit
+  at room row `Y + 10`, three rows above the floor's top row at `Y + 7`; rows
+  `Y + 8` and `Y + 9` under the fingertip are room air. The galleries draw
+  their own diagonals: a north-east or south-east way draws up-right or
+  down-right in the left corner, and a north-west or south-west way the mirror
+  in the right corner, which its gallery forces. The other ways draw right,
+  up, left and down. The right corner draws each pose mirrored, column `c` to
+  `6 − c`, so its left pose stands for right and its right pose for left; up,
+  down and the diagonals keep their pose and draw it mirrored.
 - **Palette.** Palette `5` to `9`, umber to sandstone, so a skeleton sits
   darker than the stair treads and the bone white.
 - **Tiers.** Tier 1 draws on the board layer after the mask's shading, as the

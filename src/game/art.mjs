@@ -647,11 +647,13 @@ export const ARROWS = [
   ],
 ];
 
-// Skeletons slumped in a lower room corner, 7x10, one pose per way on in DX
-// order: E N W S. Each is drawn for the left corner, column 0 at the room's
-// side edge, and its one `9` pixel is the fingertip pointing the way. Only
-// palette 5-9 keep it dimmer than the stair treads and the bone white.
+// Skeletons slumped in a lower room corner, 7x10, six poses in order: right,
+// up, left, down, down-right, up-right. Each is drawn for the left corner,
+// column 0 at the room's side edge, and its one `9` pixel is the fingertip
+// pointing the way. Only palette 5-9 keep it dimmer than the stair treads and
+// the bone white.
 export const SKELETONS = [
+  // Right (E): fingertip row 4, column 6.
   [
     '.......',
     '.888...',
@@ -664,9 +666,10 @@ export const SKELETONS = [
     '.78888.',
     '7788778',
   ],
+  // Up (N): fingertip row 1, column 5.
   [
-    '.....9.',
-    '.888.8.',
+    '.......',
+    '.888.9.',
     '.868.8.',
     '.878.8.',
     '.78888.',
@@ -676,6 +679,7 @@ export const SKELETONS = [
     '.78888.',
     '7788778',
   ],
+  // Left (W): fingertip row 4, column 0.
   [
     '.......',
     '..888..',
@@ -688,6 +692,7 @@ export const SKELETONS = [
     '.78888.',
     '7788778',
   ],
+  // Down (S): fingertip row 7, column 5.
   [
     '.......',
     '.888...',
@@ -696,9 +701,35 @@ export const SKELETONS = [
     '.78888.',
     '.78..8.',
     '.76..8.',
-    '.78..8.',
-    '.788.9.',
+    '.78..9.',
+    '.788...',
     '7778...',
+  ],
+  // Down-right (SE): fingertip row 7, column 5.
+  [
+    '.......',
+    '.888...',
+    '.868...',
+    '.878...',
+    '.78....',
+    '.788...',
+    '.76.8..',
+    '.78..9.',
+    '.788...',
+    '7778...',
+  ],
+  // Up-right (NE): fingertip row 2, column 5.
+  [
+    '.......',
+    '.888...',
+    '.868.9.',
+    '.8788..',
+    '.788...',
+    '.787...',
+    '.767...',
+    '.78....',
+    '.78888.',
+    '7788778',
   ],
 ];
 

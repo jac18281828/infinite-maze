@@ -92,18 +92,19 @@ export function arrowPixels([x, yTop, dir]) {
   return spritePixels(ARROWS[dir], x, yTop);
 }
 
-// The pose of each way on, in link order: E N W S, then the galleries folded to
-// the key the player presses (NE, NW up; SW, SE down).
-const POSE_OF = [0, 1, 2, 3, 1, 1, 3, 3];
+// The pose of each way on, in link order E N W S NE NW SW SE: right, up, left,
+// down, then up-right for the north diagonals and down-right for the south.
+const POSE_OF = [0, 1, 2, 3, 5, 5, 4, 4];
 
 /**
  * The art index of the pose a skeleton in corner `side` takes for way on
  * `dir`, and whether it draws mirrored. The right corner mirrors, so its left
- * and right poses trade places.
+ * and right poses trade places; the others keep their index, so the mirror
+ * turns up-right and down-right into up-left and down-left.
  */
 export function skeletonPose(side, dir) {
   const k = POSE_OF[dir];
-  return { pose: side && k % 2 === 0 ? k ^ 2 : k, flip: side === 1 };
+  return { pose: side && (k === 0 || k === 2) ? k ^ 2 : k, flip: side === 1 };
 }
 
 /**

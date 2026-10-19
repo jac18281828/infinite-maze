@@ -276,12 +276,14 @@ function arrowGlyphs(bd) {
   return out;
 }
 
-// Pose index of each way on, E N W S then the galleries folded up and down.
-const POSE_IDX = [0, 1, 2, 3, 1, 1, 3, 3];
+// Pose index of each way on, E N W S NE NW SW SE: right, up, left, down, then up-right and down-right.
+const POSE_IDX = [0, 1, 2, 3, 5, 5, 4, 4];
+/** The right corner draws mirrored, so only the left and right poses trade places. */
+const poseIn = (k, side) => (side && (k === 0 || k === 2) ? k ^ 2 : k);
 /** Pixel index -> palette character of the skeleton at `cell` in corner `side`, from the literal box and rows. */
 function skeletonMap(cell, side, dir) {
   const [X, Y] = cellXY(cell);
-  const k = POSE_IDX[dir], pose = side && k % 2 === 0 ? k ^ 2 : k;
+  const pose = poseIn(POSE_IDX[dir], side);
   const x0 = X + (side ? 32 : 9), out = new Map();
   SKELETONS[pose].forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') out.set(px(x0 + (side ? 6 - c : c), Y + 17 - r), ch); }));
   return out;
@@ -469,8 +471,12 @@ test('a corner box is clear exactly when the cell\'s gallery runs away from it, 
 });
 
 test('in either corner a drawn skeleton\'s fingertip lies in the box row or column its way on names', () => {
-  const need = new Set(['0 up', '0 down', '0 right', '0 left', '1 up', '1 down', '1 right', '1 left']);
-  const keyOf = (dir) => ['right', 'up', 'left', 'down'][POSE_IDX[dir]];
+  // Every way on in each corner it takes: NE and SE draw in the left, NW and SW in the right.
+  const need = new Set([0, 1].flatMap((side) => ['up', 'down', 'right', 'left'].map((key) => `${side} ${key}`))
+    .concat(['0 up-right', '0 down-right', '1 up-right', '1 down-right']));
+  const keyOf = (dir) => ['right', 'up', 'left', 'down', 'down-right', 'up-right'][POSE_IDX[dir]];
+  // Fingertip (box column, sprite row) of each pose in the left corner; the right corner mirrors the column.
+  const TIP = { right: [6, 4], up: [5, 1], left: [0, 4], down: [5, 7], 'up-right': [5, 2], 'down-right': [5, 7] };
   const tip = RGB[idx('9')];
   for (const level of DIFFICULTIES) {
     const w = createWorld('00000000', { difficulty: level });
@@ -497,17 +503,23 @@ test('in either corner a drawn skeleton\'s fingertip lies in the box row or colu
                 if (art.touched[px(xx, yy)] && art.data[o] === tip[0] && art.data[o + 1] === tip[1] && art.data[o + 2] === tip[2]) tips.push([xx, yy]);
               }
             }
-            assert.equal(tips.length, 1, `${level} board ${bd.p} cell ${cell}: one fingertip`);
+            const where = `${level} board ${bd.p} cell ${cell} (${key}, corner ${side})`;
+            assert.equal(tips.length, 1, `${where}: one fingertip`);
             const [[tx, ty]] = tips;
-            if (key === 'up') assert.equal(ty, Y + 17);
-            if (key === 'down') {
-              // The fingertip stands in the box's second row from the bottom; air separates it from the floor row.
-              assert.equal(ty, Y + 9);
-              assert.equal(art.touched[px(tx, Y + 8)], 0, `${level} board ${bd.p} cell ${cell}: air under the fingertip`);
-              assert.equal(boardMask(bd)[px(tx, Y + 7)], 1, `${level} board ${bd.p} cell ${cell}: rock under the air`);
+            // A way that reads right or left puts its fingertip in the box's far column or its side column, either corner.
+            const [col, row] = TIP[key];
+            assert.equal(tx, x0 + (key === 'right' || key === 'left' || !side ? col : 6 - col), `${where}: fingertip column`);
+            assert.equal(ty, Y + 17 - row, `${where}: fingertip row`);
+            if (key === 'down' || key === 'down-right') {
+              // The fingertip stands three rows over the floor's top row, with two rows of room air between.
+              assert.equal(ty, Y + 10);
+              const mask = boardMask(bd);
+              for (const yy of [Y + 8, Y + 9]) {
+                assert.equal(art.touched[px(tx, yy)], 0, `${where}: nothing drawn at row ${yy - Y}`);
+                assert.equal(mask[px(tx, yy)], 0, `${where}: room air at row ${yy - Y}`);
+              }
+              assert.equal(mask[px(tx, Y + 7)], 1, `${where}: rock under the air`);
             }
-            if (key === 'right') { assert.equal(tx, x0 + 6); assert.ok(ty >= Y + 12 && ty <= Y + 14); }
-            if (key === 'left') { assert.equal(tx, x0); assert.ok(ty >= Y + 12 && ty <= Y + 14); }
             need.delete(`${side} ${key}`);
           }
         }
@@ -526,7 +538,7 @@ const skeletonDraws = () => view.draws.filter(isSkeleton);
 /** Where the scene under `cam` draws the skeleton `{ cell, dir }` of `bd`, and which sprite. */
 function skeletonDraw(bd, { cell, dir }, cam) {
   const side = skeletonSide(world, bd, cell, dir), [X, Y] = cellXY(cell);
-  const k = POSE_IDX[dir], pose = side && k % 2 === 0 ? k ^ 2 : k;
+  const pose = poseIn(POSE_IDX[dir], side);
   return {
     at: [bd.x * 576 + X + (side ? 32 : 9) - Math.round(cam.x) + 160, Math.round(cam.y) - (bd.y * 336 + Y + 18) + 90],
     sprite: skelSprites[pose][side],
@@ -635,6 +647,132 @@ test('a refuel to half the burn or above hides tier 2 on its tick, and one that 
   assert.ok(sim.burn > 109 && sim.burn <= 110, `the jar lifts 50 s to ${sim.burn}`);
   assert.equal(shown(sim), before, 'a jar to 110 s leaves tier 2 shown');
   assert.ok(skeletonDraws().every((d) => d.alpha === 1));
+});
+
+// Proof of the new poses. The default sample holds no diagonal-way skeleton, so these scan the
+// DIFFICULTIES worlds of seed 00000000 over tombs u -5..5 by v 0..39 for the way on each names.
+const NW_DIR = 5, S_DIR = 3, SE_DIR = 7;
+const PER_TIER = 3;
+const literal = (rows, flip) => spriteCanvas(rows, flip);
+/** The (column, row) of the one `9` pixel of a sprite canvas, in the canvas's own frame. */
+function spriteTip(sprite) {
+  const tip = RGB[idx('9')], out = [];
+  for (let r = 0; r < sprite.height; r++) {
+    for (let c = 0; c < sprite.width; c++) {
+      const o = (r * sprite.width + c) * 4;
+      if (sprite.data[o + 3] && sprite.data[o] === tip[0] && sprite.data[o + 1] === tip[1] && sprite.data[o + 2] === tip[2]) out.push([c, r]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Runs `check({ bd, cell, side, X, Y, x0, tier, pixels })` on up to PER_TIER skeletons of each tier whose way on is `dir`, per
+ * difficulty. `pixels(rows)` reads the skeleton as drawn: tier 1 from the board art, tier 2 from the scene's draw of it.
+ * Returns the junctions found, as "tier level board cell corner" strings.
+ */
+function scanWay(dir, check) {
+  const found = [];
+  for (const level of DIFFICULTIES) {
+    const w = createWorld('00000000', { difficulty: level });
+    const rend = createRenderer(view, w);
+    const left = { 1: PER_TIER, 2: PER_TIER };
+    for (let v = 0; v <= 39 && (left[1] || left[2]); v++) {
+      for (let u = -5; u <= 5 && (left[1] || left[2]); u++) {
+        for (let i = 0; i < w.size.w * w.size.h && (left[1] || left[2]); i++) {
+          const { x, y } = boardCoords(u, v, i, w.size);
+          const bd = w.board(x, y);
+          for (const [tier, pick] of [[1, skeletons], [2, boostSkeletons]]) {
+            for (const sg of pick(w, bd).filter((g) => g.dir === dir)) {
+              if (!left[tier]) break;
+              left[tier]--;
+              const side = skeletonSide(w, bd, sg.cell, dir), [X, Y] = cellXY(sg.cell), x0 = X + (side ? 32 : 9);
+              const where = `${level} board ${bd.p} cell ${sg.cell} tier ${tier} corner ${side}`;
+              let drawn;
+              if (tier === 1) {
+                view.draws.length = 0;
+                rend.scene(null, { x: bd.x * 576 + 288, y: bd.y * 336 + 168 }, 0);
+                const art = view.draws.map(([src]) => src).find((src) => src.width === 576 && src.height === 336);
+                // The box as drawn: palette character, or '.' where nothing is drawn.
+                drawn = (c, r) => {
+                  const k = px(side ? x0 + 6 - c : x0 + c, Y + 17 - r);
+                  if (!art.touched[k]) return '.';
+                  return [...'56789'].find((ch) => isColour(art.data, k * 4, ch)) || '?';
+                };
+              } else {
+                const sim = createSim(w, { board: bd, cell: bd.a });
+                sim.burn = 0;
+                const cam = { x: bd.x * 576 + X + 12, y: bd.y * 336 + Y + 13 };
+                view.draws.length = 0;
+                rend.scene(sim, cam, 0);
+                const at = [bd.x * 576 + x0 - cam.x + 160, cam.y - (bd.y * 336 + Y + 18) + 90];
+                const d = view.draws.find((dr) => dr[0].width === 7 && dr[0].height === 10 && dr[1] === at[0] && dr[2] === at[1]);
+                assert.ok(d, `${where}: the scene draws the skeleton`);
+                const sprite = d[0];
+                drawn = (c, r) => {
+                  const cc = side ? 6 - c : c, o = (r * 7 + cc) * 4;
+                  if (!sprite.data[o + 3]) return '.';
+                  return [...'56789'].find((ch) => RGB[idx(ch)][0] === sprite.data[o] && RGB[idx(ch)][1] === sprite.data[o + 1] && RGB[idx(ch)][2] === sprite.data[o + 2]) || '?';
+                };
+              }
+              check({ w, bd, cell: sg.cell, side, X, Y, x0, tier, where, drawn });
+              found.push(`tier ${tier} ${level} board ${bd.p} cell ${sg.cell} corner ${side}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  return found;
+}
+
+/** Asserts the 7 x 10 box as drawn equals `rows`, mapped with column c to box column c (left corner) or 6 - c (right). */
+function assertBox(drawn, rows, where) {
+  for (let r = 0; r < 10; r++) {
+    for (let c = 0; c < 7; c++) assert.equal(drawn(c, r), rows[r][c], `${where}: pixel (${c}, ${r})`);
+  }
+}
+
+test('a south-east way draws the literal down-right pose in the left corner', () => {
+  const found = scanWay(SE_DIR, ({ side, X, Y, x0, tier, where, drawn }) => {
+    assert.equal(side, 0, `${where}: the left corner`);
+    assert.equal(x0, X + 9);
+    // SKELETONS[4], written by index: pixel (c, r) lies at room (X + 9 + c, Y + 17 - r).
+    assertBox(drawn, SKELETONS[4], where);
+    // Row 6 holds column 4 opaque and column 5 clear, as no other pose does.
+    assert.notEqual(drawn(4, 6), '.', `${where}: row 6, column 4 opaque`);
+    assert.equal(drawn(5, 6), '.', `${where}: row 6, column 5 clear`);
+    assert.equal(drawn(5, 7), '9', `${where}: the fingertip at room (${X + 14}, ${Y + 10})`);
+    // No other pose carries that mark.
+    SKELETONS.forEach((pose, k) => assert.equal(k === 4, pose[6][4] !== '.' && pose[6][5] === '.', `pose ${k}: the row-6 mark`));
+  });
+  assert.ok(found.length > 0, 'no south-east skeleton in the left corner');
+  assert.equal(new Set(found.map((f) => f.split(' ')[2])).size, DIFFICULTIES.length, `south-east skeletons at every level: ${found.join('; ')}`);
+});
+
+test('a north-west way draws the literal up-right pose mirrored in the right corner', () => {
+  const found = scanWay(NW_DIR, ({ side, X, Y, x0, where, drawn }) => {
+    assert.equal(side, 1, `${where}: the right corner`);
+    assert.equal(x0, X + 32);
+    // SKELETONS[5], written by index: pixel (c, r) lies at room (X + 32 + 6 - c, Y + 17 - r).
+    assertBox(drawn, SKELETONS[5], where);
+    assert.equal(drawn(5, 2), '9', `${where}: the fingertip at room (${X + 33}, ${Y + 15})`);
+  });
+  assert.ok(found.length > 0, 'no north-west skeleton in the right corner');
+  assert.equal(new Set(found.map((f) => f.split(' ')[2])).size, DIFFICULTIES.length, `north-west skeletons at every level: ${found.join('; ')}`);
+});
+
+test('a down way stands clear: its fingertip at room row Y + 10, two rows of air under it and rock beneath', () => {
+  const found = scanWay(S_DIR, ({ bd, X, Y, x0, side, where, drawn }) => {
+    // The down pose, SKELETONS[3], has its fingertip at row 7; the box mirrors in the right corner.
+    assertBox(drawn, SKELETONS[3], where);
+    const tx = side ? x0 + 6 - 5 : x0 + 5, mask = boardMask(bd);
+    assert.equal(drawn(5, 7), '9', `${where}: the fingertip at room row ${Y + 10}`);
+    assert.equal(mask[px(tx, Y + 8)], 0, `${where}: room air at Y + 8`);
+    assert.equal(mask[px(tx, Y + 9)], 0, `${where}: room air at Y + 9`);
+    assert.equal(mask[px(tx, Y + 7)], 1, `${where}: rock at Y + 7`);
+  });
+  assert.ok(found.length > 0, 'no south skeleton');
 });
 
 test('rock shading counts the stair as solid: no highlight under a flight, and a lone tread keeps its second row', () => {

@@ -387,32 +387,32 @@ test('the owner\'s case: seed 00000004 at HARD, board (7, 69) in tomb (1, 17), c
   for (const list of pointerLists(w, bd)) assert.ok(!list.some((s) => s.cell === 59));
 });
 
-test('the four poses differ pairwise, fill 7 x 10 and put their one fingertip where its way on says', () => {
-  assert.equal(SKELETONS.length, 4);
+test('the six poses differ pairwise, fill 7 x 10 and put their one fingertip where its way on says', () => {
+  assert.equal(SKELETONS.length, 6);
   assert.equal(artSets().skeleton, SKELETONS);
-  assert.equal(new Set(SKELETONS.map((p) => p.join('/'))).size, 4);
-  // Poses run E N W S: right, up, left, down.
+  assert.equal(new Set(SKELETONS.map((p) => p.join('/'))).size, 6);
+  // Poses run right, up, left, down, down-right, up-right; each fingertip is (column, row).
+  const TIPS = [[6, 4], [5, 1], [0, 4], [5, 7], [5, 7], [5, 2]];
   SKELETONS.forEach((rows, k) => {
     assert.equal(rows.length, 10);
     assert.ok(rows.every((r) => r.length === 7), `pose ${k} is 7 wide`);
     const tips = [];
     rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch === '9') tips.push([x, y]); }));
-    assert.equal(tips.length, 1, `pose ${k} has one fingertip`);
+    assert.deepEqual(tips, [TIPS[k]], `pose ${k} has one fingertip, at its pixel`);
     const [[x, y]] = tips;
-    if (k === 0) { assert.equal(x, 6); assert.ok(y >= 3 && y <= 5); }
-    if (k === 1) assert.equal(y, 0);
-    if (k === 2) { assert.equal(x, 0); assert.ok(y >= 3 && y <= 5); }
-    if (k === 3) {
-      assert.equal(y, 8);
-      // The fingertip stands clear: every neighbour inside the sprite is air but the arm pixel above.
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const nx = x + dx, ny = y + dy;
-          if ((!dx && !dy) || nx < 0 || nx > 6 || ny < 0 || ny > 9) continue;
-          if (dx === 0 && dy === -1) assert.notEqual(rows[ny][nx], '.', 'the arm reaches the fingertip from above');
-          else assert.equal(rows[ny][nx], '.', `pixel (${nx}, ${ny}) beside the fingertip`);
-        }
+    // Left's fingertip touches its arm and rib pixels; every other has one opaque neighbour, its arm pixel.
+    const near = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if ((!dx && !dy) || nx < 0 || nx > 6 || ny < 0 || ny > 9) continue;
+        if (rows[ny][nx] !== '.') near.push([dx, dy]);
       }
     }
+    // The arm pixel is orthogonal on right, up and down, diagonal on up-right and down-right.
+    const arm = [[[-1, 0]], [[0, 1]], [[1, 0], [1, 1]], [[0, -1]], [[-1, -1]], [[-1, 1]]][k];
+    assert.deepEqual(near, arm, `pose ${k}: the neighbours of the fingertip`);
+    // Down and down-right stand clear: the two sprite rows under the fingertip are air.
+    if (k === 3 || k === 4) assert.deepEqual([rows[8][x], rows[9][x]], ['.', '.'], `pose ${k}: air under the fingertip`);
   });
 });
