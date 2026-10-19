@@ -11,7 +11,7 @@ import { ARROWS, SKELETONS, artSets } from '../src/game/art.mjs';
 
 // The oracle holds its own copy of the rule, never the module's constants.
 const MOD = 1024;
-const THRESHOLD = { easy: 94, medium: 30, hard: 17, ultimate: 11 };
+const THRESHOLD = { easy: 104, medium: 30, hard: 17, ultimate: 11 };
 const ARROW_BAND = { easy: 85, medium: 64, hard: 43, ultimate: 32 };
 const ARROW_SHARE = { easy: 1 / 12, medium: 1 / 16, hard: 1 / 24, ultimate: 1 / 32 };
 const worlds = Object.fromEntries(DIFFICULTIES.map((d) => [d, createWorld('00000000', { difficulty: d })]));
@@ -98,8 +98,9 @@ test('each skeleton tier holds 0.8 to 1.2 per tomb at every level over tombs u -
   console.log(`# rate test: ${((performance.now() - started) / 1000).toFixed(1)} s`);
 });
 
-/** Whether cells p and q of one board lie within Chebyshev distance 1 (12 cells to a row). */
-const within1 = (p, q) => Math.max(Math.abs((p % 12) - (q % 12)), Math.abs(Math.floor(p / 12) - Math.floor(q / 12))) <= 1;
+/** Whether cells p and q of one board lie within Chebyshev distance `d` (12 cells to a row). */
+const within = (d) => (p, q) => Math.max(Math.abs((p % 12) - (q % 12)), Math.abs(Math.floor(p / 12) - Math.floor(q / 12))) <= d;
+const within2 = within(2);
 
 /** The oracle's band candidates of a board by list, ascending by cell, before spacing. */
 function candidates(w, bd, level) {
@@ -114,12 +115,12 @@ function candidates(w, bd, level) {
   return out;
 }
 
-/** The oracle's survivors: `order` names the lists in turn, each candidate standing unless a pointer already standing is within 1. */
-function survivors(cands, order) {
+/** The oracle's survivors: `order` names the lists in turn, each candidate standing unless a pointer already standing is near (within 2 by default). */
+function survivors(cands, order, near = within2) {
   const stood = [], out = { first: [], second: [], third: [] };
   for (const name of order) {
     for (const c of cands[name]) {
-      if (stood.some((s) => within1(s.cell, c.cell))) continue;
+      if (stood.some((s) => near(s.cell, c.cell))) continue;
       stood.push(c);
       out[name].push(c);
     }
@@ -139,10 +140,10 @@ test('each list holds exactly the band candidates that stand under the spacing r
       const cands = candidates(w, bd, level);
       const want = survivors(cands, ['first', 'third', 'second']);
       for (const name of Object.keys(lists)) assert.deepEqual(lists[name], want[name], `${level} board ${bd.p}: ${name} list`);
-      // A candidate pair within 1 drawn from two lists makes the order matter.
+      // A candidate pair within 2 drawn from two lists makes the order matter.
       const all = Object.entries(cands).flatMap(([name, list]) => list.map((c) => ({ ...c, name })));
       for (let i = 0; i < all.length; i++) {
-        for (let j = i + 1; j < all.length; j++) if (all[i].name !== all[j].name && within1(all[i].cell, all[j].cell)) crossPairs++;
+        for (let j = i + 1; j < all.length; j++) if (all[i].name !== all[j].name && within2(all[i].cell, all[j].cell)) crossPairs++;
       }
       // Tier 2 first would stand different pointers on a board with such a pair.
       if (JSON.stringify(survivors(cands, ['second', 'first', 'third'])) !== JSON.stringify(want)) sensitive++;
@@ -154,27 +155,56 @@ test('each list holds exactly the band candidates that stand under the spacing r
       assert.equal(new Set(every).size, every.length, 'no junction holds two pointers');
       if (bd.kind === 'dead') for (const list of Object.values(lists)) assert.deepEqual(list, []);
     }
-    assert.ok(crossPairs >= 1, `${level}: ${crossPairs} candidate pairs within 1 from two lists`);
+    assert.ok(crossPairs >= 1, `${level}: ${crossPairs} candidate pairs within 2 from two lists`);
     assert.ok(sensitive >= 1, `${level}: no board where the order matters`);
     assert.ok(kept >= 40, `${level}: ${kept} pointers`);
   }
 });
 
-test('no two pointers of a board, across all three lists, lie within one cell, and the candidates held such pairs at every level', () => {
+test('no two pointers of a board, across all three lists, lie within two cells, and the candidates held such pairs at every level', () => {
   for (const level of DIFFICULTIES) {
     const w = worlds[level];
     let pairs = 0, boards = 0;
     for (const bd of boardsOf(level, 0, 19)) {
       const c = candidates(w, bd, level);
       const all = [...c.first, ...c.second, ...c.third];
-      for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (within1(all[i].cell, all[j].cell)) pairs++;
+      for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (within2(all[i].cell, all[j].cell)) pairs++;
       const got = [...skeletons(w, bd), ...boostSkeletons(w, bd), ...arrows(w, bd)];
       for (let i = 0; i < got.length; i++) {
-        for (let j = i + 1; j < got.length; j++) assert.ok(!within1(got[i].cell, got[j].cell), `${level} board ${bd.p}: cells ${got[i].cell} and ${got[j].cell}`);
+        for (let j = i + 1; j < got.length; j++) assert.ok(!within2(got[i].cell, got[j].cell), `${level} board ${bd.p}: cells ${got[i].cell} and ${got[j].cell}`);
       }
       boards++;
     }
-    assert.ok(pairs >= 1, `${level}: ${pairs} candidate pairs within 1 over ${boards} boards`);
+    assert.ok(pairs >= 1, `${level}: ${pairs} candidate pairs within 2 over ${boards} boards`);
+  }
+});
+
+test('a candidate exactly two cells from a pointer standing before it gives way, though it stands under a one-cell rule, at every level', () => {
+  const order = ['first', 'third', 'second'];
+  for (const level of DIFFICULTIES) {
+    const w = worlds[level];
+    let found = null;
+    for (const bd of boardsOf(level, 0, 19)) {
+      const cands = candidates(w, bd, level);
+      const flat = order.flatMap((name) => cands[name].map((c) => c.cell));
+      const near = survivors(cands, order, within(1)), far = survivors(cands, order, within2);
+      const oneCell = new Set(order.flatMap((name) => near[name].map((c) => c.cell)));
+      const twoCell = new Set(order.flatMap((name) => far[name].map((c) => c.cell)));
+      for (let i = 0; i < flat.length && !found; i++) {
+        for (let j = i + 1; j < flat.length && !found; j++) {
+          const first = flat[i], second = flat[j];
+          const apart = Math.max(Math.abs((first % 12) - (second % 12)), Math.abs(Math.floor(first / 12) - Math.floor(second / 12)));
+          if (apart === 2 && twoCell.has(first) && oneCell.has(second) && !twoCell.has(second)) found = { bd, first, second };
+        }
+      }
+      if (found) break;
+    }
+    assert.ok(found, `${level}: no board holds a candidate pair two cells apart that the one-cell rule keeps`);
+    const { bd, first, second } = found;
+    const held = pointerLists(w, bd).flat().map((s) => s.cell);
+    assert.ok(held.includes(first), `${level} board ${bd.p}: cell ${first} stands`);
+    assert.ok(!held.includes(second), `${level} board ${bd.p}: cell ${second} two cells from cell ${first} gives way`);
+    console.log(`# two-cell case ${level}: board ${bd.p} cells ${first} and ${second}`);
   }
 });
 

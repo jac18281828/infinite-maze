@@ -12,7 +12,7 @@ export const SIGN_MOD = 1024;
 // [0, t) a tier-1 skeleton, [t, 2t) a tier-2 skeleton and [2t, 2t + a) an
 // arrow. Each tier holds about one skeleton per tomb. The arrow band is
 // round(SIGN_MOD / N): arrows at 1 junction in N = 12, 16, 24 and 32.
-export const SKELETON_THRESHOLD = { easy: 94, medium: 30, hard: 17, ultimate: 11 };
+export const SKELETON_THRESHOLD = { easy: 104, medium: 30, hard: 17, ultimate: 11 };
 export const ARROW_THRESHOLD = { easy: 85, medium: 64, hard: 43, ultimate: 32 };
 
 const ways = (m) => {
@@ -90,17 +90,20 @@ export function junctions(world, bd) {
 
 const signHash = (world, bd, cell) => u32(world.H('sign', bd.x, bd.y, cell));
 
-/** Whether cells p and q of one board lie within Chebyshev distance 1. */
-const adjacent = (p, q) =>
-  Math.max(Math.abs((p % BW) - (q % BW)), Math.abs(((p / BW) | 0) - ((q / BW) | 0))) <= 1;
+// No two pointers of a board stand within this Chebyshev distance.
+const SPACING = 2;
+
+/** Whether cells p and q of one board lie within Chebyshev distance SPACING. */
+const crowded = (p, q) =>
+  Math.max(Math.abs((p % BW) - (q % BW)), Math.abs(((p / BW) | 0) - ((q / BW) | 0))) <= SPACING;
 
 /**
  * The pointers of `bd` left standing, as { skeletons, boostSkeletons, arrows }.
  * Each is a band of the junctions by hash mod SIGN_MOD, ascending by cell. No
- * two pointers of a board stand within one cell: tier 1 goes first, then the
- * arrows, then tier 2, so a tier-2 skeleton, hidden above half the burn, never
- * removes a pointer the player can see. A candidate stands unless a pointer
- * already standing lies within distance 1.
+ * two pointers of a board stand within SPACING cells: tier 1 goes first, then
+ * the arrows, then tier 2, so a tier-2 skeleton, hidden above half the burn,
+ * never removes a pointer the player can see. A candidate stands unless a
+ * pointer already standing lies within distance SPACING.
  */
 function standing(world, bd) {
   const t = SKELETON_THRESHOLD[world.difficulty];
@@ -110,7 +113,7 @@ function standing(world, bd) {
   const [tier1, arrow, tier2] = bands.map(([lo, hi]) => {
     const out = [];
     for (const { cell, dir, h } of cands) {
-      if (h < lo || h >= hi || kept.some((c) => adjacent(c, cell))) continue;
+      if (h < lo || h >= hi || kept.some((c) => crowded(c, cell))) continue;
       kept.push(cell);
       out.push({ cell, dir });
     }
