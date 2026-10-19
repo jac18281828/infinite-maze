@@ -193,8 +193,7 @@ test('a candidate exactly two cells from a pointer standing before it gives way,
       for (let i = 0; i < flat.length && !found; i++) {
         for (let j = i + 1; j < flat.length && !found; j++) {
           const first = flat[i], second = flat[j];
-          const apart = Math.max(Math.abs((first % 12) - (second % 12)), Math.abs(Math.floor(first / 12) - Math.floor(second / 12)));
-          if (apart === 2 && twoCell.has(first) && oneCell.has(second) && !twoCell.has(second)) found = { bd, first, second };
+          if (within2(first, second) && !within(1)(first, second) && twoCell.has(first) && oneCell.has(second) && !twoCell.has(second)) found = { bd, first, second };
         }
       }
       if (found) break;

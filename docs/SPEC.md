@@ -314,9 +314,9 @@ level's skeleton threshold `t` and its arrow width `a`, a junction holds:
 The thresholds `t` are 104 at EASY, 30 at MEDIUM, 17 at HARD and 11 at
 ULTIMATE, so each skeleton tier averages about one per tomb. EASY's sits above
 one per tomb before spacing, so each tier keeps its count under the wider
-spacing; its arrow band `[2t, 2t + a)` moves with it, from `[188, 273)` to
-`[208, 293)`. The widths `a` are 85, 64, 43
-and 32, `round(1024 / N)` for an arrow at 1 junction in `N` = 12, 16, 24 and 32.
+spacing; its arrow band `[2t, 2t + a)` moves with it and is `[208, 293)`. The
+widths `a` are 85, 64, 43 and 32, `round(1024 / N)` for an arrow at 1 junction
+in `N` = 12, 16, 24 and 32.
 The bands are disjoint, so no junction holds two pointers.
 
 **Spacing.** No two pointers of a board, of any kind or tier, stand within
