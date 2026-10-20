@@ -29,24 +29,28 @@ and no assets.
 - **Space or Z** jumps. In the air, Up grabs the ladder overhead or the stair
   below, and a jump onto a stair lands on it. On a ladder, a jump lets go and
   drops to the floor below; a held Up grabs again once pressed anew.
-- **P** pauses and shows the tombs solved, the map of the passages walked
-  and the save code; P resumes. Esc does the same outside full screen, where
-  a browser keeps Esc for itself. The arrows (or WASD) pan the map one tomb
-  per press. **C** there copies the save code. **M** mutes.
+- **P** pauses and shows `TOMB n`, the map of the passages walked and the
+  save code; P resumes. Esc does the same outside full screen, where a browser
+  keeps Esc for itself. The arrows (or WASD) pan the map one tomb per press.
+  **C** there copies the save code, **H** swaps the touch d-pad's side, and an
+  unsaved run's **Enter** saves it. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and a red fire button opposite it jumps. Soft keys
-  cover every screen: RESUME, BEGIN, RESET, TYPE CODE (a prompt that takes a
-  pasted save code), the difficulty, COPY, SOUND, PAD (swaps the d-pad and
-  the fire button), PAUSE, CONTINUE, HOME, TITLE and, to answer CONTINUE?,
-  YES and NO. Pressing a key
+  cover every screen: RESUME, SLOT 1 to SLOT 3, NEW RUN and ERASE on the slot
+  list; BEGIN, the difficulty, NEW SEED, TYPE CODE (a prompt that takes a
+  pasted save code) and BACK on NEW RUN; one SLOT key per row on SAVE IN?;
+  SAVE, COPY, SOUND and PAD (swaps the d-pad and the fire button) on pause;
+  PAUSE, CONTINUE, HOME, TITLE and, to answer a confirm, YES and NO. Pressing a key
   switches back to the keyboard layout; `#touch` on the URL forces touch on a
   desktop. The pause map shows the explorer's tomb; panning needs a keyboard
   or controller.
 - **Controller.** A standard-mapped gamepad plays with no setup: press a
-  button so the browser sees it. The d-pad or left stick moves and pans the
-  pause map; **A** jumps and begins; **B** confirms, answers yes to CONTINUE?
-  and continues past the milestone splash; **Start** pauses and resumes;
-  **Select** goes to the title and answers no to CONTINUE?.
+  button so the browser sees it. The d-pad or left stick moves, pans the pause
+  map and moves the slot list's cursor, Left and Right choosing NEW RUN or
+  ERASE on its last row; **A** jumps and begins on NEW RUN; **B** selects,
+  answers yes to a confirm and continues past the milestone splash; **Start**
+  pauses and resumes; **Select** goes to the title, backs out of NEW RUN, SAVE
+  IN? and erasing, and answers no to a confirm.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends. Every room holds oil jars on
@@ -75,42 +79,47 @@ and no assets.
   times the coins of dead ends alone. Touch one to take it. Coins and jars
   taken in the tomb you are in and the tomb before it stay taken, through a
   reload and Continue; older tombs' lie back, and BEGIN lays every one back.
-  Each tomb pays once on this device, the first time a run solves it: 1 coin
-  at EASY, 2 at MEDIUM, 5 at HARD and 10 at ULTIMATE. A replay pays nothing.
+  Each rise of a save's `TOMB n` pays once: 1 coin a tomb at EASY, 2 at
+  MEDIUM, 5 at HARD and 10 at ULTIMATE. A walk back and forward pays nothing.
   The wallet shows under `TOMB n`; the end screen shows the coins earned this
-  run. The game keeps the wallet in one save slot beside the last serial, its
-  difficulty, its run, the tombs paid, the payout record, the continue count
-  and the takes of the last two tombs, in `localStorage`, and merges every
-  write with the slot, so two tabs on one slot lose nothing. Every new run
-  starts with no coins at `TOMB 0`. Nothing buys with coins yet.
+  run. Each of three saves keeps its own wallet beside its serial, difficulty,
+  start tomb, count and high, continue count and the takes of the last two
+  tombs, as one record in `localStorage`, and every write merges with the
+  stored record, so two tabs on one save lose nothing. Every new run starts
+  with no coins at `TOMB 0`. Nothing buys with coins yet.
 - In some dead ends, more often the longer ones, the dust drifts back toward the
   way in while the explorer stands inside, a hint that the branch leads
   nowhere.
 - Every 100 tombs a splash names an adventure rank and pays 100 × k coins once
-  per seed and level; **Enter** or CONTINUE plays on, and **Q** or HOME goes to
-  the title with the run open.
-- The score counts tombs solved: a tomb is solved when the explorer leaves it
-  through its exit door, if it lies on the way on from the run's start tomb:
-  that tomb, the tomb its exit leads to, and so on. A tomb off that way on
-  never counts. Each tomb counts once. Continue, and Y at CONTINUE?, keep the
-  count and the start tomb. Each Continue after the torch dies adds one to the
-  run's continue count, shown on the pause and end screens and at CONTINUE?;
-  pausing and resuming never add, and BEGIN starts at 0.
+  per save; **Enter** or CONTINUE plays on, and **Q** or HOME goes to the title
+  with the run open.
+- The score counts tombs by net position: leaving a tomb through its exit
+  door adds one, any other crossing into another tomb takes one away, and
+  `TOMB n` shows the highest the run has reached. A walk back and forward adds
+  nothing, and no reload of a save made a step back raises it. Continue, and Y
+  at CONTINUE SLOT n?, keep the count and the start tomb. Each Continue after
+  the torch dies adds one to the run's continue count, shown on the pause and
+  end screens and at CONTINUE SLOT n?; pausing and resuming never add, and
+  BEGIN starts at 0.
 
-The title screen shows the seed code. **Enter** begins at tomb (0, 0)'s
-first entry. **R** rolls a new world. **T** takes a typed seed or save code.
-**L** cycles the difficulty, and Left and Right step it. **P** resumes the run
-left by pause. With no run open, P asks CONTINUE? over the slot's serial:
-**Y** or Enter restores its wallet and `TOMB n` at its own difficulty, and
-**N**, Esc or Q start clean. Esc is P's alias outside full screen. A typed save
-code equal to the slot's serial asks the same. **K** copies the save code
-shown, or the seed code. The end screen's **C** copies its save code. The game
-keeps the last serial with its difficulty, the run's solved tombs and the
-wallet in one slot, and the setting and the most tombs solved per seed and
-difficulty beside it, in `localStorage`, and runs without them where storage is
-blocked. A new run writes the slot at its first coin or first solved tomb, so
-the slot outlives N until then. A save from before the slot asks CONTINUE?
-too, and Y adopts its wallet once.
+The title opens on three save slots, each row showing its level, `TOMB n` and
+coins, and a `N NEW RUN` row. The arrows move the cursor and **Enter** plays
+the lit row; **1** to **3** play a slot at once. A used slot asks CONTINUE SLOT
+n?: **Y** or Enter restores its wallet and `TOMB n` at its own difficulty, and
+**N**, Esc or Q go back. An `EMPTY` slot opens NEW RUN bound to it, and the run
+saves there from its first coin or counted tomb. **N** opens NEW RUN unbound:
+that run plays unsaved, and its first coin or counted tomb asks SAVE IN? which
+slot to take, a used one only after OVERWRITE SLOT n? says yes. With no slot
+empty, **E** erases a used one after ERASE SLOT n? says yes. **P** resumes the
+run left by pause, or with none open plays the lit row; Esc is P's alias
+outside full screen. NEW RUN shows the seed: **Enter** begins at tomb (0, 0)'s
+first entry, **R** rolls a new seed, **T** takes a typed seed or save code, and
+**L** cycles the difficulty, Left and Right stepping it; **Q** goes back. A
+typed save code equal to a slot's serial asks CONTINUE SLOT n?. The pause and
+end screens' **C** copies the save code. The game keeps the three saves, the
+setting and the best per seed and difficulty in `localStorage`, and runs
+without them where storage is blocked. A save from before the slots moves to
+slot 1 once, wallet included; the old copy stays for an older build.
 
 ## Save codes
 
@@ -118,8 +127,8 @@ A save is the seed code and one integer: `K7Q2-M9XA:4813`. The integer pairs
 the signed coordinates of board `(x, y)`: with `z(n) = 2n` for `n >= 0`, else
 `-2n - 1`, `a = z(x)` and `b = z(y)`, `p = a >= b ? a*a + a + b : a + b*b`.
 Saves hold `|x|` and `|y|` below 2^25, and a code runs to 26 characters. A
-typed save code plays at the title's difficulty, and the slot's own serial
-at the slot's.
+typed save code plays at NEW RUN's difficulty, and a slot's own serial at its
+save's.
 Resuming regenerates that board from the seed and lights the torch to full.
 The explorer stands at the start of the board's way back along its route.
 The end screen offers the code of the last tomb entry reached; Continue
@@ -171,8 +180,8 @@ imports read-only.
 
 A trial build for a phone play-test goes to `beta/<name>.html` in the bucket
 and is served at `https://maze.2ad.com/beta/<name>.html` until the next deploy
-removes it. It shares the live game's origin, and with it the save slot and
-records in local storage. Copy it uncached, so a re-copy under the same name
+removes it. It shares the live game's origin, and with it the three saves and
+the bests in local storage. Copy it uncached, so a re-copy under the same name
 serves at once:
 
 ```sh
