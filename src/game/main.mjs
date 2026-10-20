@@ -1973,6 +1973,7 @@ function handleEvents(g) {
   for (const ev of s.events) {
     if (ev === 'relight') { g.audio.play('relight'); g.audio.relight(); }
     else if (ev === 'ember' || ev === 'over') g.audio.play(ev);
+    else if (ev === 'coin') g.audio.play('coin');
     if (ev === 'solved') { g.audio.play('band'); writeBest(g.code, g.world.difficulty, s.solved.size); }
     if (ev === 'entry') writeSave(g, entryCode(g));
     if (ev === 'seam') g.world.retain(s.bd.u, s.bd.v);

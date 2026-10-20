@@ -1070,8 +1070,8 @@ animations:
   nothing, so unmuting drops in mid-tune; after a stall it drops the notes it
   missed and resumes where the music would have been.
 
-**Sound.** Footsteps on stone, ladder creak, the whoosh of a relight and the
-torch sputtering at low burn.
+**Sound.** Footsteps on stone, ladder creak, the whoosh of a relight, a
+quick chime on each coin taken and the torch sputtering at low burn.
 
 ## 9. Runtime
 

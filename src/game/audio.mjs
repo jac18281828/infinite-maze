@@ -265,6 +265,17 @@ export function createAudio() {
     }
   }
 
+  function coinSound(t) {
+    const f = noiseHit(t, 'bandpass', 1500, 0.9, 0.3, 0.16, sfx);
+    f.frequency.exponentialRampToValueAtTime(3800, t + 0.12);
+    for (const [semi, lag] of [[deg(7, 2), 0], [deg(11, 2), 0.035], [deg(14, 2), 0.07]]) {
+      const g = env(t + lag, 0.1, 0.003, 0.5);
+      g.connect(sfx);
+      const o = osc('sine', hz(semi), t + lag, g);
+      o.start(t + lag); o.stop(t + lag + 0.6);
+    }
+  }
+
   function sputterSound(t) {
     for (let k = 0; k < 3; k++) noiseHit(t + k * 0.03 * Math.random(), 'highpass', 1800, 0.8, 0.12 * Math.random() + 0.04, 0.02, sfx);
   }
@@ -286,7 +297,7 @@ export function createAudio() {
   }
 
   const SOUNDS = {
-    step: stepSound, creak: creakSound, relight: relightSound, sputter: sputterSound,
+    step: stepSound, creak: creakSound, relight: relightSound, coin: coinSound, sputter: sputterSound,
     ember: emberSound, over: overSound, band: bandSound,
   };
 

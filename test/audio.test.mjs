@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createAudio } from '../src/game/audio.mjs';
+import { readFileSync } from 'node:fs';
 
 const RUN_S = 0.025;
 const clock = (j) => j * RUN_S;
@@ -143,3 +144,34 @@ for (const [gap, label] of [[1, '1 s'], [60, '60 s']]) {
     });
   });
 }
+
+test('a coin event plays the coin sound', () => {
+  const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
+  const fn = src.match(/function handleEvents\([^)]*\) \{[\s\S]*?\n\}\n/);
+  assert.ok(fn, 'handleEvents found');
+  const handleEvents = new Function('writeBest', 'writeSave', 'entryCode', `${fn[0]}\nreturn handleEvents;`)(() => {}, () => {}, () => '');
+  for (const [events, played, relights] of [[['coin'], ['coin'], 0], [['relight', 'coin'], ['relight', 'coin'], 1]]) {
+    const plays = [];
+    let relight = 0;
+    handleEvents({
+      sim: { events, solved: new Set(), bd: {} },
+      world: { difficulty: 0, retain() {} },
+      audio: { play: (n) => plays.push(n), relight: () => { relight++; } },
+    });
+    assert.deepEqual(plays, played);
+    assert.equal(relight, relights);
+  }
+});
+
+test("the coin sound's first tone starts when it is played, within 1 ms", () => {
+  withAudio((make) => {
+    const { audio, log } = make();
+    log.ac.currentTime = 7;
+    audio.play('coin');
+    const t = 7 + 0.005;
+    const oscs = log.nodes.filter((n) => n.kind === 'osc' && n.startTime !== null);
+    assert.ok(oscs.length >= 1, 'builds an oscillator');
+    const first = Math.min(...oscs.map((n) => n.startTime));
+    assert.ok(Math.abs(first - t) <= 0.001, `first tone at ${first}, played at ${t}`);
+  });
+});
