@@ -26,7 +26,8 @@ const WIDE_320 = { w: 568, h: 320, dpr: 2, insets: {}, touch: true };
 const LAND_700 = { w: 700, h: 360, dpr: 2, insets: {}, touch: true };
 // A 1376 px wide band layout with a whole view and a 260 px band, where the halfway rest clears the clamp.
 const IPAD_SHORT = { w: 1376, h: 980, dpr: 2, insets: {}, touch: true };
-// A band layout whose rounded view leaves the band 1/6 px short of the halfway rest, so the MARGIN clamp binds.
+// A band layout whose rounded view leaves the band 1/3 px short of D + 2·MARGIN, so the halfway top
+// falls 1/6 px above the clamp and the clamp binds.
 const SHORT_BAND = { w: 400, h: 417, dpr: 1.5, insets: {}, touch: true };
 const FIXTURES = [PORTRAIT, LANDSCAPE, SHORT, LAND_375, DESKTOP, IPAD, PHONE, BIG, WIDE_320];
 const GAP = 8;
