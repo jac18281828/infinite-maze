@@ -4,7 +4,7 @@ import { createWorld, boardCoords } from '../src/world/world.mjs';
 import { BW, NCELL } from '../src/world/board.mjs';
 import { boardMask, MASK_W, MASK_H } from '../src/game/mask.mjs';
 import { createSim, step, nodeXY, torchRadius, feetX, feetY, pose, TICK, RUN_SPEED, LADDER_SPEED, CELL } from '../src/game/sim.mjs';
-import { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, LAYER_MARGIN } from '../src/game/camera.mjs';
+import { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, deviceSpan, LAYER_MARGIN } from '../src/game/camera.mjs';
 import { RGB, idx, ARROWS, SKELETONS, SCONCE_FLAME, COIN, EXPLORER, JAR, torchTip } from '../src/game/art.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot } from '../src/world/floor.mjs';
 import { coinId } from '../src/game/wallet.mjs';
@@ -261,7 +261,7 @@ globalThis.document = { createElement: () => stubCanvas() };
 const view = document.createElement('canvas');
 view.width = 320;
 view.height = 180;
-// The iPad's 8.6x display; its log holds the composite.
+// A fractional 8.6x display; its log holds the composite.
 const display = stubCanvas(false);
 display.width = 2752;
 display.height = 1548;
@@ -288,8 +288,8 @@ function frameAt(cam, d = display) {
   return f;
 }
 /** World point (x, y) in the world layer of frame `f`, and back. */
-const inLayer = (f, x, y) => [x - f.wx + 160 + LAYER_MARGIN, f.wy - y + 90 + LAYER_MARGIN];
-const fromLayer = (f, lx, ly) => [lx + f.wx - 160 - LAYER_MARGIN, f.wy + 90 + LAYER_MARGIN - ly];
+const inLayer = (f, x, y) => [x - f.camX + 160 + LAYER_MARGIN, f.camY - y + 90 + LAYER_MARGIN];
+const fromLayer = (f, lx, ly) => [lx + f.camX - 160 - LAYER_MARGIN, f.camY + 90 + LAYER_MARGIN - ly];
 const isLight = ([src, ...a]) => src === renderer.layers.light && a.length === 4;
 /** Whether the display drew the world layer, then the light map over it. */
 const lightOverWorld = () => {
@@ -1372,12 +1372,6 @@ for (const { name, place } of camMotions) {
   });
 }
 
-/** Device rect [x, y, w, h] of a w x h game px sprite with its top-left corner at device (x0, y0), each edge rounded once. */
-const deviceRect = (f, x0, y0, w, h) => {
-  const x = Math.round(x0), y = Math.round(y0);
-  return [x, y, Math.round(x0 + w * f.sx) - x, Math.round(y0 + h * f.sy) - y];
-};
-
 test('at a fractional camera the back wall, the world layer, the light map, a mote and the explorer draw at the helper\'s placements, and the torch and its tip keep their offsets from the feet, scaled, facing either way', () => {
   const t = 0.7;
   for (const facing of [1, -1]) {
@@ -1393,14 +1387,16 @@ test('at a fractional camera the back wall, the world layer, the light map, a mo
     const tip = r.scene(sim, cam, t);
     r.composite();
     const f = frameAt(cam);
-    assert.ok(f.sx === 8.6 && f.sy === 8.6 && f.wx !== cam.x && f.wy !== cam.y, 'a fractional camera on the 8.6x display');
+    assert.ok(f.sx === 8.6 && f.sy === 8.6 && f.camX !== cam.x && f.camY !== cam.y, 'a fractional camera on the fractional 8.6x display');
     const drawOf = (src) => display.draws.find(([s]) => s === src).slice(1);
     assert.deepEqual(drawOf(r.layers.wall), [f.wallX, f.wallY, f.w, f.h], 'the back wall');
     assert.deepEqual(drawOf(r.layers.world), [f.worldX, f.worldY, f.w, f.h], 'the world layer');
     assert.deepEqual(drawOf(r.layers.light), [f.worldX, f.worldY, f.w, f.h], 'the light map');
     const x = deviceX(f, fx), y = deviceY(f, fy);
     const body = display.draws.find(([s]) => s.width === 16 && s.height === 24);
-    assert.deepEqual(body.slice(1), deviceRect(f, x - 8 * f.sx, y - 24 * f.sy, 16, 24), `facing ${facing}: the explorer`);
+    // The 16 x 24 sprite's top-left corner at device (sx0, sy0), each edge rounded once.
+    const sx0 = x - 8 * f.sx, sy0 = y - 24 * f.sy;
+    assert.deepEqual(body.slice(1), [Math.round(sx0), Math.round(sy0), deviceSpan(sx0, 16 * f.sx), deviceSpan(sy0, 24 * f.sy)], `facing ${facing}: the explorer`);
     // The tip's offset from the feet in game px: the sprite's left edge 8 px left of them, its top 24 px above.
     const { anim, frame } = pose(sim), [tx, ty] = torchTip(anim, frame);
     const ox = -8 + (facing < 0 ? 15 - tx : tx), oy = -24 + ty;
@@ -1411,8 +1407,51 @@ test('at a fractional camera the back wall, the world layer, the light map, a mo
     // A mote: one game px, its top-left corner at the mote.
     const wx = fx + ox, wy = fy - oy, rad = torchRadius(sim.burn);
     const lit = dustMotes(wx - rad, wy - rad, wx + rad, wy + rad, t).filter((m) => Math.hypot(m.x - wx, m.y - wy) < 0.9 * rad);
-    const want = lit.map((m) => deviceRect(f, deviceX(f, m.x), deviceY(f, m.y), 1, 1).join());
+    const want = lit.map((m) => {
+      const mx = deviceX(f, m.x), my = deviceY(f, m.y);
+      return [Math.round(mx), Math.round(my), deviceSpan(mx, f.sx), deviceSpan(my, f.sy)].join();
+    });
     const motes = display.fills.filter((fl) => fl[4].startsWith('rgba(255,226,170'));
     assert.ok(motes.length > 0 && want.includes(motes[0].slice(0, 4).join()), `facing ${facing}: the mote at ${motes[0]} lies at no placement`);
   }
+});
+
+/** A renderer on fresh canvases, so no earlier frame has left a pixel on a layer or the overlay. */
+function freshRenderer() {
+  const fresh = document.createElement('canvas');
+  fresh.width = 320;
+  fresh.height = 180;
+  return { fresh, r: createRenderer(fresh, world, display) };
+}
+
+test('scene clears the overlay each frame: a translucent fill applies once across two frames, never stacked', () => {
+  const { fresh, r } = freshRenderer();
+  const cam = { x: camBoard.x * 576 + 288, y: camBoard.y * 336 + 168 };
+  const ctx = fresh.getContext('2d');
+  const at = (10 * 320 + 10) * 4 + 3;
+  const frame = () => {
+    r.scene(null, cam, 0);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, 320, 180);
+    return fresh.data[at];
+  };
+  const first = frame();
+  assert.ok(first > 0 && first < 255, `a half-transparent fill leaves alpha ${first}`);
+  assert.equal(frame(), first, 'the second frame starts from a clear overlay');
+});
+
+test('scene clears the world layer each frame: a pixel the last frame left, where the board art is clear, is gone', () => {
+  const { r } = freshRenderer();
+  const world2d = r.layers.world;
+  const cam = { x: camBoard.x * 576 + 288, y: camBoard.y * 336 + 168 };
+  r.scene(null, cam, 0);
+  let clear = -1;
+  for (let i = 3; i < world2d.data.length; i += 4) if (world2d.data[i] === 0) { clear = i; break; }
+  assert.ok(clear >= 0, 'the layer holds a clear pixel');
+  const p = (clear - 3) / 4, ctx = world2d.getContext('2d');
+  ctx.fillStyle = '#ff0000';
+  ctx.fillRect(p % world2d.w, Math.floor(p / world2d.w), 1, 1);
+  assert.equal(world2d.data[clear], 255, 'the stray pixel is opaque');
+  r.scene(null, cam, 0);
+  assert.equal(world2d.data[clear], 0, 'the next frame clears it');
 });

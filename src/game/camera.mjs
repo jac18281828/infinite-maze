@@ -22,7 +22,7 @@ export function followCam(cam, sim) {
 
 /** A frame transform for `placeFrame` to fill. */
 export function createFrame() {
-  return { sx: 1, sy: 1, ox: 0, oy: 0, wx: 0, wy: 0, worldX: 0, worldY: 0, bx: 0, by: 0, wallX: 0, wallY: 0, w: 0, h: 0 };
+  return { sx: 1, sy: 1, ox: 0, oy: 0, camX: 0, camY: 0, worldX: 0, worldY: 0, bx: 0, by: 0, wallX: 0, wallY: 0, w: 0, h: 0 };
 }
 
 /**
@@ -30,7 +30,7 @@ export function createFrame() {
  * `dw` × `dh` device px showing `vw` × `vh` game px; allocates nothing. T
  * maps world (x, y), y up, to device (x·sx + ox, oy − y·sy), y down, with
  * sx = dw / vw, sy = dh / vh and the camera unrounded. The world layer
- * renders at the whole camera (wx, wy) = floor(cam) and the back wall at
+ * renders at the whole camera (camX, camY) = floor(cam) and the back wall at
  * (bx, by) = floor(cam / 2). Each layer spans the view and LAYER_MARGIN more
  * on every side, `w` × `h` device px, its top-left corner at (worldX, worldY)
  * or (wallX, wallY). The corners stay unrounded: the blit's nearest-neighbour
@@ -44,10 +44,10 @@ export function placeFrame(f, cam, dw, dh, vw, vh) {
   f.sy = sy;
   f.ox = dw / 2 - x * sx;
   f.oy = dh / 2 + y * sy;
-  f.wx = Math.floor(x);
-  f.wy = Math.floor(y);
-  f.worldX = (f.wx - mx - x) * sx + dw / 2;
-  f.worldY = (y - f.wy - my) * sy + dh / 2;
+  f.camX = Math.floor(x);
+  f.camY = Math.floor(y);
+  f.worldX = (f.camX - mx - x) * sx + dw / 2;
+  f.worldY = (y - f.camY - my) * sy + dh / 2;
   // The back wall travels half as far as the camera.
   const hx = x / 2, hy = y / 2;
   f.bx = Math.floor(hx);
@@ -66,4 +66,12 @@ export function deviceX(f, x) {
 /** Device y of world y in frame `f`, unrounded. */
 export function deviceY(f, y) {
   return f.oy - y * f.sy;
+}
+
+/**
+ * Device pixels a span of `len` device px covers from unrounded position `a`.
+ * Each edge lands on its nearest device pixel, so abutting spans meet.
+ */
+export function deviceSpan(a, len) {
+  return Math.round(a + len) - Math.round(a);
 }

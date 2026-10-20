@@ -19,7 +19,7 @@ const cell = bd.links.findIndex(mid);
 const [nx, ny] = nodeXY(bd, cell);
 
 const DISPLAYS = [
-  { name: 'the 2752 x 1548 iPad display at 8.6x', w: 2752, h: 1548 },
+  { name: 'the 2752 x 1548 display at a fractional 8.6x', w: 2752, h: 1548 },
   { name: 'the 1280 x 720 keyboard display at 4x', w: 1280, h: 720 },
 ];
 const SPEEDS = [0.8, 1.2, 1.6];
@@ -53,8 +53,8 @@ function drive(display, place, ticks, frame) {
 // device `at` with scale `s` lands on device pixel round(at + i·s).
 /** The device pixel world point (x, y) lands on as the frame places the world layer. */
 const worldPoint = (f, x, y) => [
-  Math.round(f.worldX + (x - (f.wx - VIEW_W / 2 - LAYER_MARGIN)) * f.sx),
-  Math.round(f.worldY + (f.wy + VIEW_H / 2 + LAYER_MARGIN - y) * f.sy),
+  Math.round(f.worldX + (x - (f.camX - VIEW_W / 2 - LAYER_MARGIN)) * f.sx),
+  Math.round(f.worldY + (f.camY + VIEW_H / 2 + LAYER_MARGIN - y) * f.sy),
 ];
 /** The device pixel back-wall point (x, y) lands on as the frame places the back wall. */
 const wallPoint = (f, x, y) => [

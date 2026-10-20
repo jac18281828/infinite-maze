@@ -154,11 +154,16 @@ function writeSave(g, text) {
   commit(g, () => 0);
 }
 
+/** Draws the overlay over the display at whole game px. */
+function drawOverlay() {
+  dctx.imageSmoothingEnabled = false;
+  dctx.drawImage(view, 0, 0, display.width, display.height);
+}
+
 /** Composites renderer `r`'s scene onto the display, then the overlay over it. */
 function present(r) {
   r.composite();
-  dctx.imageSmoothingEnabled = false;
-  dctx.drawImage(view, 0, 0, display.width, display.height);
+  drawOverlay();
 }
 
 function rollCode() {
@@ -2215,7 +2220,13 @@ function runLoop(g) {
     start: performance.now(),
     // The self-test fails on the first frame exception, as an uncaught one did.
     log: (e) => { console.error(e); if (SELFTEST) reportError(e); },
-    onFail: () => { paintError(g); present(g.renderer); },
+    // `run` calls this outside its try, so a throw here escapes on every frame.
+    onFail: () => {
+      paintError(g);
+      // A failure outside the composite leaves a clean frame to draw over.
+      try { g.renderer.composite(); } catch { /* the guard logged the frame's failure */ }
+      drawOverlay();
+    },
   });
   window.addEventListener('keydown', (e) => { if (!e.repeat) guard.release(); });
   function frame(now) {

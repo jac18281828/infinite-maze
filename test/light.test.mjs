@@ -65,8 +65,8 @@ function inView(bd, cam) {
   const f = createFrame();
   placeFrame(f, cam, 1280, 720, 320, 180);
   const hw = 160 + LAYER_MARGIN, hh = 90 + LAYER_MARGIN;
-  return bd.x >= Math.floor((f.wx - hw) / BOARD_W) && bd.x <= Math.floor((f.wx + hw) / BOARD_W)
-    && bd.y >= Math.floor((f.wy - hh) / BOARD_H) && bd.y <= Math.floor((f.wy + hh) / BOARD_H);
+  return bd.x >= Math.floor((f.camX - hw) / BOARD_W) && bd.x <= Math.floor((f.camX + hw) / BOARD_W)
+    && bd.y >= Math.floor((f.camY - hh) / BOARD_H) && bd.y <= Math.floor((f.camY + hh) / BOARD_H);
 }
 
 /** Each kind and side's first source on the tree boards of `sample(d, 3)` whose light centre lies within NEAR of the seam facing the view. */

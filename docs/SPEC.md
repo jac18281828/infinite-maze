@@ -816,20 +816,20 @@ full torch and adds one to the count.
 
 **Graphics.**
 - Canvas 2D, with `imageSmoothingEnabled = false`. The view spans 320×180
-  game pixels, and the art, drawn in game pixels, scales nearest-neighbour. In
-  keyboard mode the view scales up by the largest whole multiple of CSS
-  pixels, centred.
+  game pixels, and the art, drawn in game pixels, scales nearest-neighbour.
+  Every resample is nearest-neighbour except the light map's smoothed upscale
+  onto the display (Lighting). In keyboard mode the view scales up by the
+  largest whole multiple of CSS pixels, centred.
 - The world, the back wall, the explorer, the light and the dust draw through
   one world-to-device transform at device-pixel precision: a layer's pixel
   edges and a sprite's outer edges land on the device pixels nearest their
   true positions. The HUD and the screens stay on whole game pixels.
 - In touch mode (§9) the view fills the safe area at a fractional scale; the
   page background fills the letterbox. The canvas's backing store is in device
-  pixels, so a game pixel spans ⌊s⌋ or ⌈s⌉ of them and the nearest-neighbour
-  draw is the only resample. When the safe area's height less a full-width
-  16:9 view leaves room for the d-pad and its margins, the view spans the
-  width at the top and the controls fill the band below. Otherwise the view
-  fits the safe area and the controls overlay it.
+  pixels, so a game pixel spans ⌊s⌋ or ⌈s⌉ of them. When the safe area's
+  height less a full-width 16:9 view leaves room for the d-pad and its
+  margins, the view spans the width at the top and the controls fill the band
+  below. Otherwise the view fits the safe area and the controls overlay it.
 - 16×16 tiles. A cell is 3×3 tiles, so a board is 576×336 px.
 - A palette of 32 colours: sandstone, ochre, lapis, turquoise, gold, torch
   orange and violet shadow.

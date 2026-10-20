@@ -16,7 +16,7 @@ import { coinId } from './wallet.mjs';
 import { boardMask } from './mask.mjs';
 import { fixtureSets, eachMote, arrowSpot, skeletonSpot, skeletonPose } from './fixtures.mjs';
 import { mapCells } from './map.mjs';
-import { LAYER_MARGIN, createFrame, placeFrame, deviceX, deviceY } from './camera.mjs';
+import { LAYER_MARGIN, createFrame, placeFrame, deviceX, deviceY, deviceSpan } from './camera.mjs';
 
 export const VIEW_W = 320;
 export const VIEW_H = 180;
@@ -192,15 +192,15 @@ export function createRenderer(canvas, world, display) {
   const rockCanvas = buildBoardCanvas(null);
   const boards = new Map();
   // The layers, y down: world point (x, y) lands at world-layer point
-  // (x − wx + HALF_W, wy − y + HALF_H) of the frame `tf`, and the back wall
-  // likewise at its own camera.
+  // (x − camX + HALF_W, camY − y + HALF_H) of the frame `currentFrame`, and
+  // the back wall likewise at its own camera.
   const wall = makeCanvas(LAYER_W, LAYER_H);
   const wallCtx = wall.getContext('2d');
   const layer = makeCanvas(LAYER_W, LAYER_H);
   const lctx = layer.getContext('2d');
   wallCtx.imageSmoothingEnabled = false;
   lctx.imageSmoothingEnabled = false;
-  const tf = createFrame();
+  const currentFrame = createFrame();
   const light = makeCanvas(LIGHT_W, LIGHT_H);
   const lightCtx = light.getContext('2d');
   const lightImg = lightCtx.createImageData(LIGHT_W, LIGHT_H);
@@ -539,17 +539,16 @@ export function createRenderer(canvas, world, display) {
 
   /** Draws `img` on the display, its top-left corner at device (x, y), each edge on the device pixel nearest its true position. */
   function blit(img, x, y) {
-    const x0 = Math.round(x), y0 = Math.round(y);
-    dctx.drawImage(img, x0, y0, Math.round(x + img.width * tf.sx) - x0, Math.round(y + img.height * tf.sy) - y0);
+    dctx.drawImage(img, Math.round(x), Math.round(y), deviceSpan(x, img.width * currentFrame.sx), deviceSpan(y, img.height * currentFrame.sy));
   }
 
   /** Draws the explorer `sim` and its flame on the display, each at its art offset from the true feet, scaled. */
   function drawExplorer(sim, t) {
-    const x = deviceX(tf, feetX(sim)), y = deviceY(tf, feetY(sim));
-    blit(body, x - 8 * tf.sx, y - 24 * tf.sy);
-    const tx = deviceX(tf, tipX), ty = deviceY(tf, tipY);
-    if (sim.burn > 0) blit(torches[Math.floor(t * 12) % 3], tx - 2 * tf.sx, ty - 4 * tf.sy);
-    else blit(ember, tx - tf.sx, ty - tf.sy);
+    const x = deviceX(currentFrame, feetX(sim)), y = deviceY(currentFrame, feetY(sim));
+    blit(body, x - 8 * currentFrame.sx, y - 24 * currentFrame.sy);
+    const tx = deviceX(currentFrame, tipX), ty = deviceY(currentFrame, tipY);
+    if (sim.burn > 0) blit(torches[Math.floor(t * 12) % 3], tx - 2 * currentFrame.sx, ty - 4 * currentFrame.sy);
+    else blit(ember, tx - currentFrame.sx, ty - currentFrame.sy);
   }
 
   /** Writes the light map: ambient plus every light the frame added. */
@@ -566,7 +565,7 @@ export function createRenderer(canvas, world, display) {
     dctx.save();
     dctx.globalCompositeOperation = 'multiply';
     dctx.imageSmoothingEnabled = true;
-    dctx.drawImage(light, tf.worldX, tf.worldY, tf.w, tf.h);
+    dctx.drawImage(light, currentFrame.worldX, currentFrame.worldY, currentFrame.w, currentFrame.h);
     dctx.restore();
     dctx.imageSmoothingEnabled = false;
   }
@@ -579,13 +578,13 @@ export function createRenderer(canvas, world, display) {
    */
   function scene(sim, cam, t) {
     ctx.clearRect(0, 0, VIEW_W, VIEW_H);
-    placeFrame(tf, cam, display.width, display.height, VIEW_W, VIEW_H);
-    const cx = tf.wx, cy = tf.wy;
+    placeFrame(currentFrame, cam, display.width, display.height, VIEW_W, VIEW_H);
+    const cx = currentFrame.camX, cy = currentFrame.camY;
     const sx = (wx) => wx - cx + HALF_W;
     const sy = (wy) => cy - wy + HALF_H;
     prepare(cam);
     acc.fill(0);
-    drawBackground(tf.bx, tf.by);
+    drawBackground(currentFrame.bx, currentFrame.by);
     lctx.clearRect(0, 0, LAYER_W, LAYER_H);
     const lit = drawBoards(cx, cy, sx, sy);
     drawItems(lit, sx, sy, sim ? sim.collected : null, sim ? sim.jars : null);
@@ -598,7 +597,7 @@ export function createRenderer(canvas, world, display) {
     shadeLight();
     shown = sim;
     shownT = t;
-    return sim ? [deviceX(tf, tipX), deviceY(tf, tipY)] : null;
+    return sim ? [deviceX(currentFrame, tipX), deviceY(currentFrame, tipY)] : null;
   }
 
   /**
@@ -608,8 +607,8 @@ export function createRenderer(canvas, world, display) {
    */
   function composite() {
     dctx.imageSmoothingEnabled = false;
-    dctx.drawImage(wall, tf.wallX, tf.wallY, tf.w, tf.h);
-    dctx.drawImage(layer, tf.worldX, tf.worldY, tf.w, tf.h);
+    dctx.drawImage(wall, currentFrame.wallX, currentFrame.wallY, currentFrame.w, currentFrame.h);
+    dctx.drawImage(layer, currentFrame.worldX, currentFrame.worldY, currentFrame.w, currentFrame.h);
     if (shown) drawExplorer(shown, shownT);
     applyLight();
     if (shown) drawDust(shown);
@@ -645,8 +644,8 @@ export function createRenderer(canvas, world, display) {
     // The table holds toFixed(3) away from a rounding tie, where the double decides.
     dctx.fillStyle = DUST_STYLE[n] !== undefined && Math.abs(v - n) < 0.4999 ? DUST_STYLE[n] : `rgba(255,226,170,${(a * 0.7).toFixed(3)})`;
     // One game px, its top-left corner at the mote.
-    const x = deviceX(tf, mx), y = deviceY(tf, my), x0 = Math.round(x), y0 = Math.round(y);
-    dctx.fillRect(x0, y0, Math.round(x + tf.sx) - x0, Math.round(y + tf.sy) - y0);
+    const x = deviceX(currentFrame, mx), y = deviceY(currentFrame, my);
+    dctx.fillRect(Math.round(x), Math.round(y), deviceSpan(x, currentFrame.sx), deviceSpan(y, currentFrame.sy));
   }
 
   function drawDust(sim) {

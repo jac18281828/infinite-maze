@@ -11,7 +11,7 @@ import { fixtureSets, dustMotes } from '../src/game/fixtures.mjs';
 import { createRenderer } from '../src/game/render.mjs';
 import { RGB, idx, ROCK } from '../src/game/art.mjs';
 import { BOARD_W, BOARD_H, createSim, feet, torchRadius } from '../src/game/sim.mjs';
-import { createFrame, placeFrame, deviceX, deviceY } from '../src/game/camera.mjs';
+import { createFrame, placeFrame, deviceX, deviceY, deviceSpan } from '../src/game/camera.mjs';
 
 const CODE = '00000000';
 const LEVELS = ['easy', 'medium', 'hard', 'ultimate'];
@@ -96,7 +96,7 @@ function nullCanvas(copy = false, fills = null) {
   return canvas;
 }
 
-/** A null canvas the size of the iPad's 8.6x display; with `fills` it logs each fillRect. */
+/** A null canvas the size of a fractional 8.6x display; with `fills` it logs each fillRect. */
 function display(fills = null) {
   const d = nullCanvas(false, fills);
   d.width = 2752;
@@ -313,8 +313,8 @@ test('the dust draws the motes dustMotes lists, each with the toFixed(3) fill', 
       const renderer = createRenderer(nullCanvas(), world, display(fills));
       const { sim, cam } = explorer(world, burn);
       assert.equal(windDir(world, sim.bd, sim.cell), -1, 'no wind, so the dust does not drift');
-      const tf = createFrame();
-      placeFrame(tf, cam, 2752, 1548, 320, 180);
+      const frame = createFrame();
+      placeFrame(frame, cam, 2752, 1548, 320, 180);
       let drawn = 0;
       for (let f = 0; f < 600; f++) {
         const t = f / 60;
@@ -323,13 +323,13 @@ test('the dust draws the motes dustMotes lists, each with the toFixed(3) fill', 
         renderer.composite();
         const r = torchRadius(burn);
         // The torch tip in world px.
-        const x0 = (tip[0] - tf.ox) / tf.sx, y0 = (tf.oy - tip[1]) / tf.sy;
+        const x0 = (tip[0] - frame.ox) / frame.sx, y0 = (frame.oy - tip[1]) / frame.sy;
         const want = [];
         for (const m of dustMotes(x0 - r, y0 - r, x0 + r, y0 + r, t, 0, 0)) {
           const a = 1 - Math.hypot(m.x - x0, m.y - y0) / (r * 0.9);
           // One game px, its top-left corner at the mote, each edge rounded once.
-          const x = deviceX(tf, m.x), y = deviceY(tf, m.y), px = Math.round(x), py = Math.round(y);
-          if (a > 0) want.push([px, py, Math.round(x + tf.sx) - px, Math.round(y + tf.sy) - py, `rgba(255,226,170,${(a * 0.7).toFixed(3)})`]);
+          const x = deviceX(frame, m.x), y = deviceY(frame, m.y);
+          if (a > 0) want.push([Math.round(x), Math.round(y), deviceSpan(x, frame.sx), deviceSpan(y, frame.sy), `rgba(255,226,170,${(a * 0.7).toFixed(3)})`]);
         }
         const got = fills.filter((fill) => fill[4].startsWith('rgba(255,226,170,'));
         assert.deepEqual(got, want, `burn ${burn}, frame ${f}`);
