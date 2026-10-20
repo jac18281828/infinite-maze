@@ -1160,12 +1160,12 @@ scrolls, zooms or selects.
 - **D-pad.** In play, a 4-way pad sits at the bottom left in overlay mode. In
   the band, which starts at the scaled view's bottom (§8), its centre lies a
   quarter of the safe width in, never closer than the margin to the left edge,
-  and a third of the way down the band, never closer than the margin to the
-  view. Its centre is neutral: a pointer there holds no direction and sends
-  nothing, and a slide from an arm into it releases the arm. An arm holds its
-  arrow key while a pointer is on it, a slide from arm to arm swaps the key,
-  and a pointer that left the pad keeps mapping by angle until it lifts. The
-  pad has no diagonals. With the title's PAD key set to `right`, the pad
+  and halfway down the band, never closer than the margin to the view. Its
+  centre is neutral: a pointer there holds no direction and sends nothing, and
+  a slide from an arm into it releases the arm. An arm holds its arrow key
+  while a pointer is on it, a slide from arm to arm swaps the key, and a
+  pointer that left the pad keeps mapping by angle until it lifts. The pad has
+  no diagonals. With the title's PAD key set to `right`, the pad
   stands where its mirror across the safe area's vertical centre line would,
   and the fire button where the pad stood.
 - **Fire button.** In play, a red circle (palette index `0x17`) stands

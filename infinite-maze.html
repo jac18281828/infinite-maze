@@ -5870,9 +5870,9 @@ function layout({ w, h, dpr = 1, insets = {}, touch, swap = false }) {
     const vy = whole ? snap(safe.y) : safe.y;
     const rest = { x: safe.x, y: vy + vh, w: safe.w, h: whole ? safe.y + safe.h - vy - vh : safe.h - vh };
     // The pad's centre rests a quarter in, where a left thumb sits on a
-    // controller, and a third of the way down the band, within thumb reach.
+    // controller, and halfway down the band, within thumb reach.
     // Its top stays MARGIN below the view and its left MARGIN inside the edge.
-    const top = Math.max(rest.y + MARGIN, rest.y + rest.h / 3 - D / 2);
+    const top = Math.max(rest.y + MARGIN, rest.y + rest.h / 2 - D / 2);
     return {
       mode: 'band', D, safe, band: rest, scale: vw / VIEW_W,
       view: { x: vx, y: vy, w: vw, h: vh }, backing: { w: bw, h: bh },

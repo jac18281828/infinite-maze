@@ -24,8 +24,10 @@ const BIG = { w: 1366, h: 1024, dpr: 2, insets: {}, touch: true };
 const WIDE_320 = { w: 568, h: 320, dpr: 2, insets: {}, touch: true };
 // A landscape phone at 4 device px a game px, height-limited: below 6x its view fills the safe height.
 const LAND_700 = { w: 700, h: 360, dpr: 2, insets: {}, touch: true };
-// A 1376 px wide band layout whose pad clamp binds once the view is whole.
+// A 1376 px wide band layout with a whole view and a 260 px band, where the halfway rest clears the clamp.
 const IPAD_SHORT = { w: 1376, h: 980, dpr: 2, insets: {}, touch: true };
+// A band layout whose rounded view leaves the band 1/6 px short of the halfway rest, so the MARGIN clamp binds.
+const SHORT_BAND = { w: 400, h: 417, dpr: 1.5, insets: {}, touch: true };
 const FIXTURES = [PORTRAIT, LANDSCAPE, SHORT, LAND_375, DESKTOP, IPAD, PHONE, BIG, WIDE_320];
 const GAP = 8;
 
@@ -520,20 +522,19 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
   }
 });
 
-test('in band mode the pad centre sits a third of the way down the band, its top at least MARGIN below the view', () => {
-  // BIG's view is whole (8x, 720 CSS px tall), so its band is 304 px and a third down wins.
-  for (const spec of [PORTRAIT, IPAD, PHONE, BIG]) {
-    const { pad, band } = layout(spec);
-    assert.ok(Math.abs(pad.y + pad.s / 2 - (band.y + band.h / 3)) <= 1, `${spec.w}x${spec.h}: a third down`);
+test('in band mode the pad centre sits halfway down the band, its top at least MARGIN below the view', () => {
+  // BIG, IPAD_SHORT and DESKTOP have whole views, so their bands are the whole-view remainder.
+  for (const spec of [PORTRAIT, IPAD, PHONE, BIG, IPAD_SHORT, DESKTOP]) {
+    const { mode, pad, band } = layout(spec);
+    assert.equal(mode, 'band', `${spec.w}x${spec.h} is band mode`);
+    assert.ok(Math.abs(pad.y + pad.s / 2 - (band.y + band.h / 2)) <= 1e-9, `${spec.w}x${spec.h}: halfway down`);
   }
-  assert.ok(Math.abs(layout(PORTRAIT).pad.y + 80 - (280 + 538 / 3)) <= 1e-9, 'the iPhone centre falls from 414.5 to 459.33');
-  for (const spec of [IPAD_SHORT, DESKTOP]) {
-    const lay = layout(spec);
-    assert.equal(lay.mode, 'band');
-    assert.ok(Math.abs(lay.pad.y - (lay.band.y + MARGIN)) <= 1e-9, `${spec.w}x${spec.h}: the clamp binds`);
-  }
-  const { pad, band } = layout(IPAD_SHORT), centre = pad.y + pad.s / 2;
-  for (const f of [1 / 4, 1 / 3, 1 / 2]) assert.ok(Math.abs(centre - (band.y + band.h * f)) > 1, `1376x980: not ${f} of the band`);
+  assert.ok(Math.abs(layout(PORTRAIT).pad.y + 80 - (280 + 538 / 2)) <= 1e-9, 'the iPhone centre falls from 459.33 to 549');
+  const lay = layout(SHORT_BAND), { pad, band, D } = lay;
+  assert.equal(lay.mode, 'band');
+  assert.equal(D, 160);
+  assert.ok(Math.abs(pad.y - (band.y + MARGIN)) <= 1e-9, 'SHORT_BAND: the clamp binds');
+  assert.ok(Math.abs(pad.y - (band.y + band.h / 2 - D / 2) - 1 / 6) <= 1e-9, 'SHORT_BAND: the clamp lifts the pad 1/6 px');
 });
 
 test('the fire button stands opposite the pad at its height, sized by FIRE_FRAC with a floor', () => {
