@@ -1,6 +1,7 @@
-// Coins: the payout rules, the save slot that holds a run's serial, tomb count,
-// wallet, continue count and the takes of its last two tombs, and the merge
-// that writes it. DOM-free; main.mjs supplies the storage.
+// Coins and saves: the payout rules, the three save records that each bind a
+// run's serial to its net, high, wallet, continue count and the takes of its
+// last two tombs, their writes, and the migration from the old single slot.
+// DOM-free; main.mjs supplies the storage.
 import { MILESTONE } from './ranks.mjs';
 import { decodeSave } from '../world/save.mjs';
 import { tombOf, boardCoords } from '../world/world.mjs';
@@ -9,11 +10,12 @@ import { ROW_COINS, floorItems, coinRows } from '../world/floor.mjs';
 import { DIFFICULTY } from '../world/band.mjs';
 import { formatCode, CROCKFORD } from '../world/hash.mjs';
 
-// The one key of the save slot: a JSON object, written whole.
-export const SLOT_KEY = 'infinite-maze.plane.slot';
+// The old single slot: migration reads it once and never writes or removes it,
+// so an older build still finds its save.
+export const OLD_SLOT_KEY = 'infinite-maze.plane.slot';
 
-// The seven keys the slot replaced. A slot write removes them; `legacySlot`
-// reads them once.
+// The seven keys the old slot replaced. Migration reads them through
+// `legacySlot`, then removes them.
 export const LEGACY_KEYS = {
   save: 'infinite-maze.plane.save',
   difficulty: 'infinite-maze.plane.save.difficulty',
@@ -28,9 +30,8 @@ export const LEGACY_KEYS = {
 export const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
 
 /**
- * The milestone coins due when a run's tomb count reaches `count` and the
- * highest count paid on the seed and level is `record`: 100 x k for each
- * milestone k with record < 100k <= count.
+ * The milestone coins due when a save's high rises from `record` to `count`:
+ * 100 x k for each milestone k with record < 100k <= count.
  */
 export function milestonePayout(record, count) {
   const last = Math.floor(count / MILESTONE);
@@ -38,7 +39,7 @@ export function milestonePayout(record, count) {
   return last >= first ? (MILESTONE * (first + last) * (last - first + 1)) / 2 : 0;
 }
 
-/** The key of a seed and level in the tomb set and the record: `K7Q2M9XA:MEDIUM`. */
+/** The key of a seed and level in the old keys' tomb sets and records: `K7Q2M9XA:MEDIUM`. */
 export function coinKey(code, difficulty) {
   return `${code}:${difficulty.toUpperCase()}`;
 }
@@ -70,7 +71,7 @@ export function parseWallet(text) {
   return isCount(n) ? n : 0;
 }
 
-/** The pattern of a tomb id in a solved set or a run: "u,v". */
+/** The pattern of a tomb id: "u,v". */
 export const TOMB_ID = /^-?\d+,-?\d+$/;
 
 /** An id-set store as Map(key -> Set(id)), keeping the ids that match `pattern`; malformed input reads as empty. */
@@ -90,45 +91,9 @@ export function parsePaid(text) {
   return out;
 }
 
-/**
- * The pay rule for floor coins: 1 for each of `ids`, the coins a tick took.
- * The run's taken set keeps a coin from paying twice while its tomb is one of
- * the run's two recent tombs; the slot stores those takes as bits (`recent`).
- */
-export function coinPay(ids) {
-  return () => ids.length;
-}
-
-/**
- * The pay rule for a tick that raised the run count to `count`: the level's
- * rate for each tomb of `solvedNow` the device has not paid, then the
- * milestones past the record. A tomb joins the device's set once paid, and the
- * record becomes the larger of itself and `count`. `pay.seen` is the merged
- * record it found, which decides the splash's paid flag.
- */
-export function tombPay(key, level, solvedNow, count) {
-  const pay = (state) => {
-    let tombs = state.tombs.get(key);
-    if (!tombs) state.tombs.set(key, (tombs = new Set()));
-    const record = state.paid.get(key) || 0;
-    let due = 0;
-    for (const id of solvedNow) {
-      if (!tombs.has(id)) {
-        tombs.add(id);
-        due += COIN_RATE[level];
-      }
-    }
-    pay.seen = record;
-    state.paid.set(key, Math.max(record, count));
-    return due + milestonePayout(record, count);
-  };
-  pay.seen = 0;
-  return pay;
-}
-
 const SLOT_ID = new RegExp(`^[${CROCKFORD}]{8}$`);
 
-/** A fresh slot id: eight random base-32 characters. */
+/** A fresh save id: eight random base-32 characters. */
 export function newSlotId() {
   const b = new Uint8Array(8);
   globalThis.crypto.getRandomValues(b);
@@ -141,9 +106,10 @@ const BITS = /^[0-9a-f]*$/;
 
 /**
  * The `recent` field as [[tomb, bits], …], latest tomb first. An absent field
- * reads as [], and so does a malformed one, which leaves the slot parsed: not
- * an array, more than two entries, an entry that is not a pair of strings, a
- * tomb failing TOMB_ID, a repeated tomb or bits outside lowercase hex.
+ * reads as [], and so does a malformed one: not an array, more than two
+ * entries, an entry that is not a pair of strings, a tomb failing TOMB_ID, a
+ * repeated tomb or bits outside lowercase hex. The old slot reads past a
+ * malformed field; a record whose field reads short is damaged.
  */
 function parseRecent(list) {
   if (!Array.isArray(list) || list.length > 2) return [];
@@ -157,14 +123,14 @@ function parseRecent(list) {
 }
 
 /**
- * The slot in `text` as { id, save, level, start, solved, wallet, tombs,
- * record, continues, recent }, or null when absent, malformed or any id or
- * count fails its check. `save` is the serial, `level` its difficulty, `start`
- * the run's start tomb "u,v", `solved` its solved tombs, `tombs` the tombs the
- * wallet has been paid for, `continues` the run's continue count, 0 when
- * absent, and `recent` the takes of the run's last two tombs (`parseRecent`).
- * The stored `coins` list is ignored whatever it holds: older builds read the
- * field, and a slot without it would read as no slot there.
+ * The old slot in `text`, migration's source, as { id, save, level, start,
+ * solved, wallet, tombs, record, continues, recent }, or null when absent,
+ * malformed or any id or count fails its check. `save` is the serial, `level`
+ * its difficulty, `start` the run's start tomb "u,v", `solved` its solved
+ * tombs, `tombs` the tombs the wallet has been paid for, `record` the highest
+ * count paid, `continues` the run's continue count, 0 when absent, and
+ * `recent` the takes of the run's last two tombs (`parseRecent`). The stored
+ * `coins` list is ignored whatever it holds.
  */
 export function parseSlot(text) {
   let v;
@@ -181,16 +147,8 @@ export function parseSlot(text) {
   return { id, save, level, start, solved, wallet, tombs, record, continues: v.continues ?? 0, recent: parseRecent(v.recent) };
 }
 
-/** The slot as text; its lists may be arrays or Sets. It writes `coins` empty, for older builds. */
-export function serializeSlot(slot) {
-  const { id, save, level, start, wallet, record, continues, recent = [] } = slot;
-  return JSON.stringify({
-    id, save, level, start, solved: [...slot.solved], wallet, coins: [], tombs: [...slot.tombs], record, continues, recent,
-  });
-}
-
 /**
- * The items of tomb `key` ("u,v") in the slot's bit order, as { ids, jars }:
+ * The items of tomb `key` ("u,v") in the record's bit order, as { ids, jars }:
  * the ids of its jars, then its dead-end coins, then its row coins, each kind
  * by board index, cell and row coin; the first `jars` ids are jars. It builds
  * the tomb's boards the world has dropped, so a run reads it once while the
@@ -212,7 +170,7 @@ export function tombItems(world, key) {
 }
 
 /**
- * The slot's `recent` for sim `s`: per recent tomb, latest first, a pair
+ * The record's `recent` for sim `s`: per recent tomb, latest first, a pair
  * [tomb, bits]. Item k of the tomb's `tombItems` is hex digit k >> 2, value
  * 1 << (k & 3), set when taken; trailing 0 digits drop. It reads the sim's
  * stored item lists and builds a board only for a tomb the sim holds none of.
@@ -248,12 +206,12 @@ export function unpackRecent(world, recent) {
 }
 
 /**
- * The slot the seven old keys describe, under a fresh id, or null when they
- * hold no save. `load(key)` reads storage. The wallet is the device's; the
- * tombs and the record are those of the save's seed and level. The run is the
- * old run when it names the save; else it starts at the save's own tomb, as a
- * typed save code does. The old coin key is not read, the continue count is 0
- * and no tomb is recent.
+ * The old slot the seven legacy keys describe, under a fresh id, or null when
+ * they hold no save. `load(key)` reads storage. The wallet is the device's;
+ * the tombs and the record are those of the save's seed and level. The run is
+ * the old run when it names the save; else it starts at the save's own tomb,
+ * as a typed save code does. The old coin key is not read, the continue count
+ * is 0 and no tomb is recent.
  */
 export function legacySlot(load) {
   const text = load(LEGACY_KEYS.save) || '';
@@ -395,7 +353,7 @@ export function eraseSave(io, key, id) {
  */
 export function migrateSaves(io) {
   if (io.load(MIGRATED_KEY) !== null || SAVE_SLOTS.some((n) => io.load(saveKey(n)) !== null)) return false;
-  const old = parseSlot(io.load(SLOT_KEY)) || legacySlot(io.load);
+  const old = parseSlot(io.load(OLD_SLOT_KEY)) || legacySlot(io.load);
   if (old) {
     const { id, save, level, start, wallet, continues, recent } = old, net = old.solved.length;
     const record = { id, save, level, start, net, high: Math.max(net, old.record), wallet, continues, recent };
@@ -404,40 +362,4 @@ export function migrateSaves(io) {
   if (!io.store(MIGRATED_KEY, '1')) return false;
   for (const k of Object.values(LEGACY_KEYS)) io.remove(k);
   return true;
-}
-
-/**
- * Writes the run state `{ id, save, level, start, solved, wallet, tombs,
- * record, continues, recent }` (solved and tombs are Sets) through `io`
- * `{ load(key), store(key, value), remove(key) }` without losing what another
- * tab wrote. A stored slot with the same id is the same run: its wallet, record
- * and continue count merge by max and its tombs by union, in place so a running
- * sim sees them. Any other slot, or none, is replaced whole, and `pay` sees an
- * empty stored state. The run fields are the writer's, `recent` among them: two
- * tabs on one slot are two runs, each with its own takes.
- * `pay(state, stored)` returns the coins this write earns, with `state` and
- * `stored` holding the slot's tombs and record as one-entry Maps keyed by
- * `coinKey(seed, level)`; they join the wallet. The first write removes the
- * legacy keys. Returns the coins earned.
- */
-export function commitSlot(io, state, pay) {
-  const held = parseSlot(io.load(SLOT_KEY));
-  const key = coinKey(decodeSave(state.save).code, state.level);
-  const same = held !== null && held.id === state.id;
-  const was = same ? held : { wallet: 0, tombs: [], record: 0, continues: 0 };
-  if (same) {
-    state.wallet = Math.max(state.wallet, was.wallet);
-    for (const id of was.tombs) state.tombs.add(id);
-    state.record = Math.max(state.record, was.record);
-    state.continues = Math.max(state.continues, was.continues);
-  }
-  const view = (wallet, tombs, record) => (
-    { wallet, tombs: new Map([[key, tombs]]), paid: new Map([[key, record]]) });
-  const now = view(state.wallet, state.tombs, state.record);
-  const earned = pay(now, view(was.wallet, new Set(was.tombs), was.record));
-  state.wallet += earned;
-  state.record = now.paid.get(key);
-  io.store(SLOT_KEY, serializeSlot(state));
-  for (const old of Object.values(LEGACY_KEYS)) io.remove(old);
-  return earned;
 }

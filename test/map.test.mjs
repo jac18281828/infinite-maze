@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld, boardCoords, tombOf } from '../src/world/world.mjs';
 import { NCELL, BW, BH } from '../src/world/board.mjs';
-import { createSim, step, inputEdges, createTrail, recordStood, BURN_S } from '../src/game/sim.mjs';
+import { createSim, step, inputEdges, createTrail, recordStood, tombCount, BURN_S } from '../src/game/sim.mjs';
 import { createAutopilot, SELFTEST_CODE, SELFTEST_TICKS } from '../src/game/autopilot.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from '../src/game/map.mjs';
 import { DIFFICULTY } from '../src/world/band.mjs';
@@ -156,7 +156,7 @@ test('the map shows exactly the walked links, stood openings, entered boards and
       if (s.bd.u !== 0 || s.bd.v !== 0) left = true;
     }
     assert.ok(left, 'the script leaves tomb (0, 0)');
-    assert.ok(s.solved.has('0,0'), 'the script solves tomb (0, 0)');
+    assert.ok(tombCount(s) >= 1, 'the script climbs out of tomb (0, 0)');
     checkTombs(world, s, w, tally);
   }
   // Seeded random input, as the fuzz test drives it.

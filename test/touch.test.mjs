@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X, textWidth,
+  layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, screenId, keyRects, MARGIN, PANEL_X, textWidth,
   FIRE_FRAC, FIRE_MIN, padSide, titleFeet, createQuickTaps,
 } from '../src/game/touch.mjs';
 import { createFrame, placeFrame, deviceSpan } from '../src/game/camera.mjs';
@@ -31,6 +31,19 @@ const IPAD_SHORT = { w: 1376, h: 980, dpr: 2, insets: {}, touch: true };
 const SHORT_BAND = { w: 400, h: 417, dpr: 1.5, insets: {}, touch: true };
 const FIXTURES = [PORTRAIT, LANDSCAPE, SHORT, LAND_375, DESKTOP, IPAD, PHONE, BIG, WIDE_320];
 const GAP = 8;
+// A game state for each soft-key screen, every key it can show shown.
+const SCREENS = {
+  title: { screen: 'title', resume: true, erase: true },
+  erasing: { screen: 'title', erasing: true, rows: '123' },
+  newrun: { screen: 'newrun', difficulty: 'medium' },
+  typing: { screen: 'newrun', typing: true },
+  confirm: { screen: 'title', confirm: true },
+  savein: { screen: 'savein', rows: '312' },
+  play: { screen: 'play' },
+  pause: { screen: 'pause', unsaved: true, side: 'left' },
+  over: { screen: 'over' },
+  splash: { screen: 'splash' },
+};
 
 test('keyboard mode scales by the largest whole multiple of CSS pixels', () => {
   for (const [w, h, k] of [[1280, 720, 4], [1000, 700, 3], [300, 200, 1]]) {
@@ -252,8 +265,7 @@ test('a whole layout keeps the pad, the fire button and every soft key inside th
     const lay = layout(spec), tag = `${spec.w}x${spec.h} dpr ${spec.dpr} ${lay.mode}`;
     assert.ok(inside(sq(lay.pad), lay.safe) && inside(sq(lay.fire), lay.safe), `${tag}: pad and fire in the safe area`);
     if (lay.mode === 'band') assert.ok(lay.pad.y >= lay.view.y + lay.view.h - 1e-9 && lay.fire.y >= lay.view.y + lay.view.h - 1e-9, `${tag}: pad and fire below the view`);
-    for (const sid of ['title', 'typing', 'confirm', 'pause', 'over', 'splash', 'play']) {
-      const state = { screen: sid === 'typing' || sid === 'confirm' ? 'title' : sid, typing: sid === 'typing', confirm: sid === 'confirm', resume: true, difficulty: 'medium' };
+    for (const [sid, state] of Object.entries(SCREENS)) {
       for (const r of keyRects(lay, sid, softKeys(state).map((k) => k.text))) {
         keys++;
         assert.ok(inside(r, lay.safe), `${tag} ${sid}: key in the safe area`);
@@ -360,19 +372,29 @@ test('every soft key names a key its screen handler accepts', () => {
     assert.ok(m, `${name} found`);
     return m[0];
   };
-  const handler = { title: 'titleKey', typing: 'typingKey', confirm: 'confirmKey', play: 'playKey', pause: 'pauseKey', over: 'overKey', splash: 'splashKey' };
+  const handler = {
+    title: 'titleKey', erasing: 'erasingKey', newrun: 'newRunKey', typing: 'typingKey', confirm: 'confirmKey', savein: 'saveInKey',
+    play: 'playKey', pause: 'pauseKey', over: 'overKey', splash: 'splashKey',
+  };
+  // The slot digits reach a handler through SLOT_DIGITS.
+  const digits = src.match(/const SLOT_DIGITS = \{[^}]*\};/);
+  assert.ok(digits, 'SLOT_DIGITS found');
   for (const [sid, list] of Object.entries(SOFT)) {
+    assert.ok(handler[sid], `${sid} has a handler`);
     for (const k of list) {
-      if (k.act === 'type') { assert.match(body('titleKey'), /'KeyT'/); continue; }
-      const text = body(handler[sid]) + (k.code === 'KeyM' ? body('onKeyDown') : '');
-      assert.ok(text.includes(`'${k.code}'`) || text.includes(`'${k.key}'`), `${sid}/${k.id} sends ${k.code}`);
+      if (k.act === 'type') { assert.match(body('newRunKey'), /'KeyT'/); continue; }
+      let text = body(handler[sid]) + (k.code === 'KeyM' ? body('onKeyDown') : '');
+      if (/^Digit/.test(k.code)) text = text.includes('SLOT_DIGITS[e.code]') ? digits[0] : '';
+      assert.ok(text.includes(`'${k.code}'`) || text.includes(`'${k.key}'`) || text.includes(`${k.code}:`), `${sid}/${k.id} sends ${k.code}`);
     }
   }
+  // OVERWRITE SLOT n?, the confirm SAVE IN? asks, takes the keys CONTINUE? and ERASE take.
+  for (const code of ['KeyY', 'KeyN']) assert.ok(body('saveInKey').includes(`'${code}'`), `SAVE IN?'s OVERWRITE takes ${code}`);
 });
 
 test('the keys of one screen share a label scale', () => {
   const lay = layout(LANDSCAPE);
-  const rects = keyRects(lay, 'title', ['RESUME', 'BEGIN', 'RESET', 'TYPE CODE', 'MEDIUM', 'COPY', 'SOUND']);
+  const rects = keyRects(lay, 'title', ['RESUME', 'SLOT 1', 'SLOT 2', 'SLOT 3', 'NEW RUN', 'ERASE']);
   assert.equal(new Set(rects.map((r) => r.scale)).size, 1);
 });
 
@@ -386,11 +408,21 @@ test('PANEL_X matches the panels main.mjs draws', () => {
     return [+p[1], +p[1] + +p[2]];
   };
   assert.deepEqual(PANEL_X.title, extent('drawTitle'));
-  assert.deepEqual(PANEL_X.typing, extent('drawTitle'));
-  assert.deepEqual(PANEL_X.confirm, extent('drawTitle'));
+  assert.deepEqual(PANEL_X.erasing, extent('drawTitle'));
+  assert.deepEqual(PANEL_X.newrun, extent('drawNewRun'));
+  assert.deepEqual(PANEL_X.typing, extent('drawNewRun'));
+  assert.deepEqual(PANEL_X.confirm, extent('drawSlotConfirm'));
+  assert.deepEqual(PANEL_X.savein, extent('drawSaveIn'));
   assert.deepEqual(PANEL_X.pause, extent('drawPause'));
   assert.deepEqual(PANEL_X.over, extent('drawOver'));
   assert.deepEqual(PANEL_X.splash, extent('drawSplash'));
+  // Every panel of SAVE IN? and the three confirms spans the same extent.
+  for (const name of ['drawSaveIn', 'drawSlotConfirm']) {
+    const fn = src.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`))[0];
+    for (const m of fn.matchAll(/r\.panel\((\d+), \d+, (\d+),/g)) assert.deepEqual([+m[1], +m[1] + +m[2]], PANEL_X.confirm, `${name}: ${m[0]}`);
+  }
+  // Every screen id the soft keys use has a panel extent.
+  for (const sid of Object.keys(SOFT)) if (sid !== 'play') assert.ok(PANEL_X[sid], `${sid} has a panel extent`);
 });
 
 test('the title\'s typing line fits its panel at TYPED_MAX characters', () => {
@@ -404,17 +436,17 @@ test('the title\'s typing line fits its panel at TYPED_MAX characters', () => {
   assert.ok(end <= PANEL_X.typing[1] - 10, `the line ends at x ${end}`);
 });
 
-test('the title names the tomb\'s mouth when no best is stored', () => {
+test('NEW RUN names no mouth: BEST TOMB n ends the seed row at x 248 only when a best is stored', () => {
   const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
-  const fn = src.match(/function drawTitle\([^)]*\) \{[\s\S]*?\n\}\n/);
-  assert.ok(fn, 'drawTitle found');
-  const line = fn[0].match(/r\.text\(best === null \? '([^']*)'/);
-  assert.ok(line, 'drawTitle draws the best-tomb line');
-  assert.equal(line[1], 'THE MOUTH OF THE TOMB');
-  assert.ok(!fn[0].includes('NO TOMB REACHED YET'));
-  const w = textWidth(line[1]), x0 = 160 - w / 2, x1 = 160 + w / 2;
-  assert.ok(x0 >= PANEL_X.title[0] + 10, `the line starts at x ${x0}`);
-  assert.ok(x1 <= PANEL_X.title[1] - 10, `the line ends at x ${x1}`);
+  const fn = src.match(/function drawNewRun\([^)]*\) \{[\s\S]*?\n\}\n/);
+  assert.ok(fn, 'drawNewRun found');
+  assert.ok(!src.includes('THE MOUTH OF THE TOMB') && !src.includes('A TOMB WITHOUT END'), 'the mouth and the subtitle are gone');
+  assert.match(fn[0], /if \(best !== null\) r\.text\(`BEST TOMB \$\{best\}`, 248, 76, 'p', \{ align: 'right' \}\);/);
+  const seed = fn[0].match(/r\.text\(formatCode\(g\.code\), (\d+), 76, /);
+  assert.ok(seed, 'the seed stands on the row');
+  // A four-digit best stands clear of the seed, which every code writes at nine characters.
+  assert.ok(+seed[1] + textWidth('XXXX-XXXX') < 248 - textWidth('BEST TOMB 9999'));
+  assert.ok(248 <= PANEL_X.newrun[1] - 10);
 });
 
 test('the title\'s four level names lie right of L and inside the 248 text margin', () => {
@@ -434,25 +466,42 @@ test('the title\'s four level names lie right of L and inside the 248 text margi
 
 test('soft keys follow the game state', () => {
   const ids = (st) => softKeys(st).map((k) => k.id);
-  assert.deepEqual(ids({ screen: 'title', typing: false, resume: false }), ['begin', 'reset', 'type', 'difficulty', 'copy', 'sound', 'pad']);
-  assert.deepEqual(ids({ screen: 'title', typing: false, resume: true }), ['resume', 'begin', 'reset', 'type', 'difficulty', 'copy', 'sound', 'pad']);
-  assert.deepEqual(ids({ screen: 'title', typing: true, resume: true }), ['accept', 'cancel']);
-  assert.deepEqual(ids({ screen: 'title', typing: false, confirm: true, resume: true }), ['yes', 'no']);
-  assert.deepEqual(softKeys({ screen: 'title', confirm: true }).map((k) => [k.text, k.code, k.key]), [['YES', 'KeyY', 'y'], ['NO', 'KeyN', 'n']]);
+  for (const [sid, state] of Object.entries(SCREENS)) assert.equal(screenId(state), sid);
+  // The slot list: RESUME with a run open, the three slots, NEW RUN and ERASE only while ERASE shows.
+  assert.deepEqual(ids({ screen: 'title' }), ['s1', 's2', 's3', 'new']);
+  assert.deepEqual(ids({ screen: 'title', resume: true }), ['resume', 's1', 's2', 's3', 'new']);
+  assert.deepEqual(ids({ screen: 'title', erase: true }), ['s1', 's2', 's3', 'new', 'erase']);
+  assert.deepEqual(softKeys({ screen: 'title' }).map((k) => [k.text, k.code, k.key]),
+    [['SLOT 1', 'Digit1', '1'], ['SLOT 2', 'Digit2', '2'], ['SLOT 3', 'Digit3', '3'], ['NEW RUN', 'KeyN', 'n']]);
+  // Erasing: ERASE n per used row, in row order, then BACK.
+  assert.deepEqual(ids({ screen: 'title', erasing: true, erase: true, resume: true, rows: '13' }), ['e1', 'e3', 'back']);
+  assert.deepEqual(softKeys({ screen: 'title', erasing: true, rows: '2' }).map((k) => [k.text, k.code]), [['ERASE 2', 'Digit2'], ['BACK', 'KeyQ']]);
+  // NEW RUN and its code field.
+  assert.deepEqual(ids({ screen: 'newrun' }), ['begin', 'difficulty', 'seed', 'type', 'back']);
+  assert.deepEqual(ids({ screen: 'newrun', typing: true }), ['accept', 'cancel']);
+  // The three confirms, on the slot list and on SAVE IN?.
+  for (const screen of ['title', 'savein']) {
+    assert.deepEqual(softKeys({ screen, confirm: true, rows: '12' }).map((k) => [k.text, k.code, k.key]), [['YES', 'KeyY', 'y'], ['NO', 'KeyN', 'n']]);
+  }
+  // SAVE IN?: one SLOT n per row, in row order, then BACK.
+  assert.deepEqual(ids({ screen: 'savein', rows: '312' }), ['s3', 's1', 's2', 'back']);
+  assert.deepEqual(softKeys({ screen: 'savein', rows: '21' }).map((k) => k.text), ['SLOT 2', 'SLOT 1', 'BACK']);
+  assert.deepEqual(ids({ screen: 'savein', rows: '' }), ['back']);
+  // Pause: SAVE only while the run is unsaved; PAD lives here.
+  assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'copy', 'sound', 'title', 'pad']);
+  assert.deepEqual(ids({ screen: 'pause', unsaved: true }), ['resume', 'save', 'copy', 'sound', 'title', 'pad']);
   assert.deepEqual(ids({ screen: 'play' }), ['pause']);
-  assert.deepEqual(ids({ screen: 'pause' }), ['resume', 'copy', 'sound', 'title']);
   assert.deepEqual(ids({ screen: 'over' }), ['continue', 'copy', 'title']);
   assert.deepEqual(ids({ screen: 'splash' }), ['continue', 'home']);
   assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
   // The pad key reads the side in force.
   for (const [side, text] of [['left', 'PAD LEFT'], ['right', 'PAD RIGHT'], [undefined, 'PAD LEFT']]) {
-    assert.equal(softKeys({ screen: 'title', side }).find((k) => k.id === 'pad').text, text);
+    assert.equal(softKeys({ screen: 'pause', side }).find((k) => k.id === 'pad').text, text);
   }
   // The difficulty key reads the setting, as SOUND reads mute.
   for (const d of ['easy', 'medium', 'hard', 'ultimate']) {
-    const keys = softKeys({ screen: 'title', difficulty: d, muted: true });
-    assert.equal(keys.find((k) => k.id === 'difficulty').text, d.toUpperCase());
-    assert.equal(keys.find((k) => k.id === 'sound').text, 'MUTED');
+    assert.equal(softKeys({ screen: 'newrun', difficulty: d }).find((k) => k.id === 'difficulty').text, d.toUpperCase());
+    assert.equal(softKeys({ screen: 'pause', muted: true }).find((k) => k.id === 'sound').text, 'MUTED');
   }
 });
 
@@ -464,18 +513,19 @@ const inside = (r, o) => r.x >= o.x - 1e-9 && r.y >= o.y - 1e-9 && r.x + r.w <= 
 test('soft keys are at least 44 px, in the safe area, and clear of the panel in overlay mode', () => {
   for (const spec of [PORTRAIT, LANDSCAPE, LAND_375, DESKTOP, SHORT, BIG, WIDE_320]) {
     const lay = layout(spec);
-    for (const sid of ['title', 'typing', 'confirm', 'pause', 'over', 'splash', 'play']) {
-      const state = { screen: sid === 'typing' || sid === 'confirm' ? 'title' : sid, typing: sid === 'typing', confirm: sid === 'confirm', resume: true, difficulty: 'medium' };
+    for (const [sid, state] of Object.entries(SCREENS)) {
       const labels = softKeys(state).map((k) => k.text);
       const rects = keyRects(lay, sid, labels);
       assert.equal(rects.length, labels.length);
-      if (sid === 'title') assert.equal(labels.length, 8, 'the title shows eight keys');
+      if (sid === 'title') assert.equal(labels.length, 6, 'the slot list shows six keys at most');
       if (spec === SHORT && sid === 'title') {
         assert.equal(lay.mode, 'overlay');
-        assert.equal(new Set(rects.map((r) => r.x)).size, 2, '640x360: the title keys stand one column per strip');
-        assert.deepEqual(rects.map((r) => r.x < lay.safe.x + lay.safe.w / 2), [true, true, true, true, false, false, false, false]);
-        const sevenLabels = ['RESUME', 'BEGIN', 'RESET', 'TYPE CODE', 'MEDIUM', 'COPY', 'SOUND'];
-        assert.equal(new Set(keyRects(lay, 'title', sevenLabels).map((r) => r.x)).size, 1, '640x360: seven keys keep one column');
+        assert.equal(new Set(rects.map((r) => r.x)).size, 1, '640x360: the slot list\'s six keys keep one column');
+        // Eight keys split one column per strip; seven keep one.
+        const eight = keyRects(lay, 'title', [...labels, 'BEGIN', 'NEW SEED']);
+        assert.equal(new Set(eight.map((r) => r.x)).size, 2, '640x360: eight keys stand one column per strip');
+        assert.deepEqual(eight.map((r) => r.x < lay.safe.x + lay.safe.w / 2), [true, true, true, true, false, false, false, false]);
+        assert.equal(new Set(keyRects(lay, 'title', [...labels, 'BEGIN']).map((r) => r.x)).size, 1, '640x360: seven keys keep one column');
       }
       assert.ok(new Set(rects.map((r) => r.scale)).size <= 1, `${lay.mode} ${sid}: one label scale`);
       rects.forEach((r, i) => assert.ok(textWidth(labels[i]) * r.scale + 8 <= r.w, `${lay.mode} ${sid}: ${labels[i]} fits its key`));
@@ -626,25 +676,29 @@ const explorerBox = (lay) => {
   return { x: lay.view.x + (fx - 8) * k, y: lay.view.y + (fy - 24) * k, w: 16 * k, h: 24 * k };
 };
 
-// The title's keys with RESUME shown and hidden.
-const titleLabels = (resume) => softKeys({ screen: 'title', typing: false, resume, difficulty: 'medium' }).map((k) => k.text);
+// The key sets shown over the title's explorer: the slot list with and without RESUME and ERASE, erasing
+// over three and two used rows, and NEW RUN.
+const TITLE_SETS = [
+  ['title', { screen: 'title', resume: true, erase: true }], ['title', { screen: 'title', resume: true }], ['title', { screen: 'title' }],
+  ['erasing', { screen: 'title', erasing: true, rows: '123' }], ['erasing', { screen: 'title', erasing: true, rows: '13' }],
+  ['newrun', { screen: 'newrun', difficulty: 'medium' }],
+].map(([sid, state]) => ({ sid, labels: softKeys(state).map((k) => k.text) }));
 const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 for (const spec of [LANDSCAPE, LAND_375, SHORT, WIDE_320]) {
-  test(`the title explorer stands clear of every title key at ${spec.w}x${spec.h}`, () => {
+  test(`the title explorer stands clear of every slot list and NEW RUN key at ${spec.w}x${spec.h}`, () => {
     const lay = layout(spec);
     assert.equal(lay.mode, 'overlay');
     assert.deepEqual(titleFeet(lay), [42, 176]);
     const box = explorerBox(lay);
-    for (const resume of [true, false]) {
-      const labels = titleLabels(resume);
-      assert.equal(labels.length, resume ? 8 : 7);
-      for (const r of keyRects(lay, 'title', labels)) assert.ok(apart(box, r), `RESUME ${resume}: explorer clear of ${JSON.stringify(r)}`);
+    assert.deepEqual(TITLE_SETS.map(({ labels }) => labels.length), [6, 5, 4, 4, 3, 5]);
+    for (const { sid, labels } of TITLE_SETS) {
+      for (const r of keyRects(lay, sid, labels)) assert.ok(apart(box, r), `${sid} ${labels.length} keys: explorer clear of ${JSON.stringify(r)}`);
     }
   });
 }
 
-test('the title explorer stands clear of every title key on the phones the owner plays', () => {
+test('the title explorer stands clear of every slot list and NEW RUN key on the phones the owner plays', () => {
   const phones = [
     { w: 926, h: 428, dpr: 3 },
     { w: 956, h: 440, dpr: 3, insets: { left: 59, right: 59, bottom: 21 } },
@@ -659,15 +713,15 @@ test('the title explorer stands clear of every title key on the phones the owner
     const tag = `${p.w}x${p.h} dpr ${p.dpr}`;
     assert.equal(lay.mode, 'overlay', tag);
     const box = explorerBox(lay);
-    for (const resume of [true, false]) {
-      for (const r of keyRects(lay, 'title', titleLabels(resume))) {
-        assert.ok(apart(box, r), `${tag} RESUME ${resume}: explorer clear of ${JSON.stringify(r)}`);
+    for (const { sid, labels } of TITLE_SETS) {
+      for (const r of keyRects(lay, sid, labels)) {
+        assert.ok(apart(box, r), `${tag} ${sid} ${labels.length} keys: explorer clear of ${JSON.stringify(r)}`);
       }
     }
   }
 });
 
-test('no title key meets the explorer at any viewport and ratio', () => {
+test('no slot list or NEW RUN key meets the explorer at any viewport and ratio', () => {
   let overlay = 0;
   for (const dpr of [1, 2, 2.6, 3]) {
     for (let w = 300; w <= 1400; w += 2) {
@@ -676,9 +730,9 @@ test('no title key meets the explorer at any viewport and ratio', () => {
         if (lay.mode !== 'overlay') continue;
         overlay++;
         const box = explorerBox(lay);
-        for (const resume of [true, false]) {
-          for (const r of keyRects(lay, 'title', titleLabels(resume))) {
-            if (overlaps(box, r)) assert.fail(`${w}x${h} dpr ${dpr} RESUME ${resume}: ${JSON.stringify(r)} meets ${JSON.stringify(box)}`);
+        for (const { sid, labels } of TITLE_SETS) {
+          for (const r of keyRects(lay, sid, labels)) {
+            if (overlaps(box, r)) assert.fail(`${w}x${h} dpr ${dpr} ${sid} ${labels.length} keys: ${JSON.stringify(r)} meets ${JSON.stringify(box)}`);
           }
         }
       }
@@ -687,11 +741,12 @@ test('no title key meets the explorer at any viewport and ratio', () => {
   assert.ok(overlay > 0);
 });
 
-// Insets that leave the two strips one pixel apart after rounding: the keys share the narrower width.
+// Insets that leave the two strips one pixel apart after rounding: the keys share the narrower width. Eight
+// keys, more than one column holds there, split.
 for (const [dpr, wider] of [[2, 'left'], [3, 'right']]) {
   test(`title keys in two strips share the narrower width and stay in their strips, the ${wider} strip wider`, () => {
     const lay = layout({ w: 650, h: 340, dpr, insets: { left: 44 }, touch: true });
-    const labels = softKeys({ screen: 'title', typing: false, resume: true }).map((k) => k.text);
+    const labels = ['RESUME', 'SLOT 1', 'SLOT 2', 'SLOT 3', 'NEW RUN', 'ERASE', 'BEGIN', 'NEW SEED'];
     const rects = keyRects(lay, 'title', labels);
     const [p0, p1] = PANEL_X.title, { safe, view, scale } = lay;
     const left = { x: safe.x + GAP, w: view.x + p0 * scale - GAP - (safe.x + GAP) };
@@ -741,7 +796,9 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
-// zoom guard dropped and each difficulty, pause-key, coin, recent-tomb, slot, continue-count, CONTINUE?, legacy-save, splash, oil, pad-side, fire and gamepad rule broken.
+// zoom guard dropped and each difficulty, pause-key, coin, recent-tomb, save,
+// count, continue-count, CONTINUE?, SAVE IN?, ERASE, migration, splash, oil,
+// pad-side, fire and gamepad rule broken.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -758,7 +815,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, recent-tomb, slot, continue-count, CONTINUE?, legacy-save, splash, oil, pad-side, fire or gamepad rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, recent-tomb, save, count, continue-count, CONTINUE?, SAVE IN?, ERASE, migration, splash, oil, pad-side, fire or gamepad rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, () => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -767,13 +824,13 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
     assert.match(verdict(noTouch, '500,1000'), /^fail: .*touch/);
     const miskeyed = html.replace("...K('KeyR', 'r')", "...K('KeyX', 'x')");
     assert.equal(html.split("...K('KeyR', 'r')").length, 2);
-    assert.match(verdict(miskeyed, '500,1000'), /^fail: touch RESET/);
+    assert.match(verdict(miskeyed, '500,1000'), /^fail: touch NEW SEED/);
     const zoomable = html.replace('stopDoubleTapZoom();', '');
     assert.equal(html.split('stopDoubleTapZoom();').length, 2);
     assert.match(verdict(zoomable, '500,1000'), /^fail: touch a tap starting 300 ms after a lift/);
-    // Each difficulty, pause-key, coin, splash, oil, pad-side, fire and gamepad rule broken in turn: [from, to, the leg's first miss].
+    // Each rule broken in turn: [from, to, the leg's first miss].
     for (const [from, to, miss] of [
-      ['  keepSetting(g, slot.level);\n', '  void slot;\n', /^fail: touch RESUME rebuilds the save at HARD/],
+      ['  keepSetting(g, rec.level);\n', '  void rec;\n', /^fail: touch RESUME rebuilds the save at HARD/],
       ['Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))', '(at + SETTING_STEP[e.code] + 4) % 4', /^fail: touch ArrowRight steps the setting to ULTIMATE/],
       ["return difficulty === 'ultimate' ? code :", 'return true ? code :', /^fail: touch an EASY run records its best/],
       ["e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }", "e.key === 'Escape') { if (!e.repeat) resume(g); }", /^fail: touch pause, TITLE and RESUME return to the same run/],
@@ -782,65 +839,75 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["if (e.code === 'KeyP' || e.key === 'Escape') {\n    g.screen = 'pause';", "if (e.key === 'Escape') {\n    g.screen = 'pause';", /^fail: touch PAUSE reaches pause/],
       ["if (e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", "if (e.key === 'Escape') { g.screen = 'play'; g.copied = ''; }", /^fail: touch RESUME returns to play/],
       ["storedDifficulty(KEY_DIFFICULTY, 'medium')", "storedDifficulty(KEY_DIFFICULTY, 'easy')", /^fail: touch a new player starts at MEDIUM/],
-      ["    slotId: null, serial: '', wallet: 0, tombs: new Map(), paid: new Map(),\n", "    slotId: null, serial: '', wallet: (readSlot() || { wallet: 0 }).wallet, tombs: new Map(), paid: new Map(),\n", /^fail: touch boot starts clean/],
-      ['function beginClean(g) {\n  cleanState(g);\n', 'function beginClean(g) {\n', /^fail: touch BEGIN after a restored run starts with no coins/],
-      ['  if (g.slotId === null) return;\n  g.serial = text;', '  g.serial = text;', /^fail: touch the slot outlives N until a new run earns/],
-      ["    cleanState(g);\n    if (save.code !== g.code) useCode(g, save.code);\n    beginSaved(g, save.p, null);", "    if (save.code !== g.code) useCode(g, save.code);\n    beginSaved(g, save.p, null);", /^fail: touch a typed serial other than the slot's starts clean/],
-      ['    cleanState(g);\n    useCode(g, g.code);\n  }\n}', '    useCode(g, g.code);\n  }\n}', /^fail: touch N returns to the title with no coins after a played run/],
-      ["else if (e.code === 'KeyR') { cleanState(g); useCode(g, rollCode());", "else if (e.code === 'KeyR') { useCode(g, rollCode());", /^fail: touch RESET starts clean/],
-      ['if (c) { cleanState(g); useCode(g, c);', 'if (c) { useCode(g, c);', /^fail: touch a typed seed starts clean/],
-      ['    const { slot } = g.confirm;\n', '    const slot = readSlot();\n', /^fail: touch Y restores the snapshot CONTINUE\? showed/],
-      ['wallet: slot.wallet,\n    tombs: new Map([[key, new Set(slot.tombs)]]), paid: new Map([[key, slot.record]]),', 'wallet: 0,\n    tombs: new Map(), paid: new Map(),', /^fail: touch Y restores the snapshot CONTINUE\? showed/],
+      ['    slot: null, saveId: null, point: null, wallet: 0, asked: false,\n', '    slot: null, saveId: null, point: null, wallet: (heldSave(1).record || { wallet: 0 }).wallet, asked: false,\n', /^fail: touch boot starts clean/],
+      ['function beginClean(g) {\n  cleanState(g, g.bind);\n', 'function beginClean(g) {\n  Object.assign(g, { slot: g.bind, saveId: null, point: null, asked: false });\n', /^fail: touch BEGIN after a restored run starts with no coins/],
+      ['  if (g.saveId === null && bind === null) return null;\n', '', /^fail: touch a PAUSE and Q before the first coin leave the bound slot EMPTY/],
+      ['    cleanState(g, g.bind);\n    g.bind = null;\n    if (save.code !== g.code) useCode(g, save.code);\n    beginSaved(g, save.p, null);', '    g.bind = null;\n    if (save.code !== g.code) useCode(g, save.code);\n    beginSaved(g, save.p, null);', /^fail: touch a typed serial other than the slot's starts clean/],
+      ['    restore(g, c.n, c.held.record);\n', '    restore(g, c.n, heldSave(c.n).record);\n', /^fail: touch Y restores the snapshot CONTINUE\? showed/],
+      ['wallet: rec.wallet, asked: false });', 'wallet: 0, asked: false });', /^fail: touch Y restores the slot's wallet and TOMB 20/],
       ["start: named ? run.start : `${tomb.u},${tomb.v}`,", "start: named ? run.start : '0,0',", /^fail: touch a legacy save without a run resumes at its own tomb/],
-      ['  for (const old of Object.values(LEGACY_KEYS)) io.remove(old);\n', '', /^fail: touch a legacy save adopts the device wallet once/],
+      ['  for (const k of Object.values(LEGACY_KEYS)) io.remove(k);\n', '', /^fail: touch a legacy save adopts the device wallet once/],
       ["difficulty: 'infinite-maze.plane.save.difficulty',", "difficulty: 'infinite-maze.save.difficulty',", /^fail: touch a legacy save with no stored difficulty adopts at ULTIMATE/],
       ["Object.hasOwn(COIN_RATE, d) ? d : 'ultimate'", "Object.hasOwn(COIN_RATE, d) ? d : 'hard'", /^fail: touch a legacy save with no stored difficulty adopts at ULTIMATE/],
-      ['run.save === text && ', '', /^fail: touch a legacy run naming another save resumes at TOMB 0/],
-      ['const same = held !== null && held.id === state.id;', 'const same = held !== null && held.save.slice(0, 9) === state.save.slice(0, 9) && held.level === state.level;', /^fail: touch a new tomb pays under the record at HARD/],
-      ['  if (slot) g.confirm = { slot };\n', '  if (slot) restore(g, slot);\n', /^fail: touch RESUME with no open run asks CONTINUE\?/],
-      ['  if (o) {\n', '  if (o) {\n    g.confirm = { slot: readSlot() };\n    return;\n', /^fail: touch RESUME of an open run continues without asking/],
-      ["if (e.code === 'KeyY' || e.key === 'Enter') {", "if (e.code === 'KeyY' || e.code === 'KeyN' || e.key === 'Enter') {", /^fail: touch N returns to the title with no coins/],
+      ['run.save === text && ', '', /^fail: touch a legacy run naming another save migrates at net 0/],
+      ["  if (held.state === 'valid') g.confirm = { kind: 'continue', n, held };\n", "  if (held.state === 'valid') restore(g, n, held.record);\n", /^fail: touch RESUME with no open run asks CONTINUE\?/],
+      ['  if (g.open) resumeOpen(g);\n', "  if (g.open) g.confirm = { kind: 'continue', n: 1, held: heldSave(1) };\n", /^fail: touch RESUME of an open run continues without asking/],
+      ["if (e.code === 'KeyY' || e.key === 'Enter') {", "if (e.code === 'KeyY' || e.code === 'KeyN' || e.key === 'Enter') {", /^fail: touch N returns to the slot list and erases nothing/],
       ['function confirmKey(g, e) {\n  if (e.repeat) return;\n', 'function confirmKey(g, e) {\n', /^fail: touch CONTINUE\? ignores a repeated key/],
-      ['if (coins.length) collectCoin(g, coins);', 'if (false) collectCoin(g, coins);', /^fail: touch touching the first coin adds one to the wallet/],
-      ['const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1, ultimate: 10 };', /^fail: touch a tomb solved first on this device pays 5 at HARD/],
-      ['      if (!tombs.has(id)) {', '      if (true) {', /^fail: touch a replay of a solved tomb pays nothing at EASY/],
-      ['      if (!tombs.has(id)) {', '      if (!tombs.has(id) && count > record) {', /^fail: touch a new tomb pays under the record at EASY/],
+      ["s.events.filter((ev) => ev === 'coin').length, entered", '0, entered', /^fail: touch the first coin writes slot 2 with no SAVE IN\?/],
+      ['const COIN_RATE = { easy: 1, medium: 2, hard: 5, ultimate: 10 };', 'const COIN_RATE = { easy: 1, medium: 2, hard: 1, ultimate: 10 };', /^fail: touch a rise of the high pays 5 at HARD/],
       ['const MAP_FRAME = Object.values(DIFFICULTY).map(mapCells)\n  .reduce((m, c) => ({ cols: Math.max(m.cols, c.cols), rows: Math.max(m.rows, c.rows) }));', 'const MAP_FRAME = mapCells(DIFFICULTY.hard);', /^fail: touch the pause map centres in ULTIMATE's 72x28-cell frame/],
       ['begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', 'g.earned = 0; begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', /^fail: touch CONTINUE keeps the coins earned this run/],
-      ['    g.pausedAt = null;\n    writeSave(g, hereCode(g));', '    writeSave(g, hereCode(g));', /^fail: touch a second pause restarts the pause map clock/],
-      ["} else if (e.code === 'KeyQ' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", "} else if (e.code === 'KeyQ' || e.code === 'KeyP' || e.key === 'Escape') { g.screen = 'title'; g.copied = ''; titleCam(g); }", /^fail: touch P on the end screen leaves it showing/],
+      ['    g.pausedAt = null;\n    writeAt(g, g.sim.here);', '    writeAt(g, g.sim.here);', /^fail: touch a second pause restarts the pause map clock/],
+      ["} else if (e.code === 'KeyQ' || e.key === 'Escape') { g.copied = ''; toTitle(g); }", "} else if (e.code === 'KeyQ' || e.code === 'KeyP' || e.key === 'Escape') { g.copied = ''; toTitle(g); }", /^fail: touch P on the end screen leaves it showing/],
       ['      draw(g, now / 1000);', "      draw(g, now / 1000); throw new Error('frame');", /^fail: .*frame/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'else if (false) showSplash(g, hit.k, hit.paid);', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'if (hit) showSplash(g, hit.k, hit.paid);', /^fail: touch a run that ends on the crossing of tomb 100 shows the end screen/],
-      ['  g.splash = { k, paid };\n  writeSave(g, hereCode(g));', '  g.splash = { k, paid };', /^fail: touch the EASY splash stores the save/],
+      ['  g.splash = { k, paid };\n  writeAt(g, g.sim.here);', '  g.splash = { k, paid };', /^fail: touch the EASY splash stores the save/],
       ['return last >= first ? (MILESTONE * (first + last) * (last - first + 1)) / 2 : 0;', 'return 0;', /^fail: touch tomb 100 pays 1 plus 100 at EASY/],
       ['function splashKey(g, e) {\n  if (e.repeat) return;\n', 'function splashKey(g, e) {\n', /^fail: touch a repeated Enter leaves the splash showing/],
       ["if (e.key === 'Enter') {\n    g.splash = null;", "if (e.key === 'Enter' || e.code === 'KeyP') {\n    g.splash = null;", /^fail: touch P leaves the splash showing/],
-      ['const first = Math.floor(record / MILESTONE) + 1;', 'const first = last;', /^fail: touch a second crossing of tomb 100 pays nothing/],
+      ['const first = Math.floor(record / MILESTONE) + 1;', 'const first = last;', /^fail: touch tomb 100 pays 1 plus 100 at EASY/],
       ['g.splash = null;\n    leaveOpen(g);', "g.splash = null;\n    g.screen = 'title';\n    titleCam(g);", /^fail: touch Q reaches the title with the run open/],
       ["if (kind !== 'oil') continue;", 'continue;', /^fail: touch touching the first oil jar at 100 s adds 60 s/],
       ['s.burn = Math.min(BURN_S, s.burn + JAR_S);', 's.burn += JAR_S;', /^fail: touch touching the second oil jar at 280 s caps the burn at full/],
       ['side: padSide(load(KEY_PAD)),', 'side: padSide(null),', /^fail: touch boot reads the stored pad side/],
       ['store(KEY_PAD, g.side);', 'void g;', /^fail: touch PAD stores the side and mirrors the layout/],
       ['tap(SPACE.code, SPACE.key);', "tap('KeyX', 'x');", /^fail: touch FIRE jumps/],
-      ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch the title ignores an auto-repeated H/],
+      ["if (!e.repeat) {\n      g.side =", "if (true) {\n      g.side =", /^fail: touch pause ignores an auto-repeated H/],
       ['for (const o of gamepad.poll()) {', 'for (const o of []) {', /^fail: touch gamepad d-pad left holds Left/],
-      ['  if (same) {\n    state.wallet = Math.max(state.wallet, was.wallet);\n    for (const id of was.tombs) state.tombs.add(id);\n    state.record = Math.max(state.record, was.record);\n    state.continues = Math.max(state.continues, was.continues);\n  }\n', '', /^fail: touch two games on one slot keep both coins/],
-      ['beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues, ...unpackRecent(g.world, slot.recent) });', 'beginSaved(g, at.p, { ...unpackRecent(g.world, slot.recent) });', /^fail: touch RESUME after a reload continues at TOMB/],
+      ['wallet: Math.max(run.wallet, was.wallet) + earned,', 'wallet: run.wallet + earned,', /^fail: touch two games on one slot keep both coins/],
+      ['beginSaved(g, at.p, { entry: { p: at.p, net: rec.net }, high: rec.high, start: { u, v }, continues: rec.continues, ...unpackRecent(g.world, rec.recent) });', 'beginSaved(g, at.p, { ...unpackRecent(g.world, rec.recent) });', /^fail: touch RESUME after a reload continues at TOMB/],
       // A new run takes every coin back: the mutation hands the outgoing sim's taken set to the sim it creates.
       ['g.sim = createSim(g.world, start, carry);', 'g.sim = createSim(g.world, start, carry, { collected: g.sim ? g.sim.collected : undefined });', /^fail: touch BEGIN lays the coin back/],
-      // The recent tombs: a tomb that leaves them keeps its takes; the slot drops them; a restore ignores them;
-      // a change of tomb and a jar take skip the slot write.
+      // The recent tombs: a tomb that leaves them keeps its takes; the record drops them; a restore ignores them;
+      // a change of tomb and a jar take skip the write.
       ['    forget(s, s.collected, key);\n    forget(s, s.jars, key);\n', '', /^fail: touch a coin two tombs back lies back/],
-      ['tombs: [...slot.tombs], record, continues, recent,', 'tombs: [...slot.tombs], record, continues,', /^fail: touch RESUME after a reload keeps the coin taken/],
-      ['beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues, ...unpackRecent(g.world, slot.recent) });', 'beginSaved(g, at.p, { solved: new Set(slot.solved), start: { u, v }, continues: slot.continues });', /^fail: touch RESUME after a reload keeps the coin taken/],
+      ['recent: packRecent(g.world, g.sim),', 'recent: [],', /^fail: touch RESUME after a reload keeps the coin taken/],
+      ['start: { u, v }, continues: rec.continues, ...unpackRecent(g.world, rec.recent) });', 'start: { u, v }, continues: rec.continues });', /^fail: touch RESUME after a reload keeps the coin taken/],
       ['s.recent[0] !== lead || ', '', /^fail: touch a walk back into the previous tomb writes the slot's recent tombs/],
       [' || s.jars.size > jars', '', /^fail: touch a reload keeps a jar taken since the last tomb entry/],
-      // Only a death raises the continue count: Continue carries it unchanged, and the slot's write from a dead run drops its plus one.
+      // Only a death raises the continue count: Continue carries it unchanged, and a dead run's write drops its plus one.
       ['begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', 'begin(g, s.lastEntry, runCarry(s));', /^fail: touch a death and CONTINUE raise the continue count to 1/],
       ["continues: state === 'over' ? continues + 1 : continues", 'continues', /^fail: touch a second death stores 2 in the slot while the end screen shows 1/],
-      ['if (kept && kept.code === save.code && kept.p === save.p) {', 'if (kept) {', /^fail: touch another save code starts at TOMB 0/],
+      ['return kept && kept.code === save.code && kept.p === save.p;', 'return kept;', /^fail: touch another save code starts at TOMB 0/],
       ['const memory = SELFTEST ? new Map() : null;', 'const memory = null;', /^fail: touch the self-test leaves the real wallet untouched/],
+      // The flows of the three saves, each broken in turn.
+      ['    g.pausedAt = null;\n    writeAt(g, g.sim.here);', '    g.pausedAt = null;\n    writeAt(g, { p: g.sim.here.p, net: g.sim.entry.net });', /^fail: touch bound loop 1: TOMB n, the high and the wallet hold at H/],
+      ['openSaveIn(g, g.sim.here);', 'openSaveIn(g, { p: g.sim.here.p, net: g.sim.entry.net });', /^fail: touch unbound loop 1: TOMB n, the high and the wallet hold at H/],
+      ['out = g.slot !== null ? writeAt(g, s.entry, { bind: {}, coins, was }) : payInMemory(g, coins, was);', 'out = payInMemory(g, coins, was);', /^fail: touch the first coin writes slot 2 with no SAVE IN\?/],
+      ["    g.confirm = { kind: 'overwrite', n: row.n, held };\n    return;", "    g.slot = row.n;\n    writeAt(g, g.saveIn.at, { bind: { over: held.record.id } });\n    closeSaveIn(g);\n    return;", /^fail: touch a used row asks OVERWRITE SLOT 1\?/],
+      ['function saveInKey(g, e) {\n  if (e.repeat) return;\n', 'function saveInKey(g, e) {\n', /^fail: touch Space, P and an auto-repeated Enter answer nothing on SAVE IN\?/],
+      ["damaged: 'DAMAGED'", "damaged: 'EMPTY'", /^fail: touch a slot holding an unparseable string reads DAMAGED, never EMPTY/],
+      ['  if (Number.isInteger(o.v) && o.v > SAVE_V) return NEWER;\n', '', /^fail: touch a slot holding a v 2 record reads NEWER/],
+      ["  if (held.state === 'valid') g.confirm = { kind: 'continue', n, held };\n", "  if (held.state === 'valid') g.confirm = { kind: 'continue', n, held: heldSave(1) };\n", /^fail: touch slot 2's row opens CONTINUE SLOT 2\? with its own serial, TOMB n and coins/],
+      ['  if (g.open && g.open.slot === n) {\n', '  if (false) {\n', /^fail: touch Enter on the open run's own row resumes the same run, its burn unchanged/],
+      ["  if (held.state === 'valid') g.confirm = { kind: 'erase', n, held };\n", "  if (held.state === 'valid') eraseSave(slotIo, saveKey(n), held.record.id);\n", /^fail: touch E and a digit open ERASE SLOT 2\?/],
+      ['g.cursor = Math.max(0, Math.min(NEW_ROW, g.cursor + ', 'g.cursor = Math.max(0, Math.min(NEW_ROW - 1, g.cursor + ', /^fail: touch a controller's Down and B open NEW RUN unbound from the N NEW RUN row/],
+      ["g.pick = dir === 'r' ? 'erase' : 'new';", 'void dir;', /^fail: touch a controller's Down, Right and B enter erasing/],
+      ['  if (held.state !== \'valid\' || held.record.id !== run.id) return { ok: false, held };\n', "  if (held.state !== 'valid' || held.record.id !== run.id) {\n    io.store(key, serializeSave(run));\n    return { ok: true, held, record: run, earned: coins, seen: paid };\n  }\n", /^fail: touch the first game's next write stores nothing after another tab's overwrite/],
+      ['{ bind: { over: c.held.record.id } }', '{ bind: { over: heldSave(c.n).record.id } }', /^fail: touch OVERWRITE redraws at Y with the stored record and writes nothing/],
+      ['eraseSave(slotIo, saveKey(c.n), c.held.record.id)', 'eraseSave(slotIo, saveKey(c.n), heldSave(c.n).record.id)', /^fail: touch ERASE redraws at Y and removes nothing/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);

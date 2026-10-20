@@ -113,13 +113,13 @@ function recordWalk(trail, bd, cell, d, to) {
 }
 
 /**
- * Everything a Continue carries into the next run: its start tomb, continue
- * count and the takes of the two recent tombs, which read as where the
- * explorer has just been.
+ * Everything a Continue carries into the next run: the entry save point and
+ * the high, its start tomb, continue count and the takes of the two recent
+ * tombs, which read as where the explorer has just been.
  */
 export function runCarry(s) {
   return {
-    time: s.time, solved: s.solved, lastEntry: s.lastEntry, trail: s.trail, start: s.start, continues: s.continues,
+    time: s.time, entry: s.entry, high: s.high, lastEntry: s.lastEntry, trail: s.trail, start: s.start, continues: s.continues,
     recent: s.recent, collected: s.collected, jars: s.jars,
   };
 }
@@ -133,28 +133,9 @@ function idTomb(world, id) {
   return `${t.u},${t.v}`;
 }
 
-/**
- * True when tomb (u, v) lies on the run's way on: its start tomb, the tomb
- * that tomb's exit leads to, and so on. The way on never descends, so it is
- * walked only up to row v, and only once.
- */
-function onWayOn(s, u, v) {
-  const w = s.wayOn;
-  while (w.v <= v) {
-    const d = s.world.exit(w.u, w.v);
-    w.u += DX[d];
-    w.v += DY[d];
-    w.tombs.add(`${w.u},${w.v}`);
-  }
-  return w.tombs.has(`${u},${v}`);
-}
-
-/**
- * The run's tomb count: the tombs solved on its way on, which the HUD shows as
- * TOMB n. main.mjs reads `s.solved` for the tomb pay.
- */
+/** The run's tomb count, which TOMB n shows: the high of its net. */
 export function tombCount(s) {
-  return s.solved.size;
+  return s.high;
 }
 
 /**
@@ -166,25 +147,33 @@ export function tombCount(s) {
  * no storage. A carry's recent tombs and takes apply to the tomb the sim
  * starts in: when it is one of them it moves to the front and both stay;
  * otherwise it comes first, the carried latest follows and the older tomb's
- * takes lie back.
+ * takes lie back. A carry's entry save point gives the run its net, and its
+ * high carries; without one both start at 0.
  */
 export function createSim(world, start, carry = null, { collected = new Set() } = {}) {
-  const here = tombKey(start.board);
-  const recent = [here, ...(carry && carry.recent ? carry.recent.filter((key) => key !== here) : [])].slice(0, 2);
+  const first = tombKey(start.board);
+  const recent = [first, ...(carry && carry.recent ? carry.recent.filter((key) => key !== first) : [])].slice(0, 2);
+  const net = carry && carry.entry ? carry.entry.net : 0;
+  const lastEntry = start.board.entry ? start.board.p : (carry ? carry.lastEntry : start.board.p);
   const s = {
     world, bd: start.board, cell: start.cell,
     mode: 'floor', off: 0, alt: 0, vy: 0, link: -1, to: null, prog: 0, len: 0,
     facing: 1, moving: false, burn: BURN_S, ember: 0,
     tap: 0, buffer: 0, bufferTicks: 0, queued: 0, dismount: 0, noAirGrab: false,
     state: 'play', time: carry ? carry.time : 0,
-    // The score: the tombs solved, each counted once, keyed "u,v".
-    solved: carry && carry.solved ? carry.solved : new Set(),
-    // The run's start tomb, which Continue carries, and its way on walked so far.
+    // The count: the net position of the explorer's tomb from the start tomb's,
+    // and the highest net reached, which TOMB n shows.
+    net, high: Math.max(0, net, carry && carry.high ? carry.high : 0),
+    // The run's start tomb, which Continue carries.
     start: carry && carry.start ? carry.start : { u: start.board.u, v: start.board.v },
-    wayOn: null,
     // The times the run went on after its torch died, which a Continue raises.
     continues: carry && carry.continues ? carry.continues : 0,
-    lastEntry: start.board.entry ? start.board.p : (carry ? carry.lastEntry : start.board.p),
+    lastEntry,
+    // The two save points, each one value holding a board's position `p` and
+    // the net there: `entry`, the last entry board with the net when it last
+    // changed, and `here`, the explorer's board with the net now.
+    entry: { p: lastEntry, net },
+    get here() { return { p: this.bd.p, net: this.net }; },
     touching: false, walked: 0, climbed: 0, carry: 0,
     stats: {
       corridor: 0, ladderUp: 0, seams: 0, flames: 0, jumps: 0, airGrabs: 0, stairLandings: 0, dismounts: 0, letGos: 0,
@@ -203,7 +192,6 @@ export function createSim(world, start, carry = null, { collected = new Set() } 
     for (const id of carry.collected || []) if (recent.includes(idTomb(world, id))) collected.add(id);
     for (const id of carry.jars || []) if (recent.includes(idTomb(world, id))) s.jars.add(id);
   }
-  s.wayOn = { u: s.start.u, v: s.start.v, tombs: new Set([`${s.start.u},${s.start.v}`]) };
   recordStood(s.trail, s.bd, s.cell);
   return s;
 }
@@ -280,10 +268,11 @@ function enterTomb(s, from, bd) {
 }
 
 /**
- * Crossing a seam. A tomb is solved when the explorer leaves it through its
- * exit door and it lies on the run's way on; a tomb upstream of that way
- * never counts, whatever door the explorer used. A change of tomb moves the
- * recent tombs.
+ * Crossing a seam. A crossing out of a tomb's exit raises the net by one and
+ * any other crossing between tombs lowers it by one; a rise of the high pushes
+ * 'solved'. The run keeps no set of tombs, so a walk back and forward adds
+ * nothing. A change of tomb moves the recent tombs, and an entry board moves
+ * the entry save point.
  */
 function enterBoard(s, bd) {
   if (bd === s.bd) return;
@@ -292,14 +281,18 @@ function enterBoard(s, bd) {
   const from = s.bd;
   if (bd.u !== from.u || bd.v !== from.v) {
     const d = bd.u > from.u ? 0 : bd.v > from.v ? 1 : bd.u < from.u ? 2 : 3;
-    const key = tombKey(from);
-    if (s.world.exit(from.u, from.v) === d && !s.solved.has(key) && onWayOn(s, from.u, from.v)) {
-      s.solved.add(key);
+    s.net += s.world.exit(from.u, from.v) === d ? 1 : -1;
+    if (s.net > s.high) {
+      s.high = s.net;
       s.events.push('solved');
     }
     enterTomb(s, from, bd);
   }
-  if (bd.entry && bd.p !== s.lastEntry) { s.lastEntry = bd.p; s.events.push('entry'); }
+  if (bd.entry && bd.p !== s.lastEntry) {
+    s.lastEntry = bd.p;
+    s.entry = { p: bd.p, net: s.net };
+    s.events.push('entry');
+  }
 }
 
 /** Moves to the far cell of the current link. */

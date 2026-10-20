@@ -6,7 +6,7 @@ import {
   PALETTE, RGB, idx, EXPLORER, torchTip, ROCK, WALL, GLYPHS, LADDER, SCONCE, SCONCE_FLAME,
   BRAZIER, COIN, JAR, FLAME, TORCH, FONT, FONT_W, FONT_H, ARROWS, SKELETONS,
 } from './art.mjs';
-import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feetX, feetY, pose, BURN_S } from './sim.mjs';
+import { BOARD_W, BOARD_H, nodeXY, torchRadius, SCONCE_R, feetX, feetY, pose, BURN_S, tombCount } from './sim.mjs';
 import { BW, BH, DX, DY } from '../world/board.mjs';
 import { arrows, arrowSide, skeletons, boostSkeletons, skeletonSide } from '../world/signs.mjs';
 import { boardOfPos } from '../world/world.mjs';
@@ -653,7 +653,7 @@ export function createRenderer(canvas, world, display) {
     eachMote(tipX - dustR, tipY - dustR, tipX + dustR, tipY + dustR, shownT, drift.ox, drift.oy, drawMote);
   }
 
-  /** The torch bar, TOMB n, and under it the wallet: the coin sprite, then the count growing leftward. */
+  /** The torch bar, TOMB n (the run's high), and under it the wallet: the coin sprite, then the count growing leftward. */
   function hud(sim, wallet = 0) {
     const frac = sim.burn / BURN_S;
     ctx.fillStyle = pal('0');
@@ -671,7 +671,7 @@ export function createRenderer(canvas, world, display) {
     } else if (Math.floor(sim.time * 4) % 2 === 0) {
       text('EMBER', 70, 5, 'o');
     }
-    text(`TOMB ${sim.solved.size}`, VIEW_W - 5, 5, 'm', { align: 'right' });
+    text(`TOMB ${tombCount(sim)}`, VIEW_W - 5, 5, 'm', { align: 'right' });
     const count = String(wallet);
     text(count, VIEW_W - 5, 14, 'm', { align: 'right' });
     ctx.drawImage(coin, VIEW_W - 5 - (count.length * (FONT_W + 1) - 1) - 2 * (FONT_W + 1), 14);
