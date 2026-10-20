@@ -105,6 +105,8 @@ const INSETS = [
   { tag: 'Android landscape, cut-out', w: 915, h: 412, dpr: 2.6, insets: { left: 44, right: 44, bottom: 21 } },
   { tag: '6.1-inch iPhone portrait, notch', w: 393, h: 852, dpr: 3, insets: PHONE_INSETS },
   { tag: '6.9-inch iPhone portrait, notch', w: 440, h: 956, dpr: 3, insets: PHONE_INSETS },
+  // A whole band whose top inset times the ratio is fractional (62.4 device px), so the view's top snaps.
+  { tag: 'tablet at 2.6, status bar', w: 1000, h: 1400, dpr: 2.6, insets: { top: 24 } },
 ];
 const specOf = (c, swap = false) => ({ w: c.w, h: c.h, dpr: c.dpr, insets: c.insets || {}, touch: true, swap });
 /** The zero-inset fit's device px a game px and its whole scale, from the safe area alone: a band fits the width. */
@@ -185,7 +187,8 @@ test('crossing 6 in either direction takes the other rule on the next layout, wi
   assert.equal(at(1119), 960);
   assert.equal(at(1120), 1120);
   assert.ok(Math.abs(at(959) - at(960)) < 1.01, 'the view is continuous across the threshold');
-  for (const w of [1120, 959, 1000, 959, 1120, 960]) assert.equal(at(w), at(w), 'the layout is a function of the viewport');
+  const visits = [1120, 959, 1000, 959, 1120, 960];
+  assert.deepEqual(visits.map(at), [1120, 959, 960, 959, 1120, 960], 'the layout is a function of the viewport');
 });
 
 test('a whole view maps each game pixel to exactly k device px at a fractional camera', () => {
