@@ -824,12 +824,18 @@ full torch and adds one to the count.
   one world-to-device transform at device-pixel precision: a layer's pixel
   edges and a sprite's outer edges land on the device pixels nearest their
   true positions. The HUD and the screens stay on whole game pixels.
-- In touch mode (§9) the view fills the safe area at a fractional scale; the
-  page background fills the letterbox. The canvas's backing store is in device
-  pixels, so a game pixel spans ⌊s⌋ or ⌈s⌉ of them. When the safe area's
-  height less a full-width 16:9 view leaves room for the d-pad and its
-  margins, the view spans the width at the top and the controls fill the band
-  below. Otherwise the view fits the safe area and the controls overlay it.
+- In touch mode (§9) the canvas's backing store is in device pixels and the
+  page background fills the letterbox. When the safe area holds a whole scale
+  of at least 6 device pixels per game pixel, the view scales by the largest
+  whole number that fits, so a game pixel spans exactly that many device
+  pixels. Below 6 the view fills the safe area at a fractional scale `s`, and
+  a game pixel spans ⌊s⌋ or ⌈s⌉ of them.
+- When the safe area's height less a full-width 16:9 view leaves room for the
+  d-pad and its margins, the controls fill a band below the view and the view
+  stands at the top: a whole view centred across, a fractional one spanning
+  the width. The band starts at the view's bottom and keeps the safe area's
+  full width. Otherwise the controls overlay the view, and a whole view
+  centres in the safe area across and down, a fractional one fitting it.
 - 16×16 tiles. A cell is 3×3 tiles, so a board is 576×336 px.
 - A palette of 32 colours: sandstone, ochre, lapis, turquoise, gold, torch
   orange and violet shadow.
@@ -1152,15 +1158,16 @@ type. Every control dispatches the keyboard's own `keydown` and `keyup` events
 on `window`, so the key handlers serve touch unchanged. The page never
 scrolls, zooms or selects.
 - **D-pad.** In play, a 4-way pad sits at the bottom left in overlay mode. In
-  the band its centre lies a quarter of the safe width in, never closer than
-  the margin to the left edge, and a third of the way down the band, never
-  closer than the margin to the view. Its centre is neutral: a pointer there
-  holds no direction and sends nothing, and a slide from an arm into it
-  releases the arm. An arm holds its arrow key while a pointer is on it, a
-  slide from arm to arm swaps the key, and a pointer that left the pad keeps
-  mapping by angle until it lifts. The pad has no diagonals. With the title's
-  PAD key set to `right`, the pad stands where its mirror across the safe
-  area's vertical centre line would, and the fire button where the pad stood.
+  the band, which starts at the scaled view's bottom (§8), its centre lies a
+  quarter of the safe width in, never closer than the margin to the left edge,
+  and a third of the way down the band, never closer than the margin to the
+  view. Its centre is neutral: a pointer there holds no direction and sends
+  nothing, and a slide from an arm into it releases the arm. An arm holds its
+  arrow key while a pointer is on it, a slide from arm to arm swaps the key,
+  and a pointer that left the pad keeps mapping by angle until it lifts. The
+  pad has no diagonals. With the title's PAD key set to `right`, the pad
+  stands where its mirror across the safe area's vertical centre line would,
+  and the fire button where the pad stood.
 - **Fire button.** In play, a red circle (palette index `0x17`) stands
   opposite the pad at the pad's centre height, 0.4 of the pad's diameter and
   at least 44 px across; in overlay mode it draws at the pad's alpha. A

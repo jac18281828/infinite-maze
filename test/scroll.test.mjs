@@ -20,6 +20,7 @@ const [nx, ny] = nodeXY(bd, cell);
 
 const DISPLAYS = [
   { name: 'the 2752 x 1548 display at a fractional 8.6x', w: 2752, h: 1548 },
+  { name: 'the 2560 x 1440 iPad display at 8x', w: 2560, h: 1440 },
   { name: 'the 1280 x 720 keyboard display at 4x', w: 1280, h: 720 },
 ];
 const SPEEDS = [0.8, 1.2, 1.6];

@@ -5794,6 +5794,13 @@ const DOUBLE_TAP_MS = 350;
 // The pad and the fire button draw translucent over the view in overlay mode.
 const OVERLAY_ALPHA = 0.6;
 
+// The fewest device pixels per game pixel at which touch mode scales the view
+// by a whole number. This is the owner's trade of shimmer against view size:
+// below it a fractional fill costs less than the view a whole scale gives up.
+// Centring a whole view keeps the title's explorer below the left key column
+// at every whole k of at least 3, so the threshold may fall to 3 and no lower.
+const WHOLE_MIN = 6;
+
 const mid = (a, size, inner) => a + (size - inner) / 2;
 
 /**
@@ -5815,9 +5822,12 @@ function controls(safe, D, swap, x, y) {
 /**
  * Where the view, the d-pad, the fire button and the soft-key areas go.
  * Keyboard mode scales by the largest whole multiple of CSS pixels. Touch
- * mode fills the safe area at a fractional scale: 'band' puts the view at the
- * top with the controls below; 'overlay' fits the view and floats the
- * controls over it. The fire button stands opposite the pad at the pad's
+ * mode fits the view to the safe area: 'band' puts the view at the top with
+ * the controls below; 'overlay' centres the view and floats the controls over
+ * it. When the fit holds at least WHOLE_MIN device pixels per game pixel, the
+ * view takes the largest whole number k of them, centred across, and the page
+ * background fills the letterbox; below that it fills the safe area at a
+ * fractional scale. The fire button stands opposite the pad at the pad's
  * height; `swap` reflects both across the safe area's vertical centre line.
  * The backing store is in device pixels and the CSS size is backing / dpr.
  */
@@ -5846,18 +5856,26 @@ function layout({ w, h, dpr = 1, insets = {}, touch, swap = false }) {
     bh = Math.max(1, Math.round(safe.h * dpr));
     bw = Math.max(1, Math.round((bh * VIEW_W) / VIEW_H));
   }
+  const k = Math.floor(Math.min(bw / VIEW_W, bh / VIEW_H));
+  const whole = k >= WHOLE_MIN;
+  if (whole) {
+    bw = VIEW_W * k;
+    bh = VIEW_H * k;
+  }
   const vw = bw / dpr, vh = bh / dpr;
   const snap = (v) => Math.round(v * dpr) / dpr;
   const vx = snap(mid(safe.x, safe.w, vw));
   if (band) {
-    const rest = { x: safe.x, y: safe.y + vh, w: safe.w, h: safe.h - vh };
+    // A whole view's corner lies on a device pixel, so the band starts below it.
+    const vy = whole ? snap(safe.y) : safe.y;
+    const rest = { x: safe.x, y: vy + vh, w: safe.w, h: whole ? safe.y + safe.h - vy - vh : safe.h - vh };
     // The pad's centre rests a quarter in, where a left thumb sits on a
     // controller, and a third of the way down the band, within thumb reach.
     // Its top stays MARGIN below the view and its left MARGIN inside the edge.
     const top = Math.max(rest.y + MARGIN, rest.y + rest.h / 3 - D / 2);
     return {
       mode: 'band', D, safe, band: rest, scale: vw / VIEW_W,
-      view: { x: vx, y: safe.y, w: vw, h: vh }, backing: { w: bw, h: bh },
+      view: { x: vx, y: vy, w: vw, h: vh }, backing: { w: bw, h: bh },
       ...controls(safe, D, swap, rest.x + Math.max(MARGIN, rest.w / 4 - D / 2), top),
     };
   }

@@ -8,6 +8,7 @@ import {
   layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, keyRects, MARGIN, PANEL_X, textWidth,
   FIRE_FRAC, FIRE_MIN, padSide, titleFeet, createQuickTaps,
 } from '../src/game/touch.mjs';
+import { createFrame, placeFrame, deviceSpan } from '../src/game/camera.mjs';
 import { build } from '../tools/build.mjs';
 import { DIFFICULTIES } from '../src/world/band.mjs';
 
@@ -21,6 +22,10 @@ const LAND_375 = { ...LANDSCAPE, w: 667, h: 375, insets: {} };
 const DESKTOP = { w: 1024, h: 768, dpr: 2, insets: {}, touch: true };
 const BIG = { w: 1366, h: 1024, dpr: 2, insets: {}, touch: true };
 const WIDE_320 = { w: 568, h: 320, dpr: 2, insets: {}, touch: true };
+// A landscape phone at 4 device px a game px, height-limited: below 6x its view fills the safe height.
+const LAND_700 = { w: 700, h: 360, dpr: 2, insets: {}, touch: true };
+// A 1376 px wide band layout whose pad clamp binds once the view is whole.
+const IPAD_SHORT = { w: 1376, h: 980, dpr: 2, insets: {}, touch: true };
 const FIXTURES = [PORTRAIT, LANDSCAPE, SHORT, LAND_375, DESKTOP, IPAD, PHONE, BIG, WIDE_320];
 const GAP = 8;
 
@@ -48,17 +53,21 @@ test('a portrait phone lands in band mode, the pad below the view in the safe ar
 });
 
 test('a landscape phone lands in overlay mode, the pad M from the safe corner', () => {
-  const lay = layout(LANDSCAPE);
-  const { view, pad, safe } = lay;
-  assert.equal(lay.mode, 'overlay');
-  assert.ok(Math.abs(view.h - safe.h) < 1 / 3);
-  assert.equal(pad.x, safe.x + MARGIN);
-  assert.equal(pad.y + pad.s, safe.y + safe.h - MARGIN);
-  assert.equal(pad.s, Math.floor(0.42 * safe.h));
+  // 852 x 393 holds 6.2 device px a game px, so its view is whole and sits inside the safe height.
+  for (const [spec, fills] of [[LANDSCAPE, false], [LAND_700, true]]) {
+    const lay = layout(spec);
+    const { view, pad, safe } = lay;
+    assert.equal(lay.mode, 'overlay');
+    assert.equal(Math.abs(view.h - safe.h) < 1 / 3, fills, `${spec.w}x${spec.h}: the view fills the safe height`);
+    assert.ok(view.h <= safe.h + 1e-9);
+    assert.equal(pad.x, safe.x + MARGIN);
+    assert.equal(pad.y + pad.s, safe.y + safe.h - MARGIN);
+    assert.equal(pad.s, Math.floor(0.42 * safe.h));
+  }
 });
 
-test('touch mode fills the limiting dimension and the backing is the CSS size times the ratio', () => {
-  for (const [spec, dim] of [[PORTRAIT, 'w'], [LANDSCAPE, 'h']]) {
+test('below 6x touch mode fills the limiting dimension and the backing is the CSS size times the ratio', () => {
+  for (const [spec, dim] of [[PORTRAIT, 'w'], [LAND_700, 'h']]) {
     const lay = layout(spec);
     const dpr = spec.dpr;
     assert.ok(Math.abs(lay.backing[dim] - lay.safe[dim] * dpr) <= 1, `${dim} fills within a device pixel`);
@@ -67,6 +76,201 @@ test('touch mode fills the limiting dimension and the backing is the CSS size ti
     assert.ok(lay.view.x >= lay.safe.x - 1e-9 && lay.view.x + lay.view.w <= lay.safe.x + lay.safe.w + 1e-9);
     assert.ok(lay.view.y >= lay.safe.y - 1e-9 && lay.view.y + lay.view.h <= lay.safe.y + lay.safe.h + 1e-9);
   }
+});
+
+// Touch viewports in CSS px: the iPad, the 6.1- and 6.9-inch iPhones, a desktop window in touch mode, an Android
+// phone and a tiny window, each with the fit's mode and its whole scale k (0 below 6x and so a fallback).
+const PHONE_INSETS = { top: 59, bottom: 34 };
+const LAND_INSETS = { left: 59, right: 59, bottom: 21 };
+const CASES = [
+  { tag: 'iPad landscape', w: 1376, h: 1032, dpr: 2, mode: 'band', k: 8, frac: 8.6 },
+  { tag: 'iPad portrait', w: 1032, h: 1376, dpr: 2, mode: 'band', k: 6, frac: 6.45 },
+  { tag: '6.1-inch iPhone landscape', w: 852, h: 393, dpr: 3, mode: 'overlay', k: 6, frac: 6.55 },
+  { tag: '6.9-inch iPhone landscape', w: 956, h: 440, dpr: 3, mode: 'overlay', k: 7, frac: 7.33 },
+  { tag: 'desktop 1920x1080', w: 1920, h: 1080, dpr: 1, mode: 'overlay', k: 6, frac: 6 },
+  { tag: 'Android landscape', w: 915, h: 412, dpr: 2.6, mode: 'overlay', k: 0, frac: 5.95 },
+  { tag: '6.1-inch iPhone portrait', w: 393, h: 852, dpr: 3, mode: 'band', k: 0, frac: 3.68 },
+  { tag: '6.9-inch iPhone portrait', w: 440, h: 956, dpr: 3, mode: 'band', k: 0, frac: 4.13 },
+  { tag: '300x150', w: 300, h: 150, dpr: 1, mode: 'overlay', k: 0, frac: 0.83 },
+];
+// Each case again with insets of its own: the inset moves the fit and may move it across 6.
+const INSETS = [
+  { tag: 'iPad landscape, status and home bars', w: 1376, h: 1032, dpr: 2, insets: { top: 24, bottom: 20 } },
+  { tag: 'iPad portrait, status and home bars', w: 1032, h: 1376, dpr: 2, insets: { top: 24, bottom: 20 } },
+  { tag: '6.1-inch iPhone landscape, notch', w: 852, h: 393, dpr: 3, insets: LAND_INSETS },
+  { tag: '6.9-inch iPhone landscape, notch', w: 956, h: 440, dpr: 3, insets: LAND_INSETS },
+  { tag: 'desktop 1920x1080 under a 24 px bar', w: 1920, h: 1080, dpr: 1, insets: { top: 24 } },
+  { tag: 'Android landscape, cut-out', w: 915, h: 412, dpr: 2.6, insets: { left: 44, right: 44, bottom: 21 } },
+  { tag: '6.1-inch iPhone portrait, notch', w: 393, h: 852, dpr: 3, insets: PHONE_INSETS },
+  { tag: '6.9-inch iPhone portrait, notch', w: 440, h: 956, dpr: 3, insets: PHONE_INSETS },
+];
+const specOf = (c, swap = false) => ({ w: c.w, h: c.h, dpr: c.dpr, insets: c.insets || {}, touch: true, swap });
+/** The zero-inset fit's device px a game px and its whole scale, from the safe area alone: a band fits the width. */
+function fitOf(c, mode) {
+  const i = c.insets || {};
+  const w = (c.w - (i.left || 0) - (i.right || 0)) * c.dpr, h = (c.h - (i.top || 0) - (i.bottom || 0)) * c.dpr;
+  const frac = mode === 'band' ? w / 320 : Math.min(w / 320, h / 180);
+  return { frac, k: Math.floor(frac) };
+}
+/** Every case with the mode the layout chose and the whole scale its own safe area gives. */
+function laidOut() {
+  return [...CASES, ...INSETS].map((c) => {
+    const lay = layout(specOf(c));
+    return { c, lay, ...fitOf(c, lay.mode) };
+  });
+}
+const isDevicePx = (v, dpr) => Math.abs(v * dpr - Math.round(v * dpr)) < 1e-6;
+
+test('the table\'s viewports take the mode, fractional scale and whole scale the owner chose', () => {
+  for (const c of CASES) {
+    const lay = layout(specOf(c)), fit = fitOf(c, lay.mode);
+    assert.equal(lay.mode, c.mode, c.tag);
+    assert.ok(Math.abs(fit.frac - c.frac) < 0.005, `${c.tag}: ${fit.frac}`);
+    assert.equal(fit.k >= 6 ? fit.k : 0, c.k, c.tag);
+  }
+});
+
+test('a fit of at least 6 device px a game px backs the view 320k x 180k, scale k over the ratio', () => {
+  let whole = 0;
+  for (const { c, lay, k } of laidOut()) {
+    if (k < 6) continue;
+    whole++;
+    assert.deepEqual(lay.backing, { w: 320 * k, h: 180 * k }, `${c.tag}: backing`);
+    assert.ok(Math.abs(lay.scale - k / c.dpr) < 1e-9, `${c.tag}: scale ${lay.scale}`);
+    assert.ok(Math.abs(lay.view.w * c.dpr - 320 * k) < 1e-6 && Math.abs(lay.view.h * c.dpr - 180 * k) < 1e-6, `${c.tag}: CSS size`);
+  }
+  assert.ok(whole >= 9, `${whole} whole layouts`);
+  assert.deepEqual(layout(specOf(CASES[0])).backing, { w: 2560, h: 1440 });
+  assert.deepEqual(layout(specOf(CASES[1])).backing, { w: 1920, h: 1080 });
+  assert.deepEqual(layout(specOf(CASES[2])).backing, { w: 1920, h: 1080 });
+  assert.deepEqual(layout(specOf(CASES[3])).backing, { w: 2240, h: 1260 });
+  assert.deepEqual(layout(specOf(CASES[4])).backing, { w: 1920, h: 1080 });
+});
+
+test('the threshold is 6: 5.95x and 6.45x tell the rules apart', () => {
+  // Android 915 x 412 at 2.6 holds 5.95 device px a game px: today's layout in every field, as 0ffeb99 gave it.
+  const android = {
+    mode: 'overlay', D: 160, safe: { x: 0, y: 0, w: 915, h: 412 }, band: null, scale: 2.2884615384615383,
+    view: { x: 91.53846153846153, y: 0, w: 732.3076923076923, h: 411.9230769230769 }, backing: { w: 1904, h: 1071 },
+    pad: { x: 16, y: 236, s: 160 }, fire: { x: 787, y: 284, s: 64 },
+  };
+  assert.deepEqual(layout({ w: 915, h: 412, dpr: 2.6, insets: {}, touch: true }), android);
+  assert.deepEqual(layout({ w: 915, h: 412, dpr: 2.6, insets: {}, touch: true, swap: true }), {
+    ...android, pad: { x: 739, y: 236, s: 160 }, fire: { x: 64, y: 284, s: 64 },
+  });
+  // The overlay view's y is -0 there, as at 0ffeb99.
+  assert.deepEqual(layout({ w: 915, h: 412, dpr: 2.6, insets: { left: 44, right: 44, bottom: 21 }, touch: true }), {
+    mode: 'overlay', D: 160, safe: { x: 44, y: 0, w: 827, h: 391 }, band: null, scale: 2.173076923076923,
+    view: { x: 110, y: -0, w: 695.3846153846154, h: 391.15384615384613 }, backing: { w: 1808, h: 1017 },
+    pad: { x: 60, y: 215, s: 160 }, fire: { x: 743, y: 263, s: 64 },
+  });
+  assert.deepEqual(layout({ w: 300, h: 150, dpr: 1, insets: {}, touch: true }), {
+    mode: 'overlay', D: 63, safe: { x: 0, y: 0, w: 300, h: 150 }, band: null, scale: 0.834375,
+    view: { x: 17, y: 0, w: 267, h: 150 }, backing: { w: 267, h: 150 }, pad: { x: 16, y: 71, s: 63 }, fire: { x: 230.5, y: 80.5, s: 44 },
+  });
+  // The iPad held portrait holds 6.45: whole at 6, 1920 x 1080, where the fractional fit would have been 2064 x 1161.
+  const lay = layout(specOf(CASES[1]));
+  assert.deepEqual(lay.backing, { w: 1920, h: 1080 });
+  assert.ok(Math.abs(lay.view.w - 960) < 1e-9 && Math.abs(lay.view.h - 540) < 1e-9);
+});
+
+test('crossing 6 in either direction takes the other rule on the next layout, with no memory', () => {
+  // A band layout 6 device px a game px wide is 960 CSS px at 2x; the view's width steps down at each whole k above it.
+  const at = (w) => layout({ w, h: 4000, dpr: 2, insets: {}, touch: true }).view.w;
+  assert.ok(Math.abs(at(959) - 959) < 1 / 3, '959 px: the fractional fit fills the width');
+  assert.equal(at(960), 960);
+  assert.equal(at(1000), 960);
+  assert.equal(at(1119), 960);
+  assert.equal(at(1120), 1120);
+  assert.ok(Math.abs(at(959) - at(960)) < 1.01, 'the view is continuous across the threshold');
+  for (const w of [1120, 959, 1000, 959, 1120, 960]) assert.equal(at(w), at(w), 'the layout is a function of the viewport');
+});
+
+test('a whole view maps each game pixel to exactly k device px at a fractional camera', () => {
+  let whole = 0, placed = 0;
+  for (const { c, lay, k } of laidOut()) {
+    if (k < 6) continue;
+    whole++;
+    for (const cam of [{ x: 1234.37, y: -567.61 }, { x: -0.5001, y: 90.999 }, { x: 77.25, y: 13.75 }]) {
+      const fr = createFrame();
+      placeFrame(fr, cam, lay.backing.w, lay.backing.h, 320, 180);
+      assert.ok(fr.sx === k && fr.sy === k, `${c.tag}: sx ${fr.sx}, sy ${fr.sy}, not ${k}`);
+      // A span of n game px covers n·k device px at every corner a layer or sprite can take.
+      for (const [a, b] of [[fr.worldX, fr.worldY], [fr.wallX, fr.wallY], [fr.ox + cam.x * k + 0.3, fr.oy - cam.y * k + 0.7], [fr.ox + 17.3 * k, fr.oy - 4.9 * k]]) {
+        for (const n of [1, 3, 16, 24, 324]) {
+          assert.equal(deviceSpan(a, n * k), n * k, `${c.tag}: ${n} game px from device x ${a}`);
+          assert.equal(deviceSpan(b, n * k), n * k, `${c.tag}: ${n} game px from device y ${b}`);
+        }
+      }
+      placed++;
+    }
+  }
+  assert.ok(whole >= 9 && placed === 3 * whole);
+});
+
+test('a whole overlay view centres on both axes, a whole band view across with its top at the safe top, every corner on a device pixel', () => {
+  let overlay = 0, band = 0;
+  for (const { c, lay, k } of laidOut()) {
+    if (k < 6) continue;
+    const { view, safe } = lay, tag = c.tag;
+    assert.ok(isDevicePx(view.x, c.dpr) && isDevicePx(view.y, c.dpr), `${tag}: the corner lies on a device pixel`);
+    assert.ok(isDevicePx(view.x + view.w, c.dpr) && isDevicePx(view.y + view.h, c.dpr), `${tag}: the far corner lies on a device pixel`);
+    assert.ok(Math.abs(view.x - (safe.x + (safe.w - view.w) / 2)) <= 0.5 / c.dpr + 1e-9, `${tag}: centred across`);
+    if (lay.mode === 'overlay') {
+      overlay++;
+      assert.ok(Math.abs(view.y - (safe.y + (safe.h - view.h) / 2)) <= 0.5 / c.dpr + 1e-9, `${tag}: centred down`);
+    } else {
+      band++;
+      assert.ok(Math.abs(view.y - safe.y) <= 0.5 / c.dpr + 1e-9, `${tag}: the top at the safe top`);
+      assert.ok(Math.abs(lay.band.y - (view.y + view.h)) < 1e-9, `${tag}: the band starts at the view's bottom`);
+      assert.ok(Math.abs(lay.band.y + lay.band.h - (safe.y + safe.h)) < 1e-9, `${tag}: the band ends at the safe bottom`);
+      assert.equal(lay.band.x, safe.x);
+      assert.equal(lay.band.w, safe.w);
+    }
+    assert.ok(view.x >= safe.x - 1e-9 && view.x + view.w <= safe.x + safe.w + 1e-9, `${tag}: inside the safe width`);
+  }
+  assert.ok(overlay >= 4 && band >= 3, `${overlay} overlay and ${band} band layouts`);
+});
+
+test('a whole band is taller by the height the view gave up', () => {
+  // The iPad: the fractional view is 774 CSS px tall and the whole one 720, so the band gains 54.
+  const lay = layout(specOf(CASES[0]));
+  assert.equal(lay.view.h, 720);
+  assert.equal(lay.band.h, 1032 - 720);
+  assert.equal(lay.mode, 'band');
+});
+
+test('a whole layout keeps the pad, the fire button and every soft key inside the safe area, and below the view in band mode', () => {
+  let keys = 0;
+  for (const spec of laidOut().filter(({ k }) => k >= 6).flatMap(({ c }) => [specOf(c), specOf(c, true)])) {
+    const lay = layout(spec), tag = `${spec.w}x${spec.h} dpr ${spec.dpr} ${lay.mode}`;
+    assert.ok(inside(sq(lay.pad), lay.safe) && inside(sq(lay.fire), lay.safe), `${tag}: pad and fire in the safe area`);
+    if (lay.mode === 'band') assert.ok(lay.pad.y >= lay.view.y + lay.view.h - 1e-9 && lay.fire.y >= lay.view.y + lay.view.h - 1e-9, `${tag}: pad and fire below the view`);
+    for (const sid of ['title', 'typing', 'confirm', 'pause', 'over', 'splash', 'play']) {
+      const state = { screen: sid === 'typing' || sid === 'confirm' ? 'title' : sid, typing: sid === 'typing', confirm: sid === 'confirm', resume: true, difficulty: 'medium' };
+      for (const r of keyRects(lay, sid, softKeys(state).map((k) => k.text))) {
+        keys++;
+        assert.ok(inside(r, lay.safe), `${tag} ${sid}: key in the safe area`);
+        if (lay.mode === 'band') assert.ok(r.y >= lay.view.y + lay.view.h - 1e-9, `${tag} ${sid}: key below the view`);
+      }
+    }
+  }
+  assert.ok(keys > 300, `${keys} keys`);
+});
+
+test('every layout below 6x keeps the fractional fit of its limiting dimension', () => {
+  let fallback = 0;
+  for (const { c, lay, k } of laidOut()) {
+    if (k >= 6) continue;
+    fallback++;
+    const dim = lay.mode === 'band' || lay.safe.w / 320 <= lay.safe.h / 180 ? 'w' : 'h';
+    assert.ok(Math.abs(lay.backing[dim] - lay.safe[dim] * c.dpr) <= 1, `${c.tag}: fills the ${dim} within a device pixel`);
+    assert.equal(lay.backing.w, Math.round(lay.view.w * c.dpr), c.tag);
+  }
+  assert.ok(fallback >= 6, `${fallback} fallback layouts`);
+  assert.deepEqual(layout({ w: 300, h: 150, dpr: 1, insets: {}, touch: true }).backing, { w: 267, h: 150 });
+  assert.deepEqual(layout(specOf(CASES[6])).backing, { w: 1179, h: 663 });
+  assert.deepEqual(layout(specOf(CASES[7])).backing, { w: 1320, h: 743 });
 });
 
 test('the pad maps the centre to a dead zone and the dominant axis to an arm', () => {
@@ -317,18 +521,19 @@ test('in band mode the pad sits a quarter of the safe width in, never closer tha
 });
 
 test('in band mode the pad centre sits a third of the way down the band, its top at least MARGIN below the view', () => {
-  for (const spec of [PORTRAIT, IPAD, PHONE]) {
+  // BIG's view is whole (8x, 720 CSS px tall), so its band is 304 px and a third down wins.
+  for (const spec of [PORTRAIT, IPAD, PHONE, BIG]) {
     const { pad, band } = layout(spec);
     assert.ok(Math.abs(pad.y + pad.s / 2 - (band.y + band.h / 3)) <= 1, `${spec.w}x${spec.h}: a third down`);
   }
   assert.ok(Math.abs(layout(PORTRAIT).pad.y + 80 - (280 + 538 / 3)) <= 1e-9, 'the iPhone centre falls from 414.5 to 459.33');
-  for (const spec of [BIG, DESKTOP]) {
+  for (const spec of [IPAD_SHORT, DESKTOP]) {
     const lay = layout(spec);
     assert.equal(lay.mode, 'band');
     assert.ok(Math.abs(lay.pad.y - (lay.band.y + MARGIN)) <= 1e-9, `${spec.w}x${spec.h}: the clamp binds`);
   }
-  const { pad, band } = layout(BIG), centre = pad.y + pad.s / 2;
-  for (const f of [1 / 4, 1 / 3, 1 / 2]) assert.ok(Math.abs(centre - (band.y + band.h * f)) > 1, `1366x1024: not ${f} of the band`);
+  const { pad, band } = layout(IPAD_SHORT), centre = pad.y + pad.s / 2;
+  for (const f of [1 / 4, 1 / 3, 1 / 2]) assert.ok(Math.abs(centre - (band.y + band.h * f)) > 1, `1376x980: not ${f} of the band`);
 });
 
 test('the fire button stands opposite the pad at its height, sized by FIRE_FRAC with a floor', () => {
