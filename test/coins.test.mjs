@@ -11,6 +11,7 @@ import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
   SLOT_KEY, LEGACY_KEYS, COIN_RATE, TOMB_ID, coinKey, coinId, coinPay, tombPay, commitSlot, parseSlot, serializeSlot,
   legacySlot, parseWallet, parseIdSets, parsePaid, packRecent, unpackRecent,
+  SAVE_SLOTS, MIGRATED_KEY, saveKey, parseSave, serializeSave, risePay, commitSave, takeSave, eraseSave, migrateSaves,
 } from '../src/game/wallet.mjs';
 
 test('the level rates are 1, 2, 5 and 10', () => {
@@ -69,10 +70,10 @@ test('the slot key, and a slot reads absent or malformed text as null and round-
   for (const text of bad) assert.equal(parseSlot(text), null, String(text));
 });
 
-/** A Map-backed storage. */
+/** A Map-backed storage; `store` reports the write landed, as the game's storage does. */
 const memoryIo = () => {
   const m = new Map();
-  return { m, load: (k) => (m.has(k) ? m.get(k) : null), store: (k, v) => { m.set(k, v); }, remove: (k) => { m.delete(k); } };
+  return { m, load: (k) => (m.has(k) ? m.get(k) : null), store: (k, v) => { m.set(k, v); return true; }, remove: (k) => { m.delete(k); } };
 };
 /** Stores `slot` and returns a game's run state read from it, with Sets as a running sim holds them. */
 function readRun(io) {
@@ -878,4 +879,187 @@ test('a same-id write stores the writer\'s recent tombs, whatever the stored slo
   const taker = fresh('BBBBBBBB', { recent: [['2,2', '1']] });
   commitSlot(io, taker, () => 0);
   assert.deepEqual(stored(io).recent, [['2,2', '1']]);
+});
+
+// The save records (design §2, §4 and §7).
+const RECORD = { id: 'AAAAAAAA', save: SAVE, level: 'medium', start: '0,0', net: 0, high: 0, wallet: 0, continues: 0, recent: [] };
+const recordOf = (over = {}) => ({ ...RECORD, ...over });
+const K1 = saveKey(1);
+/** Stores the record of `over` and its unknown fields `extra` under slot n. */
+const putRecord = (io, n, over = {}, extra = {}) => { io.m.set(saveKey(n), serializeSave(recordOf(over), extra)); return io; };
+const heldAt = (io, n = 1) => parseSave(io.load(saveKey(n)));
+
+test('the save keys, and a record round-trips and reads absent, newer, valid or damaged', () => {
+  assert.deepEqual([...SAVE_SLOTS.map(saveKey), MIGRATED_KEY],
+    ['infinite-maze.save.1', 'infinite-maze.save.2', 'infinite-maze.save.3', 'infinite-maze.save.migrated']);
+  const full = recordOf({ net: -3, high: 20, wallet: 300, continues: 2, recent: [['0,0', '12'], ['-1,0', '']] });
+  const text = serializeSave(full);
+  assert.deepEqual(Object.keys(JSON.parse(text)), ['v', 'id', 'save', 'level', 'start', 'net', 'high', 'wallet', 'continues', 'recent']);
+  assert.equal(JSON.parse(text).v, 1);
+  assert.deepEqual(parseSave(text), { state: 'valid', record: full, extra: {} });
+  assert.deepEqual(parseSave(serializeSave(recordOf())), { state: 'valid', record: recordOf(), extra: {} }, 'net 0 at high 0');
+  assert.equal(parseSave(null).state, 'absent');
+  for (const v of [2, 3, 1000]) assert.equal(parseSave(JSON.stringify({ v })).state, 'newer', `v ${v}`);
+  assert.equal(parseSave(JSON.stringify({ ...JSON.parse(text), v: 2, id: 7, net: 'x' })).state, 'newer', 'a newer record, whatever its fields hold');
+  const of = (over) => JSON.stringify({ ...JSON.parse(text), ...over });
+  const { recent, ...noRecent } = JSON.parse(text), { continues, ...noContinues } = JSON.parse(text), { v, ...noV } = JSON.parse(text);
+  const damaged = [
+    '', '{', '{not json', 'null', '[]', '3', '"x"', JSON.stringify([full]),
+    of({ v: 0 }), of({ v: 1.5 }), of({ v: '1' }), of({ v: -1 }), of({ v: true }), of({ v: '2' }), of({ v: 2.5 }), JSON.stringify(noV),
+    of({ net: 21 }), of({ net: 1.5 }), of({ net: '3' }), of({ high: -1 }), of({ high: 2.5 }), of({ high: '20' }),
+    of({ wallet: -1 }), of({ wallet: 1.5 }), of({ continues: -1 }), JSON.stringify(noContinues), JSON.stringify(noRecent),
+    of({ recent: [['x', '1']] }), of({ recent: [['0,0', '1'], ['1,0', ''], ['2,0', '']] }), of({ recent: 'no' }),
+    of({ id: 'AAAAAAA' }), of({ id: 'aaaaaaaa' }), of({ id: 8 }), of({ save: 'junk' }), of({ level: 'impossible' }), of({ start: '0;0' }),
+  ];
+  for (const t of damaged) assert.equal(parseSave(t).state, 'damaged', t);
+});
+
+test('a record\'s unknown fields ride every write of its save, merges included, and no binding write', () => {
+  const extra = { skins: ['gold', 'jade'], later: { n: 1 } };
+  const io = putRecord(memoryIo(), 1, { net: 3, high: 3, wallet: 5 }, extra);
+  const kept = () => {
+    const o = JSON.parse(io.m.get(K1));
+    return { skins: o.skins, later: o.later };
+  };
+  assert.ok(commitSave(io, K1, recordOf({ net: 4, high: 4, wallet: 5 }), { coins: 1, paid: 3 }).ok);
+  assert.deepEqual(kept(), extra, 'a same-id write keeps them');
+  assert.deepEqual(heldAt(io).extra, extra);
+  // A second tab on the save, behind the first: its write merges and keeps them too.
+  assert.ok(commitSave(io, K1, recordOf({ net: 1, high: 1, wallet: 2 })).ok);
+  assert.deepEqual(kept(), extra, 'a merge keeps them');
+  assert.deepEqual([heldAt(io).record.high, heldAt(io).record.wallet], [4, 5 + 1 + COIN_RATE.medium]);
+  // OVERWRITE's binding write starts a new save, which inherits none.
+  assert.ok(takeSave(io, K1, recordOf({ id: 'BBBBBBBB' }), { over: 'AAAAAAAA' }).ok);
+  assert.deepEqual([heldAt(io).record.id, heldAt(io).extra], ['BBBBBBBB', {}]);
+  assert.deepEqual(kept(), { skins: undefined, later: undefined });
+});
+
+test('no write and no erase touches a newer build\'s record, and the bound write reports the run unbound', () => {
+  const newer = JSON.stringify({ v: 2, id: 'AAAAAAAA', save: SAVE, wallet: 900, skins: ['gold'] });
+  const over = (op) => {
+    const io = memoryIo();
+    io.m.set(K1, newer);
+    const out = op(io);
+    assert.equal(io.m.get(K1), newer);
+    return out;
+  };
+  assert.equal(over((io) => commitSave(io, K1, recordOf({ id: 'CCCCCCCC' }))).ok, false, 'a bound write reports the run unbound');
+  assert.equal(over((io) => commitSave(io, K1, recordOf({ wallet: 5 }), { coins: 1 })).ok, false, 'a same-id write');
+  assert.equal(over((io) => takeSave(io, K1, recordOf({ id: 'BBBBBBBB' }))).ok, false, 'a binding write');
+  assert.equal(over((io) => takeSave(io, K1, recordOf({ id: 'BBBBBBBB' }), { over: 'AAAAAAAA' })).ok, false, 'OVERWRITE');
+  assert.equal(over((io) => eraseSave(io, K1, 'AAAAAAAA')).ok, false, 'ERASE');
+  assert.equal(over((io) => migrateSaves(io)), false, 'migration');
+});
+
+test('the pay follows rises of the high: nothing at the stored high, the rate per step, each milestone once across tabs', () => {
+  for (const [level, rate] of Object.entries(COIN_RATE)) {
+    assert.equal(risePay(level, 0, 1), rate, `${level}: 0 to 1`);
+    assert.equal(risePay(level, 99, 100), rate + 100, `${level}: 99 to 100`);
+    assert.equal(risePay(level, 1, 1), 0, `${level}: no rise`);
+    assert.equal(risePay(level, 5, 3), 0, `${level}: below the paid high`);
+    // A stored high of 1 pays nothing for a count of 1, whatever the writer had paid.
+    assert.equal(commitSave(putRecord(memoryIo(), 1, { level, net: 1, high: 1 }), K1, recordOf({ level, net: 1, high: 1 }), { paid: 0 }).earned, 0);
+    assert.equal(commitSave(putRecord(memoryIo(), 1, { level }), K1, recordOf({ level, net: 1, high: 1 }), { paid: 0 }).earned, rate);
+    assert.equal(commitSave(putRecord(memoryIo(), 1, { level, net: 99, high: 99 }), K1, recordOf({ level, net: 100, high: 100 }), { paid: 99 }).earned,
+      rate + 100);
+  }
+  // Two same-id writers that both rise to 100 are paid once; the later one sees the merged high.
+  const io = putRecord(memoryIo(), 1, { level: 'easy', net: 99, high: 99, wallet: 10 });
+  const rise = () => commitSave(io, K1, recordOf({ level: 'easy', net: 100, high: 100, wallet: 10 }), { paid: 99 });
+  const a = rise(), b = rise();
+  assert.deepEqual([a.earned, a.seen, b.earned, b.seen], [101, 99, 0, 100]);
+  assert.equal(heldAt(io).record.wallet, 111);
+  // A binding write pays against the run's own paid high: a coin and a first tomb.
+  const free = memoryIo();
+  const took = takeSave(free, K1, recordOf({ net: 1, high: 1, wallet: 4 }), { coins: 1, paid: 0 });
+  assert.deepEqual([took.ok, took.earned, took.seen, heldAt(free).record.wallet], [true, 1 + COIN_RATE.medium, 0, 4 + 1 + COIN_RATE.medium]);
+});
+
+test('a same-id write merges wallet, high and continues by maximum and takes save, net, start and recent from the writer', () => {
+  const stored = { save: 'K7Q2-M9XA:13', start: '0,0', net: 5, high: 9, wallet: 40, continues: 3, recent: [['0,0', 'f']] };
+  const writer = recordOf({ save: 'K7Q2-M9XA:14', start: '1,0', net: 2, high: 4, wallet: 10, continues: 1, recent: [['1,0', '3']] });
+  const io = putRecord(memoryIo(), 1, stored);
+  const out = commitSave(io, K1, writer);
+  assert.deepEqual(heldAt(io).record, { ...writer, high: 9, wallet: 40, continues: 3 });
+  assert.deepEqual(out.record, heldAt(io).record);
+  const ahead = recordOf({ ...stored, net: 12, high: 12, wallet: 50, continues: 4 });
+  commitSave(io, K1, ahead);
+  assert.deepEqual(heldAt(io).record, ahead, 'the larger side wins from either end');
+  // A later write that finds another id, no record or a damaged one stores nothing and reports the run unbound.
+  for (const [what, text] of [['another id', serializeSave(recordOf({ id: 'BBBBBBBB', wallet: 7 }))], ['a damaged key', '{'], ['no record', null]]) {
+    const other = memoryIo();
+    if (text !== null) other.m.set(K1, text);
+    assert.equal(commitSave(other, K1, recordOf({ wallet: 99 }), { coins: 1 }).ok, false, what);
+    assert.equal(other.load(K1), text, what);
+  }
+  // A binding write takes an empty or damaged slot, and reports a slot another writer filled.
+  for (const text of [null, '{', JSON.stringify({ v: 1, id: 'AAAAAAAA' })]) {
+    const io2 = memoryIo();
+    if (text !== null) io2.m.set(K1, text);
+    const took = takeSave(io2, K1, recordOf({ id: 'BBBBBBBB', wallet: 3 }));
+    assert.deepEqual([took.ok, heldAt(io2).record.id, heldAt(io2).record.wallet], [true, 'BBBBBBBB', 3], String(text));
+  }
+  const filled = putRecord(memoryIo(), 1, { id: 'CCCCCCCC' }), before = filled.m.get(K1);
+  const lost = takeSave(filled, K1, recordOf({ id: 'BBBBBBBB' }));
+  assert.deepEqual([lost.ok, lost.held.state, lost.held.record.id, filled.m.get(K1)], [false, 'valid', 'CCCCCCCC', before]);
+  // OVERWRITE takes the record it drew and no other; ERASE removes the record it drew and no other.
+  assert.equal(takeSave(filled, K1, recordOf({ id: 'BBBBBBBB' }), { over: 'DDDDDDDD' }).ok, false);
+  assert.equal(filled.m.get(K1), before);
+  assert.equal(eraseSave(filled, K1, 'DDDDDDDD').ok, false);
+  assert.equal(filled.m.get(K1), before);
+  assert.equal(eraseSave(filled, K1, 'CCCCCCCC').ok, true);
+  assert.equal(filled.load(K1), null);
+});
+
+test('migration moves the old slot or the legacy keys to slot 1 once per device, the marker after the write', () => {
+  const twenty = Array.from({ length: 20 }, (_, i) => `0,${-1 - i}`);
+  // An old slot of 20 solved tombs and a record of 50: net 20 and high 50, and the old slot stays as stored.
+  const io = memoryIo();
+  const old = JSON.stringify(olderSlot({ id: 'QQQQQQQQ', solved: twenty, record: 50, wallet: 300, tombs: ['0,0'] }));
+  io.m.set(SLOT_KEY, old);
+  assert.equal(migrateSaves(io), true);
+  assert.deepEqual(heldAt(io).record, recordOf({ id: 'QQQQQQQQ', net: 20, high: 50, wallet: 300 }));
+  assert.equal(io.load(MIGRATED_KEY), '1');
+  assert.equal(io.m.get(SLOT_KEY), old, 'the old slot is never written or removed');
+  assert.deepEqual([heldAt(io, 2).state, heldAt(io, 3).state], ['absent', 'absent']);
+  // Once migrated, erasing every slot never brings the old save back.
+  io.m.delete(K1);
+  assert.equal(migrateSaves(io), false);
+  assert.deepEqual([io.load(K1), io.m.size], [null, 2]);
+  // The seven legacy keys through legacySlot, after which they are absent.
+  const legacy = memoryIo();
+  for (const [k, value] of Object.entries({
+    [LEGACY_KEYS.save]: SAVE, [LEGACY_KEYS.difficulty]: 'medium',
+    [LEGACY_KEYS.run]: JSON.stringify({ save: SAVE, start: '3,-2', solved: ['3,-2', '3,-1'] }),
+    [LEGACY_KEYS.wallet]: '57', [LEGACY_KEYS.paid]: JSON.stringify({ [KEY]: 12 }), [LEGACY_KEYS.tombs]: JSON.stringify({ [KEY]: ['3,-2'] }),
+    [LEGACY_KEYS.coins]: JSON.stringify({ [KEY]: ['0,0,21'] }),
+  })) legacy.m.set(k, value);
+  legacy.m.set(SLOT_KEY, '{');
+  assert.equal(migrateSaves(legacy), true);
+  const got = heldAt(legacy).record;
+  assert.match(got.id, /^[0-9A-HJKMNP-TV-Z]{8}$/);
+  assert.deepEqual({ ...got, id: 'AAAAAAAA' }, recordOf({ start: '3,-2', net: 2, high: 12, wallet: 57 }));
+  for (const k of Object.values(LEGACY_KEYS)) assert.equal(legacy.load(k), null, k);
+  assert.equal(legacy.m.get(SLOT_KEY), '{');
+  // An unparseable source migrates nothing but the marker.
+  const junk = memoryIo();
+  junk.m.set(SLOT_KEY, '{not json');
+  junk.m.set(LEGACY_KEYS.save, 'junk');
+  assert.equal(migrateSaves(junk), true);
+  assert.deepEqual([junk.load(K1), junk.load(MIGRATED_KEY), junk.m.get(SLOT_KEY)], [null, '1', '{not json']);
+  // A slot 1 write that fails leaves the marker absent, so the next boot migrates again.
+  const full = memoryIo();
+  full.m.set(SLOT_KEY, old);
+  const store = full.store;
+  full.store = (k, value) => k !== K1 && store(k, value);
+  assert.equal(migrateSaves(full), false);
+  assert.deepEqual([full.load(K1), full.load(MIGRATED_KEY)], [null, null]);
+  full.store = store;
+  assert.equal(migrateSaves(full), true);
+  assert.equal(heldAt(full).record.id, 'QQQQQQQQ');
+  // A save key in place, marker or not, leaves migration out.
+  const placed = putRecord(memoryIo(), 3, { id: 'CCCCCCCC' });
+  placed.m.set(SLOT_KEY, old);
+  assert.equal(migrateSaves(placed), false);
+  assert.deepEqual([placed.load(K1), placed.load(MIGRATED_KEY)], [null, null]);
 });

@@ -2104,6 +2104,132 @@ function legacySlot(load) {
   };
 }
 
+// The three saves, one versioned record under each key, and the marker that
+// the migration from the old slot has run on the device.
+const SAVE_V = 1;
+const SAVE_SLOTS = [1, 2, 3];
+const saveKey = (n) => `infinite-maze.save.${n}`;
+const MIGRATED_KEY = 'infinite-maze.save.migrated';
+
+// The record's fields in the order a write puts them; any other is unknown.
+const SAVE_FIELDS = ['v', 'id', 'save', 'level', 'start', 'net', 'high', 'wallet', 'continues', 'recent'];
+const ABSENT = Object.freeze({ state: 'absent' });
+const NEWER = Object.freeze({ state: 'newer' });
+const DAMAGED = Object.freeze({ state: 'damaged' });
+
+/**
+ * A save key's text in one of its four states: `absent` with no text; `newer`
+ * for a JSON object whose `v` is an integer above SAVE_V; `valid` for a v 1
+ * record whose every field is present and well typed with `net ≤ high`, its
+ * fields as `record` and its unknown fields, as stored, as `extra`; and
+ * `damaged` for anything else.
+ */
+function parseSave(text) {
+  if (text === null || text === undefined) return ABSENT;
+  let o;
+  try { o = JSON.parse(text); } catch { return DAMAGED; }
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) return DAMAGED;
+  if (Number.isInteger(o.v) && o.v > SAVE_V) return NEWER;
+  const ok = o.v === SAVE_V && typeof o.id === 'string' && SLOT_ID.test(o.id)
+    && typeof o.save === 'string' && decodeSave(o.save) !== null && Object.hasOwn(COIN_RATE, o.level)
+    && typeof o.start === 'string' && TOMB_ID.test(o.start)
+    && Number.isSafeInteger(o.net) && isCount(o.high) && o.net <= o.high && isCount(o.wallet) && isCount(o.continues)
+    && Array.isArray(o.recent) && parseRecent(o.recent).length === o.recent.length;
+  if (!ok) return DAMAGED;
+  const { id, save, level, start, net, high, wallet, continues } = o;
+  return {
+    state: 'valid',
+    record: { id, save, level, start, net, high, wallet, continues, recent: parseRecent(o.recent) },
+    extra: Object.fromEntries(Object.entries(o).filter(([k]) => !SAVE_FIELDS.includes(k))),
+  };
+}
+
+/** The record as text: its fields in SAVE_FIELDS order, then the unknown fields `extra`. */
+function serializeSave(record, extra = {}) {
+  const { id, save, level, start, net, high, wallet, continues, recent } = record;
+  return JSON.stringify({ v: SAVE_V, id, save, level, start, net, high, wallet, continues, recent, ...extra });
+}
+
+/**
+ * The coins a save's high earns rising from `paid` to `high` at `level`: the
+ * level's rate per step, plus 100 × k for each k with paid < 100k ≤ high.
+ */
+function risePay(level, paid, high) {
+  return COIN_RATE[level] * Math.max(0, high - paid) + milestonePayout(paid, high);
+}
+
+/**
+ * The bound write of run state `run`, { id, save, level, start, net, high,
+ * wallet, continues, recent }, to save key `key` through `io` { load, store,
+ * remove }. Only a valid record under `run.id` takes it: the same save, which
+ * two tabs share. Wallet, high and continues merge by maximum, the run fields
+ * are the writer's and the unknown fields the stored record's. The pay,
+ * `coins` and the rise of `run.high` over the larger of `paid` and the stored
+ * high, joins the merged wallet, so a rise pays once across tabs. Any other
+ * key stores nothing and returns `ok` false, which unbinds the run. Returns
+ * { ok, held, record, earned, seen }, `seen` being the high the pay rose from.
+ */
+function commitSave(io, key, run, { coins = 0, paid = run.high } = {}) {
+  const held = parseSave(io.load(key));
+  if (held.state !== 'valid' || held.record.id !== run.id) return { ok: false, held };
+  const was = held.record, seen = Math.max(paid, was.high);
+  const earned = coins + risePay(run.level, seen, run.high);
+  const record = {
+    ...run, high: Math.max(run.high, was.high), wallet: Math.max(run.wallet, was.wallet) + earned,
+    continues: Math.max(run.continues, was.continues),
+  };
+  io.store(key, serializeSave(record, held.extra));
+  return { ok: true, held, record, earned, seen };
+}
+
+/**
+ * The binding write: takes save key `key` for `run` under its fresh id. A new
+ * save inherits no unknown field from the one it replaces. With `over` null it
+ * takes an absent or damaged key; with an id, the valid record under that id,
+ * which OVERWRITE drew. Any other key stores nothing and returns `ok` false.
+ * The pay, `coins` and the rise of `run.high` over `paid`, joins the run's
+ * wallet. Returns { ok, held, record, earned, seen }.
+ */
+function takeSave(io, key, run, { coins = 0, paid = run.high, over = null } = {}) {
+  const held = parseSave(io.load(key));
+  const free = over === null ? held.state === 'absent' || held.state === 'damaged' : held.state === 'valid' && held.record.id === over;
+  if (!free) return { ok: false, held };
+  const earned = coins + risePay(run.level, paid, run.high);
+  const record = { ...run, wallet: run.wallet + earned };
+  io.store(key, serializeSave(record));
+  return { ok: true, held, record, earned, seen: paid };
+}
+
+/** ERASE: removes save key `key` when it holds the valid record under `id` the confirm drew. Returns { ok, held }. */
+function eraseSave(io, key, id) {
+  const held = parseSave(io.load(key));
+  const ok = held.state === 'valid' && held.record.id === id;
+  if (ok) io.remove(key);
+  return { ok, held };
+}
+
+/**
+ * The migration, run while MIGRATED_KEY and the three save keys are absent.
+ * Slot 1 takes the old slot when it parses, else the save the seven legacy
+ * keys describe: `net` the length of its solved list and `high` the larger of
+ * that and its record, so no paid milestone pays again. The marker follows
+ * once that write lands; with no source it lands alone. The old slot stays as
+ * stored, for older builds, and the legacy keys go with the marker. Returns
+ * true when the marker landed.
+ */
+function migrateSaves(io) {
+  if (io.load(MIGRATED_KEY) !== null || SAVE_SLOTS.some((n) => io.load(saveKey(n)) !== null)) return false;
+  const old = parseSlot(io.load(SLOT_KEY)) || legacySlot(io.load);
+  if (old) {
+    const { id, save, level, start, wallet, continues, recent } = old, net = old.solved.length;
+    const record = { id, save, level, start, net, high: Math.max(net, old.record), wallet, continues, recent };
+    if (!io.store(saveKey(1), serializeSave(record))) return false;
+  }
+  if (!io.store(MIGRATED_KEY, '1')) return false;
+  for (const k of Object.values(LEGACY_KEYS)) io.remove(k);
+  return true;
+}
+
 /**
  * Writes the run state `{ id, save, level, start, solved, wallet, tombs,
  * record, continues, recent }` (solved and tombs are Sets) through `io`
@@ -2139,7 +2265,7 @@ function commitSlot(io, state, pay) {
   for (const old of Object.values(LEGACY_KEYS)) io.remove(old);
   return earned;
 }
-return { SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, coinPay, tombPay, newSlotId, parseSlot, serializeSlot, tombItems, packRecent, unpackRecent, legacySlot, commitSlot };
+return { SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, coinPay, tombPay, newSlotId, parseSlot, serializeSlot, tombItems, packRecent, unpackRecent, legacySlot, SAVE_V, SAVE_SLOTS, saveKey, MIGRATED_KEY, parseSave, serializeSave, risePay, commitSave, takeSave, eraseSave, migrateSaves, commitSlot };
 })();
 
 // src/game/sim.mjs
