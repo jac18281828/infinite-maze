@@ -10,8 +10,8 @@ Run from the repository root, where `WT` is that root's absolute path and
 `CHROME` is the Chrome binary:
 
 ```sh
-WT="$(pwd)"
-CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+export WT="$(pwd)"
+export CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
 Every gate passes before a change lands. The same gates run in

@@ -26,7 +26,10 @@ jobs:
       - name: Check the committed build
         run: node tools/build.mjs --check
       - name: Unit tests
-        run: node --test test/
+        run: |
+          CHROME="$(command -v google-chrome)"
+          export CHROME
+          node --test test/
       - name: Acceptance
         run: node tools/acceptance.mjs
       - name: Self-test in headless Chrome
