@@ -8385,6 +8385,22 @@ function openUnsaved(g) {
   return run;
 }
 
+/**
+ * With no slot writable, play shows no note, a coin writes and notes nothing,
+ * the pause offers no SAVE and the title warns `warning`; game g plays its run
+ * and ends on the title, the run left open. Throws `touch <cell> ...`.
+ */
+function unsavedPlay(g, need, cell, warning) {
+  const kept = savesText();
+  need(g.screen === 'play' && g.noteTicks === 0, `${cell} play shows no note`);
+  earnFake(g);
+  need(g.noteTicks === 0 && savesText() === kept, `${cell} a coin writes nothing and notes nothing`);
+  keyTo(g, 'KeyP', 'p');
+  need(g.screen === 'pause' && !saveOffered(g), `${cell} the pause offers no SAVE`);
+  keyTo(g, 'KeyQ', 'q');
+  need(titleWarning() === warning, `${cell} the title warns of the cause`);
+}
+
 /** M8, Enter or a digit on an EMPTY, DAMAGED or NEWER row of LOAD: nothing loads, starts or asks. */
 function m8Leg(g, { need }) {
   // Enter and the digit on each of slots `rows`, LOAD's cursor walked from its first row down.
@@ -8569,6 +8585,7 @@ function m10Leg(g, { need }) {
     leaveOpen(g);
     keyTo(g, 'KeyP', 'p');
     need(g.screen === 'play' && g.sim === run, `${cell} P on the title resumes the open run`);
+    if (cell === 'M10N') unsavedPlay(g, need, cell, 'SAVES FROM A NEWER GAME: RELOAD');
   }
 }
 
@@ -8643,7 +8660,7 @@ function m3Leg(g, { need }) {
 function m5Leg(g, { need }) {
   // Pauses the run, which writes a bound run's serial, and leaves it open with its torch at a third; the
   // typed serial must resume it unchanged.
-  const resumes = (cell, what, refused = false) => {
+  const resumes = (cell, what, refused = false, warning = '') => {
     const run = g.sim;
     run.burn = BURN_S / 3;
     keyTo(g, 'KeyP', 'p');
@@ -8652,6 +8669,7 @@ function m5Leg(g, { need }) {
     keyTo(g, 'KeyQ', 'q');
     typeIn(g, serial);
     need(g.screen === 'play' && g.sim === run && run.burn === BURN_S / 3, `${cell} the typed serial of ${what} resumes it, its burn unchanged`);
+    if (warning) unsavedPlay(g, need, `${cell} after ${what}`, warning);
     refuse(false);
   };
   // Bound: BEGIN's run takes slot 1 at its first coin.
@@ -8659,7 +8677,8 @@ function m5Leg(g, { need }) {
     fresh(g, spec);
     keyTo(g, 'Enter', 'Enter');
     earnFake(g);
-    resumes(cell, `a bound open run whose slot holds it${refused ? ', storage refusing writes' : ''}`, refused);
+    g.noteTicks = 0;
+    resumes(cell, `a bound open run whose slot holds it${refused ? ', storage refusing writes' : ''}`, refused, refused ? 'SAVES OFF: COPY YOUR CODE' : '');
   }
   // Unbound: the free-slot rule armed, a marked run, a run over three NEWER slots.
   fresh(g, 'v..');
@@ -8672,7 +8691,7 @@ function m5Leg(g, { need }) {
   resumes('M5U', 'a marked open run');
   fresh(g, 'nnn');
   keyTo(g, 'Enter', 'Enter');
-  resumes('M5N', 'an open run over three NEWER slots');
+  resumes('M5N', 'an open run over three NEWER slots', false, 'SAVES FROM A NEWER GAME: RELOAD');
 }
 
 /** M4, a typed serial matching no slot starts a run at the setting under BEGIN's rules, as row 1. */
@@ -8773,7 +8792,10 @@ function m9Leg(g, { need, click }) {
   }
   asks('M9U', 'vvv', 'a typed save code that loads slot 2', loaded(2));
   for (const what of ['Enter on slot 2\'s row', 'the digit 2', 'the SLOT 2 key']) asks('M9U', 'vvv', what, loaded(2));
-  for (const what of ['BEGIN', 'a typed save code that starts a run']) asks('M9N', 'nnn', what, started);
+  for (const what of ['BEGIN', 'a typed save code that starts a run']) {
+    asks('M9N', 'nnn', what, started);
+    unsavedPlay(g, need, `M9N after ${what}`, 'SAVES FROM A NEWER GAME: RELOAD');
+  }
 }
 
 /** M12, another game overwrites or removes a bound run's slot: its next write takes the next free slot, or none. */
@@ -9111,7 +9133,8 @@ function m24Leg(g, { need }) {
   for (let i = 0; i < 3; i++) keyTo(g, 'ArrowDown', 'ArrowDown');
   draw(g, 0);
   need(timeBlank(2) && !timeBlank(1), 'M24 its row shows no time, where a played row shows one');
-  keyTo(g, 'Digit2', '2');
+  for (const dir of ['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowDown']) keyTo(g, dir, dir);
+  keyTo(g, 'Enter', 'Enter');
   need(g.screen === 'play' && g.slot === 2 && g.saveId === slotId(2), 'M24 a record with no played loads');
   keyTo(g, 'KeyP', 'p');
   need(Number.isSafeInteger(saveNow(2).played), 'M24 its next write adds played');
