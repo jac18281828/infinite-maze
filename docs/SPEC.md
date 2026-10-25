@@ -471,8 +471,8 @@ its tomb's first entry. Any tomb entry is a valid start, a million tombs up
 included.
 
 The save code omits the difficulty, so one `p` names a board of different
-tombs at different difficulties. The player picks the difficulty on NEW RUN,
-and the code reads at the difficulty in force:
+tombs at different difficulties. The player picks the difficulty on the
+title, and the code reads at the difficulty in force:
 
 - The game stores the setting; absent, it is MEDIUM.
 - A save record (below) keeps the difficulty of the run that wrote it. A save
@@ -480,15 +480,15 @@ and the code reads at the difficulty in force:
   6×4 world a save from before difficulties holds. A stored `hard` names the
   level called HARD, now 4×4, so a HARD save from before the four levels
   resumes in the 4×4 world, as a typed code would.
-- Restoring a save plays its serial at the save's difficulty, and the setting
-  moves to match. A typed save code other than a used slot's serial plays at
+- Loading a save plays its serial at the save's difficulty, and the setting
+  moves to match. A typed save code other than a valid slot's serial plays at
   the setting.
 
 **The three saves.** Three keys, `infinite-maze.save.1` to
 `infinite-maze.save.3`, each hold one save as a JSON record, rewritten whole on
 each write: `{"v", "id", "save", "level", "start", "net", "high", "wallet",
-"continues", "recent"}`. The record binds the serial to the count it earned,
-so no write pairs a serial with another moment's count.
+"continues", "recent", "played"}`. The record binds the serial to the count
+it earned, so no write pairs a serial with another moment's count.
 
 - `v` is the schema version, 1.
 - `id` is 8 random base-32 characters, made when a run takes the slot; two tabs
@@ -504,18 +504,18 @@ so no write pairs a serial with another moment's count.
   save starts at 0, as a new run does.
 - `continues` is the run's continue count, the times it went on after its torch
   died (§7). The end screen's Continue starts the next run at the count plus
-  one. A restore of a save whose run died goes on past that death, so it counts
+  one. A load of a save whose run died goes on past that death, so it counts
   too. The record learns of the death through one rule: a write carries the
   run's count, plus one from a dead run, the count any continuation of that run
   carries. The write that ends the run is such a write, and so is a coin, tomb,
   jar or change-of-tomb write on the tick the run died. A write stores the
   larger of that count and the stored one; a live run adopts the stored
   maximum, and a dead run's count stays as it is, so two writes on one death
-  store one rise. A Continue then matches the record, and a restore of it,
-  from the end screen's Q or after a reload, restores the raised count. Pause
+  store one rise. A Continue then matches the record, and a load of it, from
+  the end screen's Q or after a reload, restores the raised count. Pause
   and resume, the title and the open run's own row, the splash's CONTINUE and a
-  restore of a save last written by a live run (PAUSE, a tomb entry, the
-  splash) add nothing. BEGIN and a typed code other than a used slot's serial
+  load of a save last written by a live run (PAUSE, a tomb entry, the splash)
+  add nothing. BEGIN and a typed code other than a valid slot's serial
   start the run at 0, and a death followed by BEGIN leaves nothing behind.
 - `recent` holds the coins and oil jars taken in the run's two recent tombs
   (§7), one bit per item. The recent tombs are the tomb the explorer is in and
@@ -539,16 +539,23 @@ so no write pairs a serial with another moment's count.
     otherwise it comes first, the latest recent tomb follows and the older
     tomb's takes lie back. Through play the serial lies in a recent tomb, so
     only a record made elsewhere meets the second case.
+- `played` is the time of the record's last play write, `Date.now()` in ms: a
+  safe integer. It is optional: a record of revision 1's beta holds none, and
+  its row shows no time (§8). Every play write stores the write's time, a
+  same-id write takes the writer's, and migration writes none, since the old
+  save's last play is unknown. Ordered by `played`, a record without it ranks
+  oldest, and a tie goes to the lower slot.
 
 A key holds one of four states:
 
 - **Absent:** the slot reads `EMPTY`.
 - **Newer:** a JSON object whose `v` is an integer above 1, a newer build's
-  record. Its row reads `NEWER`, and this build never writes over it, erases it
-  or lists it in SAVE IN? (§8), so a stale cached page leaves it intact.
-- **Valid:** a record of `v` 1 whose every field above is present and well
-  typed, with `net ≤ high`, a `save` that decodes and a known `level`. A used
-  slot holds one.
+  record. Its row reads `NEWER`, and this build never writes over it, offers it
+  for an overwrite or lists it in SAVE IN? (§8), so a stale cached page leaves
+  it intact.
+- **Valid:** a record of `v` 1 whose every field above but `played` is present
+  and well typed, with `net ≤ high`, a `save` that decodes, a known `level` and
+  a `played`, when present, that is a safe integer. A used slot holds one.
 - **Damaged:** anything else, unparseable or malformed for `v` 1, a malformed
   `recent` included. Its row reads `DAMAGED`, never silently `EMPTY`, and the
   slot takes a run as an empty one does: a damaged key holds nothing any build
@@ -568,24 +575,43 @@ most 147 items, 37 hex digits, over the sample tombs.
 The saves obey these rules:
 
 - **Clean start.** The game boots clean, and so do BEGIN and a typed save code
-  other than a used slot's serial: wallet 0, `TOMB 0`, continues 0. The tombs
+  other than a valid slot's serial: wallet 0, `TOMB 0`, continues 0. The tombs
   and milestones of that seed pay again, because a new save owns nothing.
-- **Binding.** A run binds to a slot number. An `EMPTY` or `DAMAGED` row
-  opens NEW RUN bound to its slot, `NEW RUN  SLOT n`, and the run it begins
-  writes nothing until its first coin or counted tomb, so Q, a death or a
-  reload before then leaves the slot as it was. That first write takes the slot
-  under a fresh `id` at the `entry` save point (§8 **Score.**), while the slot
-  still reads absent or damaged; a slot another tab has filled meanwhile leaves
-  the run unbound, and SAVE IN? asks. `N NEW RUN` begins an unbound run.
-- **SAVE IN?** An unbound run plays unsaved and pays in memory (below). At its
-  first coin or counted tomb the run holds and SAVE IN? (§8) lists every slot
-  but a newer build's. Picking an empty or damaged slot binds the run there and
-  writes it at once, with the wallet the run holds in memory; picking a used
-  slot asks `OVERWRITE SLOT n?`, whose yes takes that slot under a fresh `id`.
-  Q, Esc and Select play on unsaved, and SAVE IN? then asks no more by itself.
-  The unsaved pause's SAVE opens it again, binding at the `here` save point,
-  and its Q returns to the pause. SAVE IN? does not open with no slot to list
-  or while the latest write failed.
+- **The free-slot rule.** BEGIN, and a typed save code that starts a run, with
+  a slot reading `EMPTY` or `DAMAGED`, start the run holding no slot with the
+  rule armed. The run writes nothing until its first coin or counted tomb, so
+  Q, a death or a reload before then leaves every slot as it was. That first
+  write re-reads the slots and takes the lowest-numbered free one under a
+  fresh `id` at the `entry` save point (§8 **Score.**), and play notes `SAVED
+  IN SLOT n` (§8). A free slot another tab filled meanwhile is skipped for the
+  next. With all three full by then the run plays on unsaved, notes `NOT SAVED:
+  PAUSE TO SAVE` and writes nothing more by itself; the pause's SAVE is its way
+  back.
+- **The overwrite pick.** BEGIN, and a typed save code that starts a run, with
+  all three slots full (valid or newer, one valid at least) open OVERWRITE
+  WHICH SLOT? (§8) before the run starts. Its OVERWRITE SLOT n? yes re-reads
+  slot n: the record it drew starts the run marked for slot n under that `id`;
+  another valid record redraws the confirm; an empty, damaged or newer slot
+  runs BEGIN's rules again. The mark is written at the run's first coin or
+  counted tomb, so a run quit, killed or reloaded before then leaves the old
+  save whole. That write re-reads the slot: the `id` drawn means overwrite,
+  and the play note reads `SAVED IN SLOT n`; anything else falls back to the
+  free-slot rule. Backing out of the pick starts nothing.
+- **No slot writable.** No slot is writable while the latest write failed or
+  all three slots read `NEWER`. BEGIN and a typed save code then start the run
+  unsaved and ask no slot question; its coins and counted tombs take no slot
+  and note nothing, the pause offers no SAVE, and the title warns of the cause
+  (§8). A take whose store does not land takes nothing and notes nothing.
+- **Taken under a run.** A bound run's write that finds its slot holding
+  another `id`, no record or a newer build's record unbinds the run and applies
+  the free-slot rule at once, at the save point that write carried.
+- **SAVE IN?** A run holding no slot pays in memory (below) and pauses
+  `UNSAVED`. While a slot is writable, its pause's SAVE opens SAVE IN? (§8),
+  which lists every slot but a newer build's. Picking an empty or damaged slot
+  binds the run there and writes it at once, at the `here` save point, with the
+  wallet the run holds in memory, dropping any mark; picking a used slot asks
+  `OVERWRITE SLOT n?`, whose yes takes that slot under a fresh `id`. Its Q
+  returns to the pause. SAVE IN? never opens during play.
 - **Writing.** A run holding a save writes its slot alone, at an entry, a
   coin, a counted tomb, a jar take, a change of tomb, PAUSE, the splash and the
   end of the run. Every write that moves the serial takes one save point whole:
@@ -593,20 +619,27 @@ The saves obey these rules:
   `here`. A coin, a counted tomb, a jar take and a change of tomb rewrite the
   wallet, the high, the continue count and the recent tombs and leave `save`,
   `net` and `start` as the run last wrote them.
-- **Restoring a save.** `CONTINUE SLOT n?` (§8) restores the record it shows,
-  asked by a used row and by a typed save code equal to a used slot's serial,
-  the first such slot. A typed serial matches on the save code alone: the code
-  omits the difficulty, and the record holds the one its run used. Y binds the
-  run to slot n under the record's `id` and begins at the serial's position, at
-  the record's difficulty, with its start tomb, net, high, wallet, continue
-  count and recent tombs, so `TOMB n` and the count continue. It closes any
-  open run. The clock, the trail and the coins earned this run start fresh. The
-  coins and jars of the recent tombs stay taken, and every other floor coin and
-  oil jar lies back (§7). The open run's own row resumes it with no question.
-- **ERASE.** While no slot reads `EMPTY` or `DAMAGED` and one at least is
-  used, `ERASE SLOT n?` removes a used slot's key at its yes (§8). It never
-  removes a newer build's record. An erase of the slot the open run holds
-  unbinds that run at once, and it plays on unsaved.
+- **Loading a save.** LOAD (§8) loads a valid row at once, read at the
+  keypress, and so does a typed save code equal to a valid slot's serial, the
+  first such slot. A typed serial matches on seed and position exactly: the
+  code omits the difficulty, and the record holds the one its run used. The
+  load binds the run to slot n under the record's `id` and begins at the
+  serial's position, at the record's difficulty, with its start tomb, net,
+  high, wallet, continue count and recent tombs, so `TOMB n` and the count
+  continue. It writes nothing until the run's next save point, and it closes
+  any open run. The clock, the trail and the coins earned this run start fresh.
+  The coins and jars of the recent tombs stay taken, and every other floor coin
+  and oil jar lies back (§7). The open run's own row, the row holding a valid
+  record under the open run's `id`, resumes it with no rebuild, and so does the
+  open run's serial typed.
+- **Leaving an unsaved run.** An open run is unsaved with progress when it
+  holds no slot, or its slot no longer holds its `id`, and its wallet or high
+  is above 0. BEGIN, a typed save code that loads a slot or starts a run, and a
+  load of a valid row other than the run's own ask `LEAVE UNSAVED RUN?` (§8)
+  before they would discard it; a typed seed asks nothing. Its yes carries the
+  action on, and the open run closes only when the action takes effect: a load,
+  the pick's yes, or a run started. BEGIN's rules run after the yes ask no
+  second time.
 - **Migration.** A save from before the records lives in the old single slot,
   `infinite-maze.plane.slot`, or before that under seven keys:
   `infinite-maze.plane.save`, `….save.difficulty`, `….save.run`,
@@ -626,11 +659,11 @@ The saves obey these rules:
   The marker, `1`, follows once slot 1's write lands, and the seven keys go with
   it; a failed write leaves both absent, so the next boot migrates again. With
   no source, or one that does not parse, the marker lands alone. The marker
-  keeps a player who erased all three slots from finding the old save back in
-  slot 1 at the next load. The game never writes or removes the old slot, and
-  writes no field for older builds: an older build, on a stale cached page,
-  reads the old slot and the legacy keys alone, so it shows the save from before
-  the upgrade and its writes stay invisible to this build.
+  keeps the old save from coming back into slot 1 once the slots empty, by any
+  path. The game never writes or removes the old slot, and writes no field for
+  older builds: an older build, on a stale cached page, reads the old slot and
+  the legacy keys alone, so it shows the save from before the upgrade and its
+  writes stay invisible to this build.
 
 Resuming lights the torch to full. Flames never run out, so the save code
 carries no pickup state, and the record carries the takes of the two recent
@@ -645,11 +678,11 @@ a score. Each save holds its wallet, so no wallet key survives:
 
 | Key | Holds |
 |---|---|
-| `infinite-maze.save.1`, `.2`, `.3` | the three saves, JSON `{"v": 1, "id": "<8 characters>", "save": "<save code>", "level": "<difficulty>", "start": "u,v", "net": n, "high": n, "wallet": n, "continues": n, "recent": [["u,v", "<hex>"], …]}`, with any unknown field after them; ERASE removes one |
+| `infinite-maze.save.1`, `.2`, `.3` | the three saves, JSON `{"v": 1, "id": "<8 characters>", "save": "<save code>", "level": "<difficulty>", "start": "u,v", "net": n, "high": n, "wallet": n, "continues": n, "recent": [["u,v", "<hex>"], …], "played": ms}`, `played` optional, with any unknown field after them |
 | `infinite-maze.save.migrated` | `1` once the migration has run on the device |
 | `infinite-maze.plane.slot` | the old single slot, read once for the migration, never written or removed |
 | `infinite-maze.plane.best` | the best per seed and difficulty, one per device |
-| `infinite-maze.difficulty` | the NEW RUN setting, one per device |
+| `infinite-maze.difficulty` | the title's setting, one per device |
 | `infinite-maze.pad` | the d-pad's side, `left` or `right`, one per device |
 
 **Coins.** Touching a coin of §4, a dead-end coin or a coin of a row, the feet
@@ -658,10 +691,10 @@ the wallet and the coin's id to the run's taken set. The coin then stays taken
 while its tomb is one of the run's two recent tombs (`recent`, above), as an oil
 jar does (§7): the tomb the explorer is in and the tomb before it. It stays
 through pause, the title and resume of the open run, the splash's CONTINUE, the
-end screen's Continue and a restore of the save (Y at CONTINUE SLOT n?, after a
-reload, a typed copy of a slot's serial). A coin of any other tomb lies on its
-floor and is taken again as a fresh one, paying 1. BEGIN and a typed code other
-than a used slot's serial start the run with every coin back. The taken set
+end screen's Continue and a load of the save (LOAD, after a reload, a typed
+copy of a slot's serial). A coin of any other tomb lies on its floor and is
+taken again as a fresh one, paying 1. BEGIN and a typed code other than a valid
+slot's serial start the run with every coin back. The taken set
 lives with the sim, which drops a tomb's coins when the tomb leaves the recent
 tombs, and the record keeps the recent tombs' coins as bits. A dead-end coin's
 id is `x,y,cell`; coin `i` of the row east of cell `c` has `x,y,n` with
@@ -678,24 +711,25 @@ difficulty alone. A milestone pays on top: for each k with
 each k pays once per save. A walk back and forward raises no high and pays
 nothing, and the save keeps no paid-tomb set: its high is the highest count
 paid. A bound run's pay is decided in its write, against the larger of
-its own paid high and the stored one; an unbound run pays by the same rule
-against its own high, in memory, and the record it later writes carries that
-wallet.
+its own paid high and the stored one; a run holding no slot pays by the same
+rule against its own high, in memory, and the record it later writes carries
+that wallet.
 
 Every write re-reads its slot:
 
-- **The same id** is the same save, which two tabs share when both restored it.
+- **The same id** is the same save, which two tabs share when both loaded it.
   The wallet, the high and the continue count merge by maximum, and the pay is
   decided against the merged high, so a rise pays once across tabs. The run
   fields (serial, net, start tomb and recent tombs) are the writer's, as one
   unit, and the last writer wins. Unknown fields come from the stored record.
 - **Another id, no record or a newer build's record**, whatever its id, means
-  another tab confirmed an overwrite or an erase, or a newer build wrote the
-  save. A run's write there stores nothing; the run plays on unsaved, and its
-  next coin or counted tomb asks SAVE IN?.
-- **A binding write** takes a slot that reads absent or damaged, or for
-  OVERWRITE the record under the `id` the confirm drew, and stores nothing
-  over anything else.
+  another tab took the slot, a page of an older build removed it, or a newer
+  build wrote the save. A run's write there stores nothing, and the free-slot
+  rule applies at once (above).
+- **A binding write** takes a slot that reads absent or damaged, or for an
+  overwrite the record under the `id` the confirm drew, and stores nothing
+  over anything else. A binding write whose store does not land binds
+  nothing.
 
 Two tabs on one save are two runs, each with its own taken set and recent
 tombs, so each pays the coins it takes, the same coin included, as a BEGIN on
@@ -706,8 +740,9 @@ own last wallet until its next write, and there is no lock and no `storage`
 listener. Absent, blocked or malformed storage reads as empty, and the game
 plays on: blocked storage pays in memory and never lowers the wallet. While the
 latest write failed, whatever its key, the title reads `SAVES OFF: COPY YOUR
-CODE` above its name until a write succeeds. The `#selftest` page keeps its
-storage in memory and never reads or writes the player's.
+CODE` above its name until a write succeeds; while all three slots read
+`NEWER`, it reads `SAVES FROM A NEWER GAME: RELOAD` there. The `#selftest` page
+keeps its storage in memory and never reads or writes the player's.
 
 ## 6. Movement
 
@@ -817,9 +852,9 @@ battery.
   burn to 60 s and ends the ember, where a flame sets it to full. A jar pushes
   the event a flame does, so the relight sound and the music's drop follow it.
   A taken jar stays taken while its tomb is one of the two recent tombs (§5),
-  through pause, the title, a reload, RESUME and Continue, and lies back once
+  through pause, the title, a reload, a load and Continue, and lies back once
   its tomb is neither the explorer's tomb nor the tomb before it, and on BEGIN
-  and a typed code other than a used slot's serial.
+  and a typed code other than a valid slot's serial.
 - **Tier-2 skeletons:** §4's second tier shows only under half the burn. Its
   opacity is `clamp((150 − burn) / 10, 0, 1)` with `burn` in seconds: 0 at 150
   s, 1 at 140 s and in the ember. A flame or a jar that lifts the burn to 150 s
@@ -837,9 +872,9 @@ When the burn reaches zero, the torch gutters to an 8 px ember for 10 s, and
 reaching a flame in that time relights it. Otherwise the run ends. The end
 screen shows the run's high as `TOMBS CLIMBED`, the time, the run's continue
 count (§5) and the save code for the last tomb entry reached. Continue resumes
-there with a full torch, bound to the run's slot, carrying the `entry` save
-point, the high and the recent takes (§8 **Score.**), and adds one to the
-count.
+there with a full torch, keeping the run's slot, or its mark or armed
+free-slot rule (§5), carrying the `entry` save point, the high and the recent
+takes (§8 **Score.**), and adds one to the count.
 
 ## 8. Presentation
 
@@ -985,16 +1020,15 @@ there: `entry`, the last entry board with the net when it last changed, and
 `here`, the explorer's board with the net now. A record writes one of them
 whole (§5), so a step back, a PAUSE and a reload restore the net of the board
 the explorer stood on, and the step forward again raises nothing. Continue
-carries `entry`, the high and the start tomb, so the run keeps one count. Y at
-CONTINUE SLOT n? (below) continues them from the record (§5); BEGIN, a typed
-seed and any other save code start a new run at net 0 in its own start tomb.
-The HUD's `TOMB n`, the pause header's `TOMB n`, the slot rows' `TOMB n`, NEW
-RUN's `BEST TOMB` and the end screen's `TOMBS CLIMBED` show the high; nothing
+carries `entry`, the high and the start tomb, so the run keeps one count. A
+load (§5) continues them from the record; BEGIN and any other save code start a
+new run at net 0 in its own start tomb.
+The HUD's `TOMB n`, the pause header's `TOMB n`, the slot rows' `TOMB n`, the
+title's `BEST TOMB` and the end screen's `TOMBS CLIMBED` show the high; nothing
 the player sees shows the net. The run also keeps a continue count (§5), the
 times it went on after its torch died: Continue raises it by one, and pause,
-resume and the splash's CONTINUE never do. The end screen, the pause header and
-CONTINUE SLOT n? show it beside the tomb count, and `BEST TOMB` keeps the tomb
-count alone.
+resume and the splash's CONTINUE never do. The end screen and the pause header
+show it beside the tomb count, and `BEST TOMB` keeps the tomb count alone.
 
 **Oil jars.** A jar is a sprite at most 9×12 px: a knobbed lid over an umber
 rim and a rounded body of dark violet oil, outlined in umber so it stands off
@@ -1018,8 +1052,8 @@ count right-aligned at x 315 with its top row at y 14, growing leftward. The end
 screen has a row `COINS n` inside its panel: every coin this run earned in this
 tab, from the floor and from tombs; coins another tab merges raise the wallet
 but not this row. The count carries through Continue and through pause, title
-and resume of the open run, and restarts on BEGIN, on a typed code and on Y at
-CONTINUE SLOT n?. A row `CONTINUES n` stands under it, 11 px below and inside the
+and resume of the open run, and restarts on BEGIN, on a typed code and on a
+load. A row `CONTINUES n` stands under it, 11 px below and inside the
 panel, with the run's continue count. The pause header shows `CONTINUES n` on
 the row of `TOMB n`, left-aligned at the panel's inner edge, x 53, mirroring
 `TOMB n` at the right; for n up to 99 the text and its shadow end at x 124,
@@ -1028,8 +1062,7 @@ flush against PAUSED at 125.
 **Splash.** When a tick raises the high across 100 × k, k ≥ 1, the game shows
 the `splash` screen once that tick ends, and writes the save as pause does,
 once the run holds one (§5). A run that ends on the same tick shows the end
-screen, and the payout stands. On a tick that asks an unsaved run SAVE IN?,
-SAVE IN? shows first and the splash follows its answer. The run stands still
+screen, and the payout stands. The run stands still
 under the splash: the sim does not step, so the torch and the clock hold until
 CONTINUE. Every rise across a milestone shows its splash; only the payout is
 once per save (§5), and a walk back below 100 × k and forward again raises no
@@ -1058,69 +1091,82 @@ Past k = 10 the rank reads `PHARAOH` and the Roman numeral of k − 9: PHARAOH I
 at k = 11, PHARAOH III at 12. A numeral past 3999 adds a leading M per
 thousand. Every name uses only characters the font draws.
 
-**Labels.** The title has two screens over its preview explorer, each with
-the game's name at scale 2 above one panel, x 62 to 258, whose text keeps 10 px
-inside it, from x 72 to 248:
+**Labels.** The title, LOAD and the pick draw over the title's preview
+explorer under the game's name at scale 2, each in one panel, x 62 to 258,
+whose text keeps 10 px inside it, from x 72 to 248:
 
-- **The slot list** holds three slot rows, 14 px apart from y 64, then the
-  `N NEW RUN` row and the hint `ENTER PLAY` (`ENTER ERASE  Q BACK` while
-  erasing), which touch mode leaves out. A used row reads its number, level,
+- **The title** holds `A TOMB WITHOUT END` above its panel: `SEED` and the
+  shown seed; `ENTER BEGIN`; the difficulty row naming EASY, MEDIUM, HARD and
+  ULTIMATE with the setting lit; `R RESET`, with `K COPY` ending at x 248;
+  `T LOAD`; and `BEST TOMB n`, the shown seed's at the setting, or `THE MOUTH OF
+  THE TOMB` with none stored. A violet bar, edged gold on its left, lights the
+  cursor's row, `ENTER BEGIN` or `T LOAD`. The seed at boot is the most
+  recently played valid slot's (§5), else a rolled one, until R or a typed seed
+  changes it.
+- **LOAD** holds the header `LOAD`, the three slot rows 20 px apart from y 58,
+  the row `T TYPE A CODE` and the hint `ENTER LOAD  Q BACK`, which touch mode
+  leaves out. A row reads on two lines. A valid row reads its number, level,
   `TOMB n` (its high) and wallet, the coin sprite before the count, which ends
-  at x 248: `1 MEDIUM  TOMB 20  ● 300`. It names no serial. An empty row reads
-  `EMPTY`, a damaged one `DAMAGED` and a newer build's `NEWER`. While ERASE
-  shows (§5), the last row reads `N NEW RUN` and `E ERASE`, which ends at x 248.
-  A violet bar, edged gold on its left, lights the cursor's row, and on the last
-  row the lit choice alone.
-- **NEW RUN** holds the header `NEW RUN`, or `NEW RUN  SLOT n` when bound; the
-  seed row, `SEED` and the seed, with `BEST TOMB n` ending at x 248 when a best
-  is stored, the shown seed's at the setting; the difficulty row naming EASY,
-  MEDIUM, HARD and ULTIMATE with the setting lit; `R NEW SEED`; `T TYPE A
-  CODE`; and the hint `ENTER BEGIN  Q BACK`, which touch mode leaves out. Code
-  entry takes the same panel. Its seed is the lowest used slot's at boot, else a
-  rolled one, until R or a typed seed changes it.
+  at x 248: `1 MEDIUM  TOMB 20  ● 300`; under them, the time since `played`. It
+  names no serial. An empty row reads `EMPTY`, a damaged one `DAMAGED` and a
+  newer build's `NEWER`. The cursor's bar spans both lines of its row. Code
+  entry takes the panel in place of the rows.
+- **The time since played** reads in whole units, rounded down: `JUST NOW`
+  under a minute and for a time ahead of the clock, `n MIN AGO` under an hour,
+  `n HR AGO` under a day, `1 DAY AGO`, then `n DAYS AGO` under 100 days, then
+  `LONG AGO`; a record without `played` shows none.
+- **OVERWRITE WHICH SLOT?**, the pick, holds that header, the three rows as
+  LOAD draws them and the hint `ENTER PICK  Q BACK`, which touch mode leaves
+  out. A `NEWER` row shows and takes no pick.
+- **OVERWRITE SLOT n?**, the pick's confirm, reads that header, then the
+  row's level, `TOMB n`, coins and time as LOAD draws them, and hints `Y YES  N
+  NO`, which touch mode leaves out.
+- **LEAVE UNSAVED RUN?** reads that header, the open run's level, `TOMB n` and
+  coins, and the same hint.
+
+Above the name, the title, LOAD and the pick warn while no slot is writable
+(§5): `SAVES OFF: COPY YOUR CODE` while the latest write failed, else `SAVES
+FROM A NEWER GAME: RELOAD` while all three slots read `NEWER`.
 
 The pause and end screens name the run's difficulty after the save code. The
 pause map draws the run's tomb at 3 px per cell, a frame of `W·36 × H·21` px:
 72×42 at EASY, 108×63 at MEDIUM, 144×84 at HARD and 216×84 at ULTIMATE,
-centred in the largest. An unsaved run's pause reads `UNSAVED` where `SAVE
+centred in the largest. A run holding no slot pauses `UNSAVED` where `SAVE
 CODE` stands, followed by the copy status, then the save code of the
-explorer's board and the difficulty, and hints `ENTER SAVE  P RESUME  Q TITLE`
-and `C COPY  M MUTE  ARROWS PAN`; a saved run's pause reads as before.
+explorer's board and the difficulty. While a slot is writable it hints `ENTER
+SAVE  P RESUME  Q TITLE` and `C COPY  M MUTE  ARROWS PAN`, and otherwise the
+hints of a saved run's pause, which reads as before.
 
-**CONTINUE SLOT n?** A panel on the slot list asks before a used slot's record
-is restored. It reads `CONTINUE SLOT n?`, names the record's serial, its
-difficulty and `TOMB n`, shows its wallet and continue count as
-`COINS n  CONTINUES m`, and hints `Y YES  N NO`. A used row opens it (§9), and
-so does a typed save code equal to a used slot's serial; the open run's own row
-resumes it with no question. Y or Enter restores the record the panel shows
-(§5) and begins its run. N, Esc or Q returns to the slot list and erases
-nothing.
+**The note.** A run's first write into a slot, by the free-slot rule or its
+mark, notes `SAVED IN SLOT n` in play, and a run the free-slot rule leaves
+unsaved notes `NOT SAVED: PAUSE TO SAVE`. The note stands centred under the
+HUD's top line at y 14, clear of the torch bar, `EMBER` and the wallet and
+far above the explorer, whom the camera keeps near the view's middle. It lasts
+120 ticks of play, two seconds: pause, the splash and every other screen hold
+it, and it draws on the play screen alone. A new note replaces the old, and a
+run starts with none. With no slot writable, no note shows.
 
-**SAVE IN?** A panel over the held run, x 62 to 258, reads `SAVE IN?` and
+**SAVE IN?** A panel over the paused run, x 62 to 258, reads `SAVE IN?` and
 lists the slot rows a run may write, `EMPTY` and `DAMAGED` first, then the used
 ones, each kind in slot order, 14 px apart from y 72, the cursor's bar on the
 first; a newer build's slot is never listed. It hints `ENTER SAVE  Q BACK`,
 which touch mode leaves out.
 
-**OVERWRITE SLOT n?** A panel over the held run, x 62 to 258, reads
-`OVERWRITE SLOT n?` and the slot's level, `TOMB n` and coins as its row reads
-them, and hints `Y YES  N NO`, which touch mode leaves out. Y binds the run to
-slot n under a fresh id and writes it; N, Esc or Q returns to SAVE IN?.
+**OVERWRITE SLOT n?** on SAVE IN? is a panel over the paused run, x 62 to 258.
+It reads `OVERWRITE SLOT n?` and the slot's level, `TOMB n` and coins as its
+row reads them, and hints `Y YES  N NO`, which touch mode leaves out. Y binds
+the run to slot n under a fresh id and writes it; N, Esc or Q returns to SAVE
+IN?.
 
-**ERASE SLOT n?** A panel on the slot list reads `ERASE SLOT n?`, names the
-record's serial, so a player may note it first, its level and `TOMB n` and
-coins, and hints `Y YES  N NO`. Y removes the slot's key and returns to the
-slot list; N, Esc or Q returns to the slot list and removes nothing.
-
-The three confirms and SAVE IN? re-read their slot at the answer, comparing
-`id`. A slot whose id differs from the one drawn, or that emptied or filled
-since, asks again: SAVE IN? redraws its rows, OVERWRITE and ERASE redraw with
-the stored record, and ERASE over a slot now empty, damaged or newer returns to
-the slot list, OVERWRITE over one to SAVE IN?. A record with the drawn id that
-has moved on is the save the player picked, and Y goes through. CONTINUE SLOT
-n? restores the record it shows. Each panel ignores auto-repeated keydowns, so
-a held key answers nothing, and ignores every other key, Space and P included,
-except M, which mutes as on every screen.
+SAVE IN? and its confirm re-read their slot at the answer, comparing `id`. A
+slot whose id differs from the one drawn, or that emptied or filled since,
+asks again: SAVE IN? redraws its rows, OVERWRITE redraws with the stored
+record, and OVERWRITE over a slot now empty, damaged or newer returns to SAVE
+IN?. A record with the drawn id that has moved on is the save the player
+picked, and Y goes through. The pick's confirm re-reads at its yes (§5). LOAD,
+the pick and SAVE IN? read a row at its keypress. Every confirm ignores
+auto-repeated keydowns, so a held key answers nothing, and ignores every other
+key, Space and P included, except M, which mutes as on every screen.
 
 **Camera.** The camera follows the explorer with a lerp and a deadzone and is
 never rounded. The frame maps the world to device pixels through it and rounds
@@ -1198,9 +1244,10 @@ they were: from pause or the title it goes back to the game. Esc is the alias
 for players outside full screen, where a browser keeps Esc for itself and a
 real Esc press leaves full screen. The end screen takes Esc and Q to the
 title and takes no P, so a pause press as the torch dies cannot skip the end
-screen and its save code. NEW RUN and the end screen ignore auto-repeated
-Space presses, NEW RUN an auto-repeated Enter, and the slot list every
-auto-repeated key but the arrows, so a held key cannot skip a screen.
+screen and its save code. The end screen ignores an auto-repeated Space, and
+the title, LOAD, the pick and every confirm ignore every auto-repeated key but
+the arrows, so a held key cannot skip a screen. Code entry takes every
+keydown, so a held Backspace deletes.
 
 On the milestone splash (§8), Enter continues the same run and Q goes to the
 title with the run open, as from pause: P there returns to it in play with its
@@ -1209,52 +1256,61 @@ leaves full screen, and Space does nothing, since a fresh jump as tomb 100
 lands would otherwise skip the screen. The splash ignores every auto-repeated
 keydown, so a held key cannot skip it. M mutes, as on every screen.
 
-The title opens on the slot list (§8). A cursor lights one of four rows,
-slots 1 to 3 and the `N NEW RUN` row: it starts on the open run's slot, else
-the first used slot, else slot 1, and Up and Down, or W and S, move it and stop
-at the first and last rows. On the `N NEW RUN` row, while ERASE shows, Left and
-Right choose NEW RUN or ERASE. Enter acts on the lit row, and the digits 1 to
-3, N and E act at once wherever the cursor stands. A used row asks CONTINUE
-SLOT n?, an empty or damaged row opens NEW RUN bound to its slot, a newer
-build's row does nothing and the open run's own row resumes it. N opens NEW RUN
-unbound. E, or Enter with ERASE lit, moves the cursor to the used rows for
-erasing: Up and Down move it over them alone, Enter or a used row's digit asks
-ERASE SLOT n?, and N, Q and Esc go back. Space does nothing on the slot list.
-P (or Esc) resumes:
+The title (§8) opens with its cursor on `ENTER BEGIN`, each time it shows. Up
+and Down, or W and S, move it between BEGIN and LOAD, and Enter acts on the
+lit row. Space begins and T opens LOAD wherever the cursor stands. R rolls a
+new seed and keeps every save and the open run, and K copies the shown seed. H
+swaps the sides of the touch d-pad and fire button and stores the side (§5). L
+cycles the difficulty EASY, MEDIUM, HARD, ULTIMATE and round again; Left and
+Right, or A and D, step it and stop at EASY and ULTIMATE. A change rebuilds the
+title's world and moves only new runs. P (or Esc) resumes:
 
 - A title reached from pause by Q leaves the run open, and P returns to it
   unchanged: torch, time, trail and difficulty. The open run keeps its own
-  seed and world, so NEW SEED, a typed seed and the difficulty change only the
+  seed and world, so R, a typed seed and the difficulty change only the
   title's world; BEGIN or a typed save code starts a new run.
-- With no run open, as at startup, P plays the lit slot row as Enter does: over
-  a used row it asks CONTINUE SLOT n? (§8), and Y rebuilds its run at its
-  difficulty (§5). On the `N NEW RUN` row it does nothing. A rebuild never
-  happens while a run is open, so a pause, title and resume cannot refill the
-  torch.
+- With no run open, as at startup, P does nothing; it never loads a save. A
+  rebuild never happens while a run is open, so a pause, title and resume
+  cannot refill the torch.
 
-On NEW RUN, Enter and Space begin the shown seed at tomb 0, R rolls a new seed
-and keeps every save, T opens code entry, and Q goes back to the slot list and
-drops the binding. L cycles the difficulty EASY, MEDIUM, HARD, ULTIMATE and
-round again; Left and Right, or A and D, step it and stop at EASY and ULTIMATE.
-A change rebuilds the title's world. P and Esc do nothing there.
+BEGIN runs BEGIN's rules (§5): with a slot free, or none writable, the run
+starts; with all three full, OVERWRITE WHICH SLOT? asks first.
 
-CONTINUE SLOT n?, OVERWRITE SLOT n? and ERASE SLOT n? take Y and Enter for yes
-and N, Esc and Q for no, and nothing else answers them (§8). SAVE IN? opens
-mid-play and holds the run: Up and Down move its cursor, Enter or a listed
-slot's digit picks, and Q and Esc play on unsaved, or return to the pause that
-opened it. It ignores Space, P and every auto-repeated keydown, so a jump or a
+On LOAD a cursor lights one of four rows, slots 1 to 3 and `T TYPE A CODE`. It
+starts on the open run's own row, else the most recently played valid row,
+else `T TYPE A CODE`, and Up and Down, or W and S, move it over every row and
+stop at the first and last. Enter acts on the lit row, a digit 1 to 3 on its
+row, and T opens code entry; Q and Esc go back to the title, and P and Space
+do nothing. A valid row loads (§5), and an `EMPTY`, `DAMAGED` or `NEWER` row
+does nothing.
+
+Code entry takes the typed answer, in this order: a valid slot's serial acts
+as Enter on the first such row; the open run's serial, the code of the board
+its explorer stands on, which its pause shows, resumes it; any other save code
+starts a run at its board, at the setting, under BEGIN's rules; a seed becomes
+the title's shown seed, and LOAD returns to the title; anything else reads
+`NOT A SEED OR SAVE CODE`. Enter submits, and on an empty field closes it; Esc
+closes it back to LOAD. During code entry A, D, H, K, L, P and Q type letters.
+
+On OVERWRITE WHICH SLOT? the cursor starts on the least recently played valid
+row, and Up and Down move it over the three rows and stop at the ends. Enter
+and a digit ask OVERWRITE SLOT n? over a valid row; Q and Esc go back to the
+title, and P and Space do nothing.
+
+OVERWRITE SLOT n? and LEAVE UNSAVED RUN? take Y and Enter for yes. N and Esc
+answer no, back to the screen that asked, and so does Q, which on the pick's
+OVERWRITE SLOT n? goes to the title. Nothing else answers them (§8). SAVE IN?
+opens from the pause of a run holding no slot, while SAVE shows: Up and Down
+move its cursor, Enter or a listed slot's digit picks, and Q and Esc return to
+the pause. It ignores Space, P and every auto-repeated keydown, so a jump or a
 held key answers nothing.
 
-H on pause swaps the sides of the touch d-pad and fire button and stores the
-side (§5), and pause ignores an auto-repeated H. An unsaved run's pause takes
-Enter for SAVE, which opens SAVE IN? (§5). C on the pause and end screens
-writes the save code shown to the clipboard; during code entry A, D, H, K, L
-and P type letters. Each screen then reads COPIED, or COPY FAILED when the
-clipboard is absent or refuses, on the screen visit that asked and nowhere once
-it ended. A visit ends whenever the
-screen changes, even back to the same one. The copy uses
-`navigator.clipboard.writeText`, which browsers allow from a key press in a
-secure context, https and `file://` alike.
+C on the pause and end screens writes the save code shown to the clipboard,
+and K on the title the shown seed. Each screen then reads COPIED, or COPY
+FAILED when the clipboard is absent or refuses, on the screen visit that asked
+and nowhere once it ended. A visit ends whenever the screen changes, even back
+to the same one. The copy uses `navigator.clipboard.writeText`, which browsers
+allow from a key press in a secure context, https and `file://` alike.
 
 **Touch.** Touch mode is on at boot when the device reports a touch point or a
 coarse pointer, or when the URL hash is `#touch`. A touch `pointerdown` turns
@@ -1270,7 +1326,7 @@ scrolls, zooms or selects.
   a slide from an arm into it releases the arm. An arm holds its arrow key
   while a pointer is on it, a slide from arm to arm swaps the key, and a
   pointer that left the pad keeps mapping by angle until it lifts. The pad has
-  no diagonals. With the pause screen's PAD key set to `right`, the pad
+  no diagonals. With the title's PAD key set to `right`, the pad
   stands where its mirror across the safe area's vertical centre line would,
   and the fire button where the pad stood.
 - **Fire button.** In play, a red circle (palette index `0x17`) stands
@@ -1283,25 +1339,27 @@ scrolls, zooms or selects.
 
   | Screen | Keys |
   |---|---|
-  | slot list | RESUME (P, with a run open), SLOT 1 to SLOT 3 (the digits), NEW RUN (N), ERASE (E, while ERASE shows) |
-  | slot list, erasing | ERASE n per used row (its digit), BACK (Q) |
-  | NEW RUN | BEGIN (Enter), the difficulty (L, labelled with the setting), NEW SEED (R), TYPE CODE, BACK (Q) |
-  | NEW RUN, typing | ACCEPT (Enter), CANCEL (Esc) |
-  | CONTINUE SLOT n?, OVERWRITE SLOT n?, ERASE SLOT n? | YES (Y), NO (N) |
-  | SAVE IN? | one SLOT n per listed row, in row order, then BACK (Q) |
+  | title | RESUME (P, with a run open), BEGIN (Space), RESET (R), LOAD (T), the difficulty (L, labelled with the setting), COPY (K), SOUND (M), PAD (H, labelled `PAD LEFT` or `PAD RIGHT`) |
+  | LOAD | SLOT 1 to SLOT 3 (the digits), TYPE CODE, BACK (Q) |
+  | LOAD, typing | ACCEPT (Enter), CANCEL (Esc) |
+  | OVERWRITE WHICH SLOT? | SLOT 1 to SLOT 3 (the digits), BACK (Q) |
+  | OVERWRITE SLOT n?, LEAVE UNSAVED RUN? | YES (Y), NO (N) |
   | play | PAUSE (P), 96 px wide at the bottom centre, its bottom 8 px above the safe area's, in both modes and on either side; where that comes within 8 px of the pad or the fire button, it moves over the fire button, just above it |
-  | pause | RESUME (P), SAVE (Enter, while unsaved), COPY (C), SOUND (M), TITLE (Q), PAD (H, labelled `PAD LEFT` or `PAD RIGHT`) |
+  | pause | RESUME (P), SAVE (Enter, while SAVE shows), COPY (C), SOUND (M), TITLE (Q) |
+  | pause, SAVE IN? | one SLOT n per listed row, in row order, then BACK (Q) |
   | over | CONTINUE (Enter), COPY (C), TITLE (Q) |
   | splash | CONTINUE (Enter), HOME (Q) |
 
-  In overlay mode a screen's keys stand in one column beside its panel, on the
-  slot list and NEW RUN the right one; where one column cannot hold them (the
-  slot list's six need a safe height of 310 px, so 640x309 splits them and
-  640x310 does not), the first half stand in the left strip and the rest in the
-  right. On a split slot list or NEW RUN the left column stands at the top of
-  its strip, and the title's preview explorer stands lower, below it. The d-pad
-  shows only in play, so touch reaches each slot row through these keys, which
-  send the keyboard's digits, N and E.
+  BEGIN sends Space, which begins wherever the title's cursor stands, so on a
+  device with a keyboard too it never opens LOAD. A SLOT key on a row that
+  takes no action does nothing. In overlay mode a screen's keys stand in one
+  column beside its panel, on the title, LOAD, the pick and their confirms the
+  right one; where one column cannot hold them (the title's eight need a safe
+  height of 410 px, so 640x360 splits them and 736x414 does not), the first
+  half stand in the left strip and the rest in the right. A split title's left
+  column stands at the top of its strip, and the title's preview explorer
+  stands lower, below it. The d-pad shows only in play, so touch reaches each
+  slot row through these keys, which send the keyboard's digits.
 
   Each P key has Esc as its keyboard alias. CANCEL sends Esc, because P types
   a letter during code entry.
@@ -1337,21 +1395,24 @@ right stick, the triggers, the other buttons, rumble and remapping are absent.
 
 Touch mode stays as it is: the events are untrusted, so a controller neither
 turns touch mode off nor hides a touch control. Start acts as P does: it
-pauses in play, resumes from pause and, on the slot list, resumes the open run
-or plays the lit slot row; the end screen, the splash and SAVE IN? ignore it.
-Select acts as Q does: it goes to the title from pause and from the splash
-with the run left open, and from the end screen, and it backs out of NEW RUN,
-SAVE IN? and erasing; play and the slot list ignore it. The d-pad's Up and
-Down move the slot list's cursor over its four rows and SAVE IN?'s over its
-rows, Left and Right choose NEW RUN or ERASE on the last slot row, and B, which
-sends Enter, selects: a controller sends neither N nor E nor a digit, and
+pauses in play, resumes from pause and, on the title, resumes the open run;
+the end screen, the splash, LOAD, the pick, SAVE IN? and every confirm ignore
+it. Select acts as Q does: it goes to the title from pause and from the splash
+with the run left open, and from the end screen, and it backs out of LOAD, the
+pick and SAVE IN?; play and the title ignore it. The d-pad's Up and Down move
+the title's cursor between BEGIN and LOAD and the cursors of LOAD, the pick and
+SAVE IN? over their rows, Left and Right step the title's difficulty, and B,
+which sends Enter, acts on the lit row: a controller sends no digit, and
 reaches every choice through the cursor. A on the splash does nothing, as Space
-does nothing there, so B, which never jumps, is a controller's way on. A
-begins on NEW RUN, as Space does, and does nothing on the slot list, SAVE IN?
-and the confirms. On the three confirms B answers yes and Select no, and A and
-Start do nothing, so a jump habit cannot answer. During code entry Start and
-Select type P and Q and B submits. Gamepad input grants a browser no user activation, so audio may stay
-silent until the first key, click or touch.
+does nothing there, so B, which never jumps, is a controller's way on. A begins
+on the title, as Space does, and does nothing on LOAD, the pick, SAVE IN? and
+the confirms. On the confirms B answers yes and Select no, and A and Start do
+nothing, so a jump habit cannot answer. A controller reaches code entry through
+LOAD's `T TYPE A CODE`, where it cannot type: Start types nothing, Select
+closes the field, empty or not, and B submits, or closes an empty field. The
+game tells a controller's keys from the keyboard's, whose P and Q type there.
+Gamepad input grants a browser no user activation, so audio may stay silent
+until the first key, click or touch.
 
 ## 10. Acceptance
 

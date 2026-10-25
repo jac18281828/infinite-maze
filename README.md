@@ -32,25 +32,27 @@ and no assets.
 - **P** pauses and shows `TOMB n`, the map of the passages walked and the
   save code; P resumes. Esc does the same outside full screen, where a browser
   keeps Esc for itself. The arrows (or WASD) pan the map one tomb per press.
-  **C** there copies the save code, **H** swaps the touch d-pad's side, and an
-  unsaved run's **Enter** saves it. **M** mutes.
+  **C** there copies the save code, and an unsaved run's **Enter** saves it
+  while a slot can take a save. **M** mutes.
 - **Touch.** On a phone the view fills the screen. A d-pad moves: its arms
   run, climb and descend, and a red fire button opposite it jumps. Soft keys
-  cover every screen: RESUME, SLOT 1 to SLOT 3, NEW RUN and ERASE on the slot
-  list; BEGIN, the difficulty, NEW SEED, TYPE CODE (a prompt that takes a
-  pasted save code) and BACK on NEW RUN; one SLOT key per row on SAVE IN?;
-  SAVE, COPY, SOUND and PAD (swaps the d-pad and the fire button) on pause;
-  PAUSE, CONTINUE, HOME, TITLE and, to answer a confirm, YES and NO. Pressing a key
+  cover every screen: RESUME, BEGIN, RESET, LOAD, the difficulty, COPY, SOUND
+  and PAD (swaps the d-pad and the fire button) on the title; SLOT 1 to SLOT
+  3, TYPE CODE (a prompt that takes a pasted save code) and BACK on LOAD; SLOT
+  1 to SLOT 3 and BACK on the overwrite pick; one SLOT key per row on SAVE IN?;
+  SAVE, COPY and SOUND on pause; PAUSE, CONTINUE, HOME, TITLE and, to answer a
+  confirm, YES and NO. Pressing a key
   switches back to the keyboard layout; `#touch` on the URL forces touch on a
   desktop. The pause map shows the explorer's tomb; panning needs a keyboard
   or controller.
 - **Controller.** A standard-mapped gamepad plays with no setup: press a
   button so the browser sees it. The d-pad or left stick moves, pans the pause
-  map and moves the slot list's cursor, Left and Right choosing NEW RUN or
-  ERASE on its last row; **A** jumps and begins on NEW RUN; **B** selects,
-  answers yes to a confirm and continues past the milestone splash; **Start**
-  pauses and resumes; **Select** goes to the title, backs out of NEW RUN, SAVE
-  IN? and erasing, and answers no to a confirm.
+  map and moves the cursors of the title, LOAD, the overwrite pick and SAVE IN?,
+  Left and Right stepping the title's difficulty; **A** jumps and begins on the
+  title; **B** selects, answers yes to a confirm and continues past the
+  milestone splash; **Start** pauses and resumes; **Select** goes to the title,
+  backs out of LOAD, the pick, SAVE IN? and code entry, and answers no to a
+  confirm.
 - The torch burns for 300 s, and its light shrinks as it burns. Touch a
   turquoise brazier to relight it. At zero it gutters to an ember for 10 s;
   reach a flame in that time or the run ends. Every room holds oil jars on
@@ -83,10 +85,10 @@ and no assets.
   MEDIUM, 5 at HARD and 10 at ULTIMATE. A walk back and forward pays nothing.
   The wallet shows under `TOMB n`; the end screen shows the coins earned this
   run. Each of three saves keeps its own wallet beside its serial, difficulty,
-  start tomb, count and high, continue count and the takes of the last two
-  tombs, as one record in `localStorage`, and every write merges with the
-  stored record, so two tabs on one save lose nothing. Every new run starts
-  with no coins at `TOMB 0`. Nothing buys with coins yet.
+  start tomb, count and high, continue count, the takes of the last two tombs
+  and the time it was last played, as one record in `localStorage`, and every
+  write merges with the stored record, so two tabs on one save lose nothing.
+  Every new run starts with no coins at `TOMB 0`. Nothing buys with coins yet.
 - In some dead ends, more often the longer ones, the dust drifts back toward the
   way in while the explorer stands inside, a hint that the branch leads
   nowhere.
@@ -96,29 +98,31 @@ and no assets.
 - The score counts tombs by net position: leaving a tomb through its exit
   door adds one, any other crossing into another tomb takes one away, and
   `TOMB n` shows the highest the run has reached. A walk back and forward adds
-  nothing, and no reload of a save made a step back raises it. Continue, and Y
-  at CONTINUE SLOT n?, keep the count and the start tomb. Each Continue after
-  the torch dies adds one to the run's continue count, shown on the pause and
-  end screens and at CONTINUE SLOT n?; pausing and resuming never add, and
-  BEGIN starts at 0.
+  nothing, and no reload of a save made a step back raises it. Continue, and a
+  load, keep the count and the start tomb. Each Continue after the torch dies
+  adds one to the run's continue count, shown on the pause and end screens;
+  pausing and resuming never add, and BEGIN starts at 0.
 
-The title opens on three save slots, each row showing its level, `TOMB n` and
-coins, and a `N NEW RUN` row. The arrows move the cursor and **Enter** plays
-the lit row; **1** to **3** play a slot at once. A used slot asks CONTINUE SLOT
-n?: **Y** or Enter restores its wallet and `TOMB n` at its own difficulty, and
-**N**, Esc or Q go back. An `EMPTY` slot opens NEW RUN bound to it, and the run
-saves there from its first coin or counted tomb. **N** opens NEW RUN unbound:
-that run plays unsaved, and its first coin or counted tomb asks SAVE IN? which
-slot to take, a used one only after OVERWRITE SLOT n? says yes. With no slot
-empty, **E** erases a used one after ERASE SLOT n? says yes. **P** resumes the
-run left by pause, or with none open plays the lit row; Esc is P's alias
-outside full screen. NEW RUN shows the seed: **Enter** begins at tomb (0, 0)'s
-first entry, **R** rolls a new seed, **T** takes a typed seed or save code, and
-**L** cycles the difficulty, Left and Right stepping it; **Q** goes back. A
-typed save code equal to a slot's serial asks CONTINUE SLOT n?. The pause and
-end screens' **C** copies the save code. The game keeps the three saves, the
-setting and the best per seed and difficulty in `localStorage`, and runs
-without them where storage is blocked. A save from before the slots moves to
+The title shows the seed: **Enter** or **Space** begins at tomb (0, 0)'s
+first entry, **R** rolls a new seed, **K** copies it, **L** cycles the
+difficulty, Left and Right stepping it, and **T** opens LOAD; Up and Down move
+the cursor between BEGIN and LOAD. A new run saves itself and play never stops
+for a slot: its first coin or counted tomb takes the lowest empty of three
+slots and says `SAVED IN SLOT n` for two seconds. With all three slots full,
+BEGIN first asks which one to overwrite, OVERWRITE SLOT n? confirms, and the
+old save stays whole until the new run's first coin or counted tomb. LOAD
+lists the three saves, each with its level, `TOMB n`, coins and the time since
+it was played: **Enter** or **1** to **3** load one at once at its own
+difficulty, the open run's own row resumes it, and `T TYPE A CODE` takes a
+typed seed or save code; a slot's own serial loads that slot. Beginning or
+loading over a run that holds coins or tombs but no save asks LEAVE UNSAVED
+RUN? first. A run left without a slot, as when another tab took its slot with
+all three full, says `NOT SAVED: PAUSE TO SAVE`, and its pause's **Enter**
+opens SAVE IN?. **P** resumes the run left by pause; Esc is P's alias outside
+full screen. The pause and end screens' **C** copies the save code. The game
+keeps the three saves, the setting and the best per seed and difficulty in
+`localStorage`, and runs without them where storage is blocked, the title
+reading `SAVES OFF: COPY YOUR CODE`. A save from before the slots moves to
 slot 1 once, wallet included; the old copy stays for an older build.
 
 ## Save codes
@@ -127,7 +131,7 @@ A save is the seed code and one integer: `K7Q2-M9XA:4813`. The integer pairs
 the signed coordinates of board `(x, y)`: with `z(n) = 2n` for `n >= 0`, else
 `-2n - 1`, `a = z(x)` and `b = z(y)`, `p = a >= b ? a*a + a + b : a + b*b`.
 Saves hold `|x|` and `|y|` below 2^25, and a code runs to 26 characters. A
-typed save code plays at NEW RUN's difficulty, and a slot's own serial at its
+typed save code plays at the title's difficulty, and a slot's own serial at its
 save's.
 Resuming regenerates that board from the seed and lights the torch to full.
 The explorer stands at the start of the board's way back along its route.
