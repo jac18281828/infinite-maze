@@ -246,7 +246,9 @@ export const saveKey = (n) => `infinite-maze.save.${n}`;
 export const MIGRATED_KEY = 'infinite-maze.save.migrated';
 
 // The record's fields in the order a write puts them; any other is unknown.
-const SAVE_FIELDS = ['v', 'id', 'save', 'level', 'start', 'net', 'high', 'wallet', 'continues', 'recent'];
+// `played`, the time of the record's last play write, is optional: a record
+// of revision 1's beta holds none.
+const SAVE_FIELDS = ['v', 'id', 'save', 'level', 'start', 'net', 'high', 'wallet', 'continues', 'recent', 'played'];
 const ABSENT = Object.freeze({ state: 'absent' });
 const NEWER = Object.freeze({ state: 'newer' });
 const DAMAGED = Object.freeze({ state: 'damaged' });
@@ -254,9 +256,9 @@ const DAMAGED = Object.freeze({ state: 'damaged' });
 /**
  * A save key's text in one of its four states: `absent` with no text; `newer`
  * for a JSON object whose `v` is an integer above SAVE_V; `valid` for a v 1
- * record whose every field is present and well typed with `net ≤ high`, its
- * fields as `record` and its unknown fields, as stored, as `extra`; and
- * `damaged` for anything else.
+ * record whose every field is present and well typed with `net ≤ high`, and
+ * whose `played`, when present, is a safe integer, its fields as `record` and
+ * its unknown fields, as stored, as `extra`; and `damaged` for anything else.
  */
 export function parseSave(text) {
   if (text === null || text === undefined) return ABSENT;
@@ -268,20 +270,59 @@ export function parseSave(text) {
     && typeof o.save === 'string' && decodeSave(o.save) !== null && Object.hasOwn(COIN_RATE, o.level)
     && typeof o.start === 'string' && TOMB_ID.test(o.start)
     && Number.isSafeInteger(o.net) && isCount(o.high) && o.net <= o.high && isCount(o.wallet) && isCount(o.continues)
-    && Array.isArray(o.recent) && parseRecent(o.recent).length === o.recent.length;
+    && Array.isArray(o.recent) && parseRecent(o.recent).length === o.recent.length
+    && (o.played === undefined || Number.isSafeInteger(o.played));
   if (!ok) return DAMAGED;
-  const { id, save, level, start, net, high, wallet, continues } = o;
+  const { id, save, level, start, net, high, wallet, continues, played } = o;
   return {
     state: 'valid',
-    record: { id, save, level, start, net, high, wallet, continues, recent: parseRecent(o.recent) },
+    record: { id, save, level, start, net, high, wallet, continues, recent: parseRecent(o.recent), ...(played === undefined ? {} : { played }) },
     extra: Object.fromEntries(Object.entries(o).filter(([k]) => !SAVE_FIELDS.includes(k))),
   };
 }
 
-/** The record as text: its fields in SAVE_FIELDS order, then the unknown fields `extra`. */
+/** The record as text: its fields in SAVE_FIELDS order, `played` only when set, then the unknown fields `extra`. */
 export function serializeSave(record, extra = {}) {
-  const { id, save, level, start, net, high, wallet, continues, recent } = record;
-  return JSON.stringify({ v: SAVE_V, id, save, level, start, net, high, wallet, continues, recent, ...extra });
+  const { id, save, level, start, net, high, wallet, continues, recent, played } = record;
+  return JSON.stringify({ v: SAVE_V, id, save, level, start, net, high, wallet, continues, recent, played, ...extra });
+}
+
+/**
+ * The time since a record's last play, `played`, at `now`, both in ms, in
+ * whole units rounded down: JUST NOW under a minute and ahead of the clock,
+ * then n MIN AGO, n HR AGO, 1 DAY AGO and n DAYS AGO under 100 days, then LONG
+ * AGO; '' without `played`.
+ */
+export function playedLabel(played, now) {
+  if (played === undefined) return '';
+  const s = Math.floor((now - played) / 1000);
+  if (s < 60) return 'JUST NOW';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} MIN AGO`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} HR AGO`;
+  const d = Math.floor(h / 24);
+  if (d < 100) return d === 1 ? '1 DAY AGO' : `${d} DAYS AGO`;
+  return 'LONG AGO';
+}
+
+/**
+ * The slot number, from 1, of the valid record among `helds` (parseSave
+ * results by slot) played most recently with `latest`, else least recently;
+ * null with none valid. A record without `played` ranks oldest, and a tie goes
+ * to the lower slot.
+ */
+export function playedSlot(helds, latest) {
+  let best = null, at = 0;
+  helds.forEach((held, i) => {
+    if (held.state !== 'valid') return;
+    const t = held.record.played ?? -Infinity;
+    if (best === null || (latest ? t > at : t < at)) {
+      best = i + 1;
+      at = t;
+    }
+  });
+  return best;
 }
 
 /**
@@ -299,9 +340,10 @@ export function risePay(level, paid, high) {
  * two tabs share. Wallet, high and continues merge by maximum, the run fields
  * are the writer's and the unknown fields the stored record's. The pay,
  * `coins` and the rise of `run.high` over the larger of `paid` and the stored
- * high, joins the merged wallet, so a rise pays once across tabs. Any other
- * key stores nothing and returns `ok` false, which unbinds the run. Returns
- * { ok, held, record, earned, seen }, `seen` being the high the pay rose from.
+ * high, joins the merged wallet, so a rise pays once across tabs; `played`,
+ * like every run field, is the writer's. Any other key stores nothing and
+ * returns `ok` false, which unbinds the run. Returns { ok, held, record,
+ * earned, seen }, `seen` being the high the pay rose from.
  */
 export function commitSave(io, key, run, { coins = 0, paid = run.high } = {}) {
   const held = parseSave(io.load(key));
@@ -320,7 +362,8 @@ export function commitSave(io, key, run, { coins = 0, paid = run.high } = {}) {
  * The binding write: takes save key `key` for `run` under its fresh id. A new
  * save inherits no unknown field from the one it replaces. With `over` null it
  * takes an absent or damaged key; with an id, the valid record under that id,
- * which OVERWRITE drew. Any other key stores nothing and returns `ok` false.
+ * which an OVERWRITE confirm drew. Any other key stores nothing and returns
+ * `ok` false, and so does a store that does not land, which takes nothing.
  * The pay, `coins` and the rise of `run.high` over `paid`, joins the run's
  * wallet. Returns { ok, held, record, earned, seen }.
  */
@@ -330,16 +373,8 @@ export function takeSave(io, key, run, { coins = 0, paid = run.high, over = null
   if (!free) return { ok: false, held };
   const earned = coins + risePay(run.level, paid, run.high);
   const record = { ...run, wallet: run.wallet + earned };
-  io.store(key, serializeSave(record));
+  if (!io.store(key, serializeSave(record))) return { ok: false, held };
   return { ok: true, held, record, earned, seen: paid };
-}
-
-/** ERASE: removes save key `key` when it holds the valid record under `id` the confirm drew. Returns { ok, held }. */
-export function eraseSave(io, key, id) {
-  const held = parseSave(io.load(key));
-  const ok = held.state === 'valid' && held.record.id === id;
-  if (ok) io.remove(key);
-  return { ok, held };
 }
 
 /**

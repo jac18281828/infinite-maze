@@ -218,25 +218,28 @@ const K = (code, key) => ({ code, key });
  * `state.rows`, in its order.
  */
 export const SOFT = {
+  // BEGIN sends Space, which begins wherever the title's cursor stands; Enter acts on the lit row.
   title: [
     { id: 'resume', label: 'RESUME', ...K('KeyP', 'p'), when: 'resume' },
+    { id: 'begin', label: 'BEGIN', ...K('Space', ' ') },
+    { id: 'reset', label: 'RESET', ...K('KeyR', 'r') },
+    { id: 'load', label: 'LOAD', ...K('KeyT', 't') },
+    { id: 'difficulty', label: 'MEDIUM', setting: true, ...K('KeyL', 'l') },
+    { id: 'copy', label: 'COPY', ...K('KeyK', 'k') },
+    { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
+    { id: 'pad', label: 'PAD LEFT', side: true, ...K('KeyH', 'h') },
+  ],
+  load: [
     { id: 's1', label: 'SLOT 1', ...K('Digit1', '1') },
     { id: 's2', label: 'SLOT 2', ...K('Digit2', '2') },
     { id: 's3', label: 'SLOT 3', ...K('Digit3', '3') },
-    { id: 'new', label: 'NEW RUN', ...K('KeyN', 'n') },
-    { id: 'erase', label: 'ERASE', ...K('KeyE', 'e'), when: 'erase' },
-  ],
-  erasing: [
-    { id: 'e1', label: 'ERASE 1', ...K('Digit1', '1'), row: 1 },
-    { id: 'e2', label: 'ERASE 2', ...K('Digit2', '2'), row: 2 },
-    { id: 'e3', label: 'ERASE 3', ...K('Digit3', '3'), row: 3 },
+    { id: 'type', label: 'TYPE CODE', act: 'type' },
     { id: 'back', label: 'BACK', ...K('KeyQ', 'q') },
   ],
-  newrun: [
-    { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },
-    { id: 'difficulty', label: 'MEDIUM', setting: true, ...K('KeyL', 'l') },
-    { id: 'seed', label: 'NEW SEED', ...K('KeyR', 'r') },
-    { id: 'type', label: 'TYPE CODE', act: 'type' },
+  pick: [
+    { id: 's1', label: 'SLOT 1', ...K('Digit1', '1') },
+    { id: 's2', label: 'SLOT 2', ...K('Digit2', '2') },
+    { id: 's3', label: 'SLOT 3', ...K('Digit3', '3') },
     { id: 'back', label: 'BACK', ...K('KeyQ', 'q') },
   ],
   typing: [
@@ -258,11 +261,10 @@ export const SOFT = {
   ],
   pause: [
     { id: 'resume', label: 'RESUME', ...K('KeyP', 'p') },
-    { id: 'save', label: 'SAVE', ...K('Enter', 'Enter'), when: 'unsaved' },
+    { id: 'save', label: 'SAVE', ...K('Enter', 'Enter'), when: 'save' },
     { id: 'copy', label: 'COPY', ...K('KeyC', 'c') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
     { id: 'title', label: 'TITLE', ...K('KeyQ', 'q') },
-    { id: 'pad', label: 'PAD LEFT', side: true, ...K('KeyH', 'h') },
   ],
   over: [
     { id: 'continue', label: 'CONTINUE', ...K('Enter', 'Enter') },
@@ -276,14 +278,13 @@ export const SOFT = {
 };
 
 /**
- * The table row for the game's state: 'confirm' is a confirm open on the slot
- * list or SAVE IN?, 'erasing' the slot list erasing and 'typing' NEW RUN with
- * its code field open.
+ * The table row for the game's state: 'confirm' is a confirm open on the
+ * title, LOAD, the pick or SAVE IN?, and 'typing' LOAD with its code field
+ * open.
  */
-export function screenId({ screen, typing, confirm, erasing }) {
-  if (confirm && (screen === 'title' || screen === 'savein')) return 'confirm';
-  if (screen === 'title' && erasing) return 'erasing';
-  if (screen === 'newrun' && typing) return 'typing';
+export function screenId({ screen, typing, confirm }) {
+  if (confirm && (screen === 'title' || screen === 'load' || screen === 'pick' || screen === 'savein')) return 'confirm';
+  if (screen === 'load' && typing) return 'typing';
   return screen;
 }
 
@@ -312,12 +313,13 @@ export function textWidth(str) {
 // in main.mjs). Overlay-mode keys stay in the strips outside it, so they
 // never cover the panel, the title's note line or its footer.
 export const PANEL_X = {
-  title: [62, 258], erasing: [62, 258], newrun: [62, 258], typing: [62, 258], confirm: [62, 258], savein: [62, 258],
+  title: [62, 258], load: [62, 258], pick: [62, 258], typing: [62, 258], confirm: [62, 258], savein: [62, 258],
   pause: [50, 270], over: [40, 280], splash: [50, 270],
 };
 
-// The screens that show the title's preview explorer in the left strip.
-const TITLE_SIDS = new Set(['title', 'erasing', 'newrun']);
+// The screens whose keys stand over the title's preview explorer in the left
+// strip. A confirm draws over it on the title, LOAD and the pick.
+const TITLE_SIDS = new Set(['title', 'load', 'pick', 'typing', 'confirm']);
 
 // The PAUSE key stands at the bottom centre, between the controls like a
 // console's START. Where that comes within GAP of the pad or the fire button
@@ -380,9 +382,9 @@ function grid(r, count) {
  * Rows sit GAP apart, closing to MIN_GAP before the keys wrap to another
  * column; a layout that fits at GAP keeps it. In overlay mode a screen whose
  * keys do not fit one column in one strip stands one column in each strip,
- * the first half of the keys left and the rest right. The slot list's and NEW
- * RUN's single column stands in the right strip, and a left column at the top
- * of its strip.
+ * the first half of the keys left and the rest right. Over the title's
+ * explorer a single column stands in the right strip, and a left column at the
+ * top of its strip.
  */
 export function keyRects(lay, sid, labels) {
   const n = labels.length;
@@ -495,9 +497,8 @@ function stopDoubleTapZoom() {
 
 /**
  * The controls. `state()` reports what the game shows: { screen, typing,
- * confirm, erasing, resume, erase, unsaved, rows, muted, difficulty, side },
- * `side` being the d-pad's and `rows` the slot digits a screen's row keys
- * follow. `onMode()` runs when touch mode changes, so the caller can refit the
+ * confirm, resume, save, rows, muted, difficulty, side }, `side` being the
+ * d-pad's and `rows` the slot digits a screen's row keys follow. `onMode()` runs when touch mode changes, so the caller can refit the
  * canvas through `relayout`.
  */
 export function createTouch({ state, onMode }) {
@@ -702,7 +703,7 @@ export function createTouch({ state, onMode }) {
     const st = state();
     if (st.side !== laySide) compute();
     // Every field softKeys reads, since a confirm's re-read changes the keys with no screen write.
-    const next = `${on}|${screenId(st)}|${st.resume}|${st.erase}|${st.unsaved}|${st.rows}|${st.muted}|${st.difficulty}|${st.side}`;
+    const next = `${on}|${screenId(st)}|${st.resume}|${st.save}|${st.rows}|${st.muted}|${st.difficulty}|${st.side}`;
     if (next !== sig) { sig = next; place(); }
     if (on && padEl.style.display === 'block') {
       const held = pad.held();

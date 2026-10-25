@@ -2070,7 +2070,9 @@ const saveKey = (n) => `infinite-maze.save.${n}`;
 const MIGRATED_KEY = 'infinite-maze.save.migrated';
 
 // The record's fields in the order a write puts them; any other is unknown.
-const SAVE_FIELDS = ['v', 'id', 'save', 'level', 'start', 'net', 'high', 'wallet', 'continues', 'recent'];
+// `played`, the time of the record's last play write, is optional: a record
+// of revision 1's beta holds none.
+const SAVE_FIELDS = ['v', 'id', 'save', 'level', 'start', 'net', 'high', 'wallet', 'continues', 'recent', 'played'];
 const ABSENT = Object.freeze({ state: 'absent' });
 const NEWER = Object.freeze({ state: 'newer' });
 const DAMAGED = Object.freeze({ state: 'damaged' });
@@ -2078,9 +2080,9 @@ const DAMAGED = Object.freeze({ state: 'damaged' });
 /**
  * A save key's text in one of its four states: `absent` with no text; `newer`
  * for a JSON object whose `v` is an integer above SAVE_V; `valid` for a v 1
- * record whose every field is present and well typed with `net ≤ high`, its
- * fields as `record` and its unknown fields, as stored, as `extra`; and
- * `damaged` for anything else.
+ * record whose every field is present and well typed with `net ≤ high`, and
+ * whose `played`, when present, is a safe integer, its fields as `record` and
+ * its unknown fields, as stored, as `extra`; and `damaged` for anything else.
  */
 function parseSave(text) {
   if (text === null || text === undefined) return ABSENT;
@@ -2092,20 +2094,59 @@ function parseSave(text) {
     && typeof o.save === 'string' && decodeSave(o.save) !== null && Object.hasOwn(COIN_RATE, o.level)
     && typeof o.start === 'string' && TOMB_ID.test(o.start)
     && Number.isSafeInteger(o.net) && isCount(o.high) && o.net <= o.high && isCount(o.wallet) && isCount(o.continues)
-    && Array.isArray(o.recent) && parseRecent(o.recent).length === o.recent.length;
+    && Array.isArray(o.recent) && parseRecent(o.recent).length === o.recent.length
+    && (o.played === undefined || Number.isSafeInteger(o.played));
   if (!ok) return DAMAGED;
-  const { id, save, level, start, net, high, wallet, continues } = o;
+  const { id, save, level, start, net, high, wallet, continues, played } = o;
   return {
     state: 'valid',
-    record: { id, save, level, start, net, high, wallet, continues, recent: parseRecent(o.recent) },
+    record: { id, save, level, start, net, high, wallet, continues, recent: parseRecent(o.recent), ...(played === undefined ? {} : { played }) },
     extra: Object.fromEntries(Object.entries(o).filter(([k]) => !SAVE_FIELDS.includes(k))),
   };
 }
 
-/** The record as text: its fields in SAVE_FIELDS order, then the unknown fields `extra`. */
+/** The record as text: its fields in SAVE_FIELDS order, `played` only when set, then the unknown fields `extra`. */
 function serializeSave(record, extra = {}) {
-  const { id, save, level, start, net, high, wallet, continues, recent } = record;
-  return JSON.stringify({ v: SAVE_V, id, save, level, start, net, high, wallet, continues, recent, ...extra });
+  const { id, save, level, start, net, high, wallet, continues, recent, played } = record;
+  return JSON.stringify({ v: SAVE_V, id, save, level, start, net, high, wallet, continues, recent, played, ...extra });
+}
+
+/**
+ * The time since a record's last play, `played`, at `now`, both in ms, in
+ * whole units rounded down: JUST NOW under a minute and ahead of the clock,
+ * then n MIN AGO, n HR AGO, 1 DAY AGO and n DAYS AGO under 100 days, then LONG
+ * AGO; '' without `played`.
+ */
+function playedLabel(played, now) {
+  if (played === undefined) return '';
+  const s = Math.floor((now - played) / 1000);
+  if (s < 60) return 'JUST NOW';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} MIN AGO`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} HR AGO`;
+  const d = Math.floor(h / 24);
+  if (d < 100) return d === 1 ? '1 DAY AGO' : `${d} DAYS AGO`;
+  return 'LONG AGO';
+}
+
+/**
+ * The slot number, from 1, of the valid record among `helds` (parseSave
+ * results by slot) played most recently with `latest`, else least recently;
+ * null with none valid. A record without `played` ranks oldest, and a tie goes
+ * to the lower slot.
+ */
+function playedSlot(helds, latest) {
+  let best = null, at = 0;
+  helds.forEach((held, i) => {
+    if (held.state !== 'valid') return;
+    const t = held.record.played ?? -Infinity;
+    if (best === null || (latest ? t > at : t < at)) {
+      best = i + 1;
+      at = t;
+    }
+  });
+  return best;
 }
 
 /**
@@ -2123,9 +2164,10 @@ function risePay(level, paid, high) {
  * two tabs share. Wallet, high and continues merge by maximum, the run fields
  * are the writer's and the unknown fields the stored record's. The pay,
  * `coins` and the rise of `run.high` over the larger of `paid` and the stored
- * high, joins the merged wallet, so a rise pays once across tabs. Any other
- * key stores nothing and returns `ok` false, which unbinds the run. Returns
- * { ok, held, record, earned, seen }, `seen` being the high the pay rose from.
+ * high, joins the merged wallet, so a rise pays once across tabs; `played`,
+ * like every run field, is the writer's. Any other key stores nothing and
+ * returns `ok` false, which unbinds the run. Returns { ok, held, record,
+ * earned, seen }, `seen` being the high the pay rose from.
  */
 function commitSave(io, key, run, { coins = 0, paid = run.high } = {}) {
   const held = parseSave(io.load(key));
@@ -2144,7 +2186,8 @@ function commitSave(io, key, run, { coins = 0, paid = run.high } = {}) {
  * The binding write: takes save key `key` for `run` under its fresh id. A new
  * save inherits no unknown field from the one it replaces. With `over` null it
  * takes an absent or damaged key; with an id, the valid record under that id,
- * which OVERWRITE drew. Any other key stores nothing and returns `ok` false.
+ * which an OVERWRITE confirm drew. Any other key stores nothing and returns
+ * `ok` false, and so does a store that does not land, which takes nothing.
  * The pay, `coins` and the rise of `run.high` over `paid`, joins the run's
  * wallet. Returns { ok, held, record, earned, seen }.
  */
@@ -2154,16 +2197,8 @@ function takeSave(io, key, run, { coins = 0, paid = run.high, over = null } = {}
   if (!free) return { ok: false, held };
   const earned = coins + risePay(run.level, paid, run.high);
   const record = { ...run, wallet: run.wallet + earned };
-  io.store(key, serializeSave(record));
+  if (!io.store(key, serializeSave(record))) return { ok: false, held };
   return { ok: true, held, record, earned, seen: paid };
-}
-
-/** ERASE: removes save key `key` when it holds the valid record under `id` the confirm drew. Returns { ok, held }. */
-function eraseSave(io, key, id) {
-  const held = parseSave(io.load(key));
-  const ok = held.state === 'valid' && held.record.id === id;
-  if (ok) io.remove(key);
-  return { ok, held };
 }
 
 /**
@@ -2187,7 +2222,7 @@ function migrateSaves(io) {
   for (const k of Object.values(LEGACY_KEYS)) io.remove(k);
   return true;
 }
-return { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, newSlotId, parseSlot, tombItems, packRecent, unpackRecent, legacySlot, SAVE_V, SAVE_SLOTS, saveKey, MIGRATED_KEY, parseSave, serializeSave, risePay, commitSave, takeSave, eraseSave, migrateSaves };
+return { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, newSlotId, parseSlot, tombItems, packRecent, unpackRecent, legacySlot, SAVE_V, SAVE_SLOTS, saveKey, MIGRATED_KEY, parseSave, serializeSave, playedLabel, playedSlot, risePay, commitSave, takeSave, migrateSaves };
 })();
 
 // src/game/sim.mjs
@@ -6041,25 +6076,28 @@ const K = (code, key) => ({ code, key });
  * `state.rows`, in its order.
  */
 const SOFT = {
+  // BEGIN sends Space, which begins wherever the title's cursor stands; Enter acts on the lit row.
   title: [
     { id: 'resume', label: 'RESUME', ...K('KeyP', 'p'), when: 'resume' },
+    { id: 'begin', label: 'BEGIN', ...K('Space', ' ') },
+    { id: 'reset', label: 'RESET', ...K('KeyR', 'r') },
+    { id: 'load', label: 'LOAD', ...K('KeyT', 't') },
+    { id: 'difficulty', label: 'MEDIUM', setting: true, ...K('KeyL', 'l') },
+    { id: 'copy', label: 'COPY', ...K('KeyK', 'k') },
+    { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
+    { id: 'pad', label: 'PAD LEFT', side: true, ...K('KeyH', 'h') },
+  ],
+  load: [
     { id: 's1', label: 'SLOT 1', ...K('Digit1', '1') },
     { id: 's2', label: 'SLOT 2', ...K('Digit2', '2') },
     { id: 's3', label: 'SLOT 3', ...K('Digit3', '3') },
-    { id: 'new', label: 'NEW RUN', ...K('KeyN', 'n') },
-    { id: 'erase', label: 'ERASE', ...K('KeyE', 'e'), when: 'erase' },
-  ],
-  erasing: [
-    { id: 'e1', label: 'ERASE 1', ...K('Digit1', '1'), row: 1 },
-    { id: 'e2', label: 'ERASE 2', ...K('Digit2', '2'), row: 2 },
-    { id: 'e3', label: 'ERASE 3', ...K('Digit3', '3'), row: 3 },
+    { id: 'type', label: 'TYPE CODE', act: 'type' },
     { id: 'back', label: 'BACK', ...K('KeyQ', 'q') },
   ],
-  newrun: [
-    { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },
-    { id: 'difficulty', label: 'MEDIUM', setting: true, ...K('KeyL', 'l') },
-    { id: 'seed', label: 'NEW SEED', ...K('KeyR', 'r') },
-    { id: 'type', label: 'TYPE CODE', act: 'type' },
+  pick: [
+    { id: 's1', label: 'SLOT 1', ...K('Digit1', '1') },
+    { id: 's2', label: 'SLOT 2', ...K('Digit2', '2') },
+    { id: 's3', label: 'SLOT 3', ...K('Digit3', '3') },
     { id: 'back', label: 'BACK', ...K('KeyQ', 'q') },
   ],
   typing: [
@@ -6081,11 +6119,10 @@ const SOFT = {
   ],
   pause: [
     { id: 'resume', label: 'RESUME', ...K('KeyP', 'p') },
-    { id: 'save', label: 'SAVE', ...K('Enter', 'Enter'), when: 'unsaved' },
+    { id: 'save', label: 'SAVE', ...K('Enter', 'Enter'), when: 'save' },
     { id: 'copy', label: 'COPY', ...K('KeyC', 'c') },
     { id: 'sound', label: 'SOUND', alt: 'MUTED', ...K('KeyM', 'm') },
     { id: 'title', label: 'TITLE', ...K('KeyQ', 'q') },
-    { id: 'pad', label: 'PAD LEFT', side: true, ...K('KeyH', 'h') },
   ],
   over: [
     { id: 'continue', label: 'CONTINUE', ...K('Enter', 'Enter') },
@@ -6099,14 +6136,13 @@ const SOFT = {
 };
 
 /**
- * The table row for the game's state: 'confirm' is a confirm open on the slot
- * list or SAVE IN?, 'erasing' the slot list erasing and 'typing' NEW RUN with
- * its code field open.
+ * The table row for the game's state: 'confirm' is a confirm open on the
+ * title, LOAD, the pick or SAVE IN?, and 'typing' LOAD with its code field
+ * open.
  */
-function screenId({ screen, typing, confirm, erasing }) {
-  if (confirm && (screen === 'title' || screen === 'savein')) return 'confirm';
-  if (screen === 'title' && erasing) return 'erasing';
-  if (screen === 'newrun' && typing) return 'typing';
+function screenId({ screen, typing, confirm }) {
+  if (confirm && (screen === 'title' || screen === 'load' || screen === 'pick' || screen === 'savein')) return 'confirm';
+  if (screen === 'load' && typing) return 'typing';
   return screen;
 }
 
@@ -6135,12 +6171,13 @@ function textWidth(str) {
 // in main.mjs). Overlay-mode keys stay in the strips outside it, so they
 // never cover the panel, the title's note line or its footer.
 const PANEL_X = {
-  title: [62, 258], erasing: [62, 258], newrun: [62, 258], typing: [62, 258], confirm: [62, 258], savein: [62, 258],
+  title: [62, 258], load: [62, 258], pick: [62, 258], typing: [62, 258], confirm: [62, 258], savein: [62, 258],
   pause: [50, 270], over: [40, 280], splash: [50, 270],
 };
 
-// The screens that show the title's preview explorer in the left strip.
-const TITLE_SIDS = new Set(['title', 'erasing', 'newrun']);
+// The screens whose keys stand over the title's preview explorer in the left
+// strip. A confirm draws over it on the title, LOAD and the pick.
+const TITLE_SIDS = new Set(['title', 'load', 'pick', 'typing', 'confirm']);
 
 // The PAUSE key stands at the bottom centre, between the controls like a
 // console's START. Where that comes within GAP of the pad or the fire button
@@ -6203,9 +6240,9 @@ function grid(r, count) {
  * Rows sit GAP apart, closing to MIN_GAP before the keys wrap to another
  * column; a layout that fits at GAP keeps it. In overlay mode a screen whose
  * keys do not fit one column in one strip stands one column in each strip,
- * the first half of the keys left and the rest right. The slot list's and NEW
- * RUN's single column stands in the right strip, and a left column at the top
- * of its strip.
+ * the first half of the keys left and the rest right. Over the title's
+ * explorer a single column stands in the right strip, and a left column at the
+ * top of its strip.
  */
 function keyRects(lay, sid, labels) {
   const n = labels.length;
@@ -6318,9 +6355,8 @@ function stopDoubleTapZoom() {
 
 /**
  * The controls. `state()` reports what the game shows: { screen, typing,
- * confirm, erasing, resume, erase, unsaved, rows, muted, difficulty, side },
- * `side` being the d-pad's and `rows` the slot digits a screen's row keys
- * follow. `onMode()` runs when touch mode changes, so the caller can refit the
+ * confirm, resume, save, rows, muted, difficulty, side }, `side` being the
+ * d-pad's and `rows` the slot digits a screen's row keys follow. `onMode()` runs when touch mode changes, so the caller can refit the
  * canvas through `relayout`.
  */
 function createTouch({ state, onMode }) {
@@ -6525,7 +6561,7 @@ function createTouch({ state, onMode }) {
     const st = state();
     if (st.side !== laySide) compute();
     // Every field softKeys reads, since a confirm's re-read changes the keys with no screen write.
-    const next = `${on}|${screenId(st)}|${st.resume}|${st.erase}|${st.unsaved}|${st.rows}|${st.muted}|${st.difficulty}|${st.side}`;
+    const next = `${on}|${screenId(st)}|${st.resume}|${st.save}|${st.rows}|${st.muted}|${st.difficulty}|${st.side}`;
     if (next !== sig) { sig = next; place(); }
     if (on && padEl.style.display === 'block') {
       const held = pad.held();
@@ -6698,7 +6734,7 @@ const { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY } = __m11;
 const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas } = __m18;
 const { createAudio } = __m19;
 const { runScript, createAutopilot, SELFTEST_CODE } = __m20;
-const { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, coinKey, coinId, newSlotId, packRecent, unpackRecent, SAVE_SLOTS, MIGRATED_KEY, saveKey, parseSave, serializeSave, risePay, commitSave, takeSave, eraseSave, migrateSaves } = __m9;
+const { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, coinKey, coinId, newSlotId, packRecent, unpackRecent, SAVE_SLOTS, MIGRATED_KEY, saveKey, parseSave, serializeSave, risePay, commitSave, takeSave, migrateSaves, playedLabel, playedSlot } = __m9;
 const { createGamepad } = __m21;
 const { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } = __m22;
 const { MILESTONE, rankName } = __m8;
@@ -6707,9 +6743,9 @@ const { createGuard, errorLine } = __m24;
 const { createStorage } = __m25;
 const { frameOf, panFrame, sameFrame, mapModel, mapCells } = __m17;
 const { RGB, idx, PALETTE, COIN, FONT_W } = __m12;
-// Boot, input, the fixed 60 Hz loop and the slot list, NEW RUN, play, SAVE IN?,
-// pause, end and milestone splash screens. `#selftest` in the URL runs the
-// self-test instead.
+// Boot, input, the fixed 60 Hz loop and the title, LOAD, the overwrite pick,
+// play, pause and its SAVE IN?, end and milestone splash screens. `#selftest`
+// in the URL runs the self-test instead.
 
 
 
@@ -6744,10 +6780,16 @@ const SELFTEST = location.hash === '#selftest';
 // The self-test keeps its storage in memory for the page's lifetime, so it
 // never reads or writes the player's wallet, saves or settings.
 const memory = SELFTEST ? new Map() : null;
+// The self-test's switch for storage that refuses writes, as full storage does:
+// reads still answer, and a free key still reads absent.
+let refuseWrites = false;
 
 const memoryArea = memory && {
   getItem: (key) => (memory.has(key) ? memory.get(key) : null),
-  setItem: (key, value) => { memory.set(key, String(value)); },
+  setItem: (key, value) => {
+    if (refuseWrites) throw new Error('storage refuses writes');
+    memory.set(key, String(value));
+  },
   removeItem: (key) => { memory.delete(key); },
 };
 // Every storage access is guarded; the game runs without storage.
@@ -6791,8 +6833,8 @@ function storedDifficulty(key, fallback) {
   return DIFFICULTIES.includes(d) ? d : fallback;
 }
 
-// Each save key as last parsed, keyed by the raw text it came from: the slot
-// list reads all three every frame.
+// Each save key as last parsed, keyed by the raw text it came from: LOAD and
+// the pick read all three every frame.
 const parsedSaves = SAVE_SLOTS.map(() => ({ raw: undefined, held: null }));
 
 /** Slot n's key in one of its four states (parseSave). Callers never change the result. */
@@ -6808,23 +6850,18 @@ function heldSave(n) {
 /** True for a key a run takes without asking: absent or damaged. */
 const isFree = (held) => held.state === 'absent' || held.state === 'damaged';
 
-/** True while ERASE shows: no slot empty or damaged, and one at least used. */
-function eraseShows() {
-  let used = false;
-  for (const n of SAVE_SLOTS) {
-    const held = heldSave(n);
-    if (isFree(held)) return false;
-    if (held.state === 'valid') used = true;
-  }
-  return used;
-}
+/** The lowest-numbered free slot, read now, or undefined with none. */
+const freeSlot = () => SAVE_SLOTS.find((k) => isFree(heldSave(k)));
 
-/** The used slots in row order, as digits: the rows erasing visits. */
-function usedRows() {
-  let out = '';
-  for (const n of SAVE_SLOTS) if (heldSave(n).state === 'valid') out += n;
-  return out;
-}
+/** True while every slot reads NEWER. */
+const allNewer = () => SAVE_SLOTS.every((k) => heldSave(k).state === 'newer');
+
+/**
+ * True while a slot can take a write: the latest store landed and one slot at
+ * least reads other than NEWER. With none writable a run plays unsaved and no
+ * slot question asks.
+ */
+const writable = () => !storage.failed() && !allNewer();
 
 // What a slot row reads when it holds no record this build can play.
 const ROW_LABEL = { absent: 'EMPTY', damaged: 'DAMAGED', newer: 'NEWER' };
@@ -6838,64 +6875,140 @@ function pointOf(g, at) {
 }
 
 /**
- * The run's record at `point`. A dead run writes the count any continuation
- * of it carries: its own plus one. Every record carries the takes of the
- * run's recent tombs.
+ * The run's record at `point`, played now. A dead run writes the count any
+ * continuation of it carries: its own plus one. Every record carries the takes
+ * of the run's recent tombs.
  */
 function runState(g, point) {
   const { high, continues, state } = g.sim;
   return {
     id: g.saveId, save: point.save, level: g.world.difficulty, start: point.start, net: point.net, high,
     wallet: g.wallet, continues: state === 'over' ? continues + 1 : continues, recent: packRecent(g.world, g.sim),
+    played: Date.now(),
   };
 }
 
-/** The run plays on unsaved: no slot and no save, and its next coin or counted tomb asks SAVE IN? again. */
+// The note's two seconds, in ticks of play.
+const NOTE_TICKS = 120;
+const NOT_SAVED = 'NOT SAVED: PAUSE TO SAVE';
+
+/** Shows `text` in play for NOTE_TICKS ticks, in ink `ink`, replacing any note. */
+function setNote(g, text, ink) {
+  Object.assign(g, { noteText: text, noteInk: ink, noteTicks: NOTE_TICKS });
+}
+
+/** The run holds no slot. Its next write takes none by itself: a caller applies the free-slot rule. */
 function unbind(g) {
-  Object.assign(g, { slot: null, saveId: null, point: null, asked: false });
+  Object.assign(g, { slot: null, saveId: null, point: null, mark: null, armed: false });
 }
 
 /** An unsaved run's pay, in memory: the tick's `coins` and the rise of the high over `was`. */
 function payInMemory(g, coins, was) {
   const earned = coins + risePay(g.world.difficulty, was, tombCount(g.sim));
   g.wallet += earned;
-  return { ok: false, earned, seen: was };
+  return { earned, seen: was };
 }
 
-/**
- * Writes the run's record at `point` to its slot, paying the tick's `coins`
- * and the rise of the high over `was`, and returns the write's result with
- * the pay's `earned` and `seen`. A run holding no save takes its slot: a free
- * one, or with `over` the record OVERWRITE drew. A run holding a save writes
- * it only while the slot holds that save. A write that finds anything else
- * stores nothing and leaves the run unsaved, paid in memory. A live run adopts
- * the merged continue count; a dead run keeps its own, so every write on one
- * death stores one rise.
- */
-function commit(g, point, { coins = 0, was = tombCount(g.sim), over = null } = {}) {
-  const key = saveKey(g.slot), run = runState(g, point), pay = { coins, paid: was };
-  const out = g.saveId === null ? takeSave(slotIo, key, { ...run, id: newSlotId() }, { ...pay, over }) : commitSave(slotIo, key, run, pay);
-  if (!out.ok) {
-    unbind(g);
-    return { ...payInMemory(g, coins, was), held: out.held };
-  }
+/** The run adopts write `out` at `point`: its id, wallet, the merged high and, while live, the merged continue count. */
+function adopt(g, out, point) {
   g.saveId = out.record.id;
   g.point = point;
   g.wallet = out.record.wallet;
   g.sim.high = out.record.high;
   if (g.sim.state !== 'over') g.sim.continues = out.record.continues;
+}
+
+/**
+ * Takes slot n for the run at `point` under a fresh id, paying the tick's
+ * `coins` and the rise of the high over `was`: a free slot, or with `over` the
+ * valid record under that id. A take that finds anything else, or whose store
+ * does not land, binds nothing. Returns the take's result.
+ */
+function take(g, n, point, { coins = 0, was = tombCount(g.sim), over = null } = {}) {
+  const out = takeSave(slotIo, saveKey(n), { ...runState(g, point), id: newSlotId() }, { coins, paid: was, over });
+  if (out.ok) {
+    Object.assign(g, { slot: n, mark: null, armed: false });
+    adopt(g, out, point);
+  }
   return out;
 }
 
 /**
- * The one writer that moves the run's serial. Save point `at` is one value
- * holding a board and the net there, so no write pairs a serial with another
- * moment's net. A run holding no save writes only to take its slot (`bind`,
- * with `over` for OVERWRITE); before then it writes nothing.
+ * The free-slot rule at `point`: re-reads the slots and takes the lowest free
+ * one, noting SAVED IN SLOT n. With all three full the run plays on unsaved,
+ * noting NOT SAVED: PAUSE TO SAVE, and writes nothing more by itself. With no
+ * slot writable, and after a take whose store did not land, it binds nothing
+ * and notes nothing. Returns the pay.
  */
-function writeAt(g, at, { bind = null, coins = 0, was = tombCount(g.sim) } = {}) {
-  if (g.saveId === null && bind === null) return null;
-  return commit(g, pointOf(g, at), { coins, was, over: bind && bind.over ? bind.over : null });
+function takeFree(g, point, { coins = 0, was = tombCount(g.sim) } = {}) {
+  if (!writable()) return payInMemory(g, coins, was);
+  const n = freeSlot();
+  if (n === undefined) {
+    g.armed = false;
+    setNote(g, NOT_SAVED, 'o');
+    return payInMemory(g, coins, was);
+  }
+  const out = take(g, n, point, { coins, was });
+  if (!out.ok) return payInMemory(g, coins, was);
+  setNote(g, `SAVED IN SLOT ${n}`, 'm');
+  return out;
+}
+
+/**
+ * The marked run's first write at `point`: it re-reads its slot, and the
+ * record the confirm drew means overwrite; anything else falls back to the
+ * free-slot rule. With no slot writable it binds nothing and keeps the mark.
+ */
+function markWrite(g, point, pay) {
+  if (!writable()) return payInMemory(g, pay.coins, pay.was);
+  const { n, id } = g.mark, held = heldSave(n);
+  if (held.state !== 'valid' || held.record.id !== id) {
+    g.mark = null;
+    return takeFree(g, point, pay);
+  }
+  const out = take(g, n, point, { ...pay, over: id });
+  if (!out.ok) return payInMemory(g, pay.coins, pay.was);
+  setNote(g, `SAVED IN SLOT ${n}`, 'm');
+  return out;
+}
+
+/**
+ * Writes the bound run's record at `point` to its slot, paying the tick's
+ * `coins` and the rise of the high over `was`, and returns the write's result
+ * with the pay's `earned` and `seen`. A slot holding another save, none or a
+ * newer build's is taken under the run: the run unbinds and the free-slot rule
+ * applies at once, at the same point. A live run adopts the merged continue
+ * count; a dead run keeps its own, so every write on one death stores one rise.
+ */
+function commit(g, point, { coins = 0, was = tombCount(g.sim) } = {}) {
+  const out = commitSave(slotIo, saveKey(g.slot), runState(g, point), { coins, paid: was });
+  if (!out.ok) {
+    unbind(g);
+    return takeFree(g, point, { coins, was });
+  }
+  adopt(g, out, point);
+  return out;
+}
+
+/**
+ * The one writer that moves a bound run's serial. Save point `at` is one value
+ * holding a board and the net there, so no write pairs a serial with another
+ * moment's net. A run holding no slot writes nothing here.
+ */
+function writeAt(g, at, pay = {}) {
+  if (g.saveId === null) return null;
+  return commit(g, pointOf(g, at), pay);
+}
+
+/**
+ * An unbound run's coin or counted tomb at `point`: a marked run writes its
+ * mark, a run with the free-slot rule armed takes the lowest free slot, and
+ * any other pays in memory.
+ */
+function claim(g, point, { coins, was }) {
+  if (g.mark) return markWrite(g, point, { coins, was });
+  if (g.armed) return takeFree(g, point, { coins, was });
+  return payInMemory(g, coins, was);
 }
 
 /** Draws the overlay over the display at whole game px. */
@@ -7043,7 +7156,7 @@ function driveTouch(copied, fake) {
   need(g.code === 'K7Q2M9XA' && saveNow(1).wallet === 300, 'the title shows the slot\'s seed and boot leaves the slot');
   need(g.difficulty === 'medium' && g.world.difficulty === 'medium', 'a new player starts at MEDIUM');
   need(touch && !touch.on, 'starts in keyboard mode');
-  need(touch.soft('title', 'new').getBoundingClientRect().width === 0, 'controls hidden in keyboard mode');
+  need(touch.soft('title', 'begin').getBoundingClientRect().width === 0, 'controls hidden in keyboard mode');
   // A dispatched click fires on a hidden button, so a control must have a box first.
   const live = (el, what) => {
     const r = el.getBoundingClientRect();
@@ -7098,11 +7211,13 @@ function driveTouch(copied, fake) {
     fire('touchstart', start);
     return fire('touchend', end);
   };
+  // LOAD from the title, whatever screen the last step left.
+  const toLoad = () => { toTitle(g); draw(g, 0); click('title', 'load'); };
 
   // Mode switch and canvas size.
   pointer('pointerdown', display, 10, 10);
   need(touch.on, 'a touch pointerdown turns touch mode on');
-  live(touch.soft('title', 'new'), 'title/new');
+  live(touch.soft('title', 'begin'), 'title/begin');
   const lay = layout({ ...viewport(), touch: true });
   // The preview's feet as the scene draws them, in view px.
   const [fx, fy] = feet(g.preview), [wantX, wantY] = titleFeet(lay);
@@ -7115,34 +7230,39 @@ function driveTouch(copied, fake) {
   const box = display.getBoundingClientRect();
   need(Math.abs(box.width - lay.view.w) <= 1 / 64 && Math.abs(box.height - lay.view.h) <= 1 / 64, 'canvas CSS size follows the layout');
 
-  // The slot list: its cursor starts on the first used slot, ERASE stays hidden while a slot is empty, and
-  // RESUME with no run open.
-  need(g.screen === 'title' && g.cursor === 0, 'the slot list\'s cursor starts on the first used slot');
-  for (const id of ['s1', 's2', 's3', 'new']) live(touch.soft('title', id), `title/${id}`);
-  need(touch.soft('title', 'erase').getBoundingClientRect().width === 0 && touch.soft('title', 'resume').getBoundingClientRect().width === 0,
-    'the slot list hides ERASE beside an empty slot and RESUME with no run open');
-  click('title', 'new');
-  need(g.screen === 'newrun' && g.bind === null, 'NEW RUN opens unbound from the NEW RUN key');
-
-  // NEW RUN.
+  // Title: its cursor lights BEGIN, and K copies the shown seed.
+  need(g.screen === 'title' && g.cursor === BEGIN_ROW, 'the title\'s cursor lights ENTER BEGIN');
   const rolled = g.code;
-  click('newrun', 'seed');
-  need(g.code !== rolled, 'NEW SEED changes the code');
+  click('title', 'reset');
+  need(g.code !== rolled, 'RESET changes the code');
+  toggles('title');
+  const sound = touch.soft('title', 'sound'), soundArt = sound.querySelector('canvas'), muted = g.audio.muted;
+  need(!touchTap(display, 1000, 1100), 'a lone tap on the view is left to the browser');
+  need(touchTap(display, 1400, 1900), 'a tap starting 300 ms after a lift is cancelled, however long it is held');
+  need(!touchTap(soundArt, 3000, 3100) && g.audio.muted === muted, 'a lone tap on a key is left to the browser');
+  need(touchTap(soundArt, 3400, 3500) && g.audio.muted !== muted, 'a quick second tap on a key is cancelled and clicks it');
+  need(touchTap(soundArt, 3800, 3900, display) && g.audio.muted !== muted, 'a quick second tap lifted off its key clicks nothing');
+  click('title', 'sound');
+  copies('title', formatCode(g.code));
+  // LOAD's TYPE CODE takes a pasted seed, which returns to the title.
   withPrompt('K7Q2-M9XA', () => {
-    click('newrun', 'type');
+    toLoad();
+    click('load', 'type');
     need(g.code === 'K7Q2M9XA' && g.typing === null, 'TYPE CODE takes the answer');
   });
   withPrompt(null, () => {
-    click('newrun', 'type');
+    toLoad();
+    click('load', 'type');
     need(g.code === 'K7Q2M9XA' && g.typing === null, 'TYPE CODE cancel keeps the code and closes typing');
   });
 
   // Typing.
+  toLoad();
   press('KeyT', 't');
   draw(g, 0);
   need(g.typing !== null, 'KeyT opens typing');
   press('KeyP', 'p');
-  need(g.screen === 'newrun' && g.typing === 'P', 'P types a letter in the code field');
+  need(g.screen === 'load' && g.typing === 'P', 'P types a letter in the code field');
   const side = g.side;
   press('KeyH', 'h');
   need(g.typing === 'PH' && g.side === side, 'H types a letter in the code field');
@@ -7155,7 +7275,9 @@ function driveTouch(copied, fake) {
   need(g.code === '7ZZ01111' && g.typing === null, 'ACCEPT takes the typed code');
 
   // Play.
-  click('newrun', 'begin');
+  toTitle(g);
+  draw(g, 0);
+  click('title', 'begin');
   need(g.screen === 'play', 'BEGIN reaches play');
   const pad = touch.padEl;
   const r = live(pad, 'pad');
@@ -7205,19 +7327,7 @@ function driveTouch(copied, fake) {
   press('KeyS', 's');
   need(framed(0, 0), 'D and S pan one tomb right and down');
   toggles('pause');
-  const sound = touch.soft('pause', 'sound'), soundArt = sound.querySelector('canvas'), muted = g.audio.muted;
-  need(!touchTap(display, 1000, 1100), 'a lone tap on the view is left to the browser');
-  need(touchTap(display, 1400, 1900), 'a tap starting 300 ms after a lift is cancelled, however long it is held');
-  need(!touchTap(soundArt, 3000, 3100) && g.audio.muted === muted, 'a lone tap on a key is left to the browser');
-  need(touchTap(soundArt, 3400, 3500) && g.audio.muted !== muted, 'a quick second tap on a key is cancelled and clicks it');
-  need(touchTap(soundArt, 3800, 3900, display) && g.audio.muted !== muted, 'a quick second tap lifted off its key clicks nothing');
-  click('pause', 'sound');
   copies('pause', hereCode(g));
-  // H swaps the pad's side on pause and ignores a repeat; PAD does what H does.
-  const sideNow = g.side;
-  press('KeyH', 'h', true);
-  need(g.side === sideNow && load(KEY_PAD) === sideNow, 'pause ignores an auto-repeated H');
-  click('pause', 'pad');
   const before = pauseModel(g).explorer;
   // A pan before RESUME must not outlast the pause.
   press('ArrowUp', 'ArrowUp');
@@ -7241,14 +7351,12 @@ function driveTouch(copied, fake) {
   click('pause', 'title');
   need(g.screen === 'title', 'TITLE reaches the title');
 
-  // Resume the open run: NEW RUN's keys change only the title's preview.
-  click('title', 'new');
-  click('newrun', 'difficulty');
+  // Resume the open run: the title's keys change only its preview.
+  click('title', 'difficulty');
   need(g.world !== runWorld && g.difficulty !== runWorld.difficulty, 'the difficulty key rebuilds the preview');
-  click('newrun', 'seed');
-  need(g.code !== runCode, 'NEW SEED changes the preview\'s seed');
-  click('newrun', 'back');
-  need(g.screen === 'title' && g.bind === null, 'BACK returns from NEW RUN to the slot list');
+  click('title', 'reset');
+  need(g.code !== runCode, 'RESET changes the preview\'s seed');
+  click('title', 'pad');
   click('title', 'resume');
   need(g.confirm === null, 'RESUME of an open run continues without asking');
   need(g.screen === 'play' && g.sim === run && g.world === runWorld && g.code === runCode, 'pause, TITLE and RESUME return to the same run');
@@ -7300,25 +7408,7 @@ function driveTouch(copied, fake) {
   need(g.screen === 'title', 'the end screen TITLE reaches the title');
 
   // Each flow's leg runs before any later leg that leans on its rule, so a rule broken fails in its own leg.
-  const legs = { need, click, press, offEntry };
-  emptyRowLeg(g, legs);
-  difficultyLeg(g, legs);
-  coinLeg(g, legs);
-  twoGamesLeg(g, legs);
-  splashLeg(g, legs);
-  resumeLeg(g, legs);
-  continueLeg(g, legs);
-  otherTabLeg(g, legs);
-  saveInLeg(g, legs);
-  eraseLeg(g, legs);
-  rereadLeg(g, legs);
-  farmLeg(g, legs);
-  damagedLeg(g, legs);
-  newerLeg(g, legs);
-  restoreLeg(g, legs);
-  legacyLeg(g, legs);
-  oilLeg(g, legs);
-  gamepadLeg(g, { ...legs, fake });
+  for (const leg of LEGS) leg(g, { need, click, press, offEntry, fake });
 
   // Leave the self-test script's run paused on screen for the screenshot,
   // in the 6x4 world the script was written for.
@@ -7340,18 +7430,18 @@ function driveTouch(copied, fake) {
   need(RGB[idx('p')].every((v, i) => dot[i] === v), 'the pause map shows the explorer first');
 }
 
-/** The touch leg's difficulty steps, from the slot list with no run open. */
+/** The touch leg's difficulty steps, from the title with no run open. */
 function difficultyLeg(g, { need, click, press, offEntry }) {
   const sized = (d) => g.difficulty === d && g.world.difficulty === d && load(KEY_DIFFICULTY) === d
     && g.world.size.w === DIFFICULTY[d].w && g.world.size.h === DIFFICULTY[d].h;
 
-  // NEW RUN's key cycles the four levels, and the preview's tomb size follows.
+  // The title's key cycles the four levels, and the preview's tomb size follows.
   openTitle(g);
   setDifficulty(g, 'easy');
-  click('title', 'new');
+  draw(g, 0);
   need(sized('easy'), 'the setting starts at EASY');
   for (const d of ['medium', 'hard', 'ultimate', 'easy']) {
-    click('newrun', 'difficulty');
+    click('title', 'difficulty');
     need(sized(d), `the difficulty key moves to ${difficultyLabel(d)}`);
   }
   // The arrows step it and stop at the ends.
@@ -7360,76 +7450,68 @@ function difficultyLeg(g, { need, click, press, offEntry }) {
     press(code, code);
     need(sized(d), `${code} steps the setting to ${difficultyLabel(d)}`);
   }
-  click('newrun', 'back');
+  // A held H repeats; the title ignores the repeat, so the pad keeps its side.
+  const side = g.side;
+  press('KeyH', 'h', true);
+  need(g.side === side && load(KEY_PAD) === side, 'the title ignores an auto-repeated H');
 
-  // A save resumes at the difficulty that wrote it, with no run open, as at startup. Each one takes
-  // slot 1 from its EMPTY row.
+  // A save loads at the difficulty that wrote it. Each run takes slot 1, free, at its first coin, and its
+  // PAUSE and TITLE leave it open on the title.
   const saveAt = (d) => {
     clearSaves();
     openTitle(g);
-    click('title', 's1');
     setDifficulty(g, d);
-    softTap(g, click, 'newrun', 'begin');
+    softTap(g, click, 'title', 'begin');
     offEntry();
     earnFake(g);
     click('play', 'pause');
     need(saveNow(1).level === d, `PAUSE stores ${difficultyLabel(d)} with the save`);
     const where = { x: g.sim.bd.x, y: g.sim.bd.y, sim: g.sim };
     click('pause', 'title');
-    g.open = null;
     return where;
   };
-  // P with no run open asks CONTINUE SLOT 1? over the lit row, and the YES key restores the save.
-  const yes = () => softTap(g, click, 'confirm', 'yes');
-  const resumesAt = (d, where) => {
-    press('KeyP', 'p');
-    need(g.screen === 'title' && g.confirm !== null, `RESUME with no open run asks CONTINUE? at ${difficultyLabel(d)}`);
-    yes();
-    need(g.screen === 'play' && sized(d), `RESUME rebuilds the save at ${difficultyLabel(d)} and moves the setting`);
+  // With no run open, LOAD's cursor starts on the save's row, and Enter loads it.
+  const loadsAt = (d, where) => {
+    g.open = null;
+    press('KeyT', 't');
+    press('Enter', 'Enter');
+    need(g.screen === 'play' && sized(d), `LOAD rebuilds the save at ${difficultyLabel(d)} and moves the setting`);
     need(g.sim !== where.sim && g.sim.bd.x === where.x && g.sim.bd.y === where.y, `the ${difficultyLabel(d)} save resumes on its board`);
   };
-  // NEW RUN steps the setting, and Q keeps it on the way back to the slot list.
   const stepSetting = (code, times) => {
-    press('KeyN', 'n');
     for (let i = 0; i < times; i++) press(code, code);
-    press('KeyQ', 'q');
   };
-  // A HARD save resumes at HARD, the 4x4 world.
+  // A HARD save loads at HARD, the 4x4 world.
   const hard = saveAt('hard');
   stepSetting('ArrowLeft', 2);
   need(sized('easy'), 'the setting moves to EASY over a HARD save');
-  resumesAt('hard', hard);
+  loadsAt('hard', hard);
   need(g.world.size.w === 4 && g.world.size.h === 4, 'a HARD save resumes in a 4x4 world');
-  click('play', 'pause');
+  softTap(g, click, 'play', 'pause');
   click('pause', 'title');
-  g.open = null;
   const old = saveAt('ultimate');
+  // A held P or Esc repeats; the title ignores the repeat, so the open run stays open.
+  press('KeyP', 'p', true);
+  need(g.screen === 'title' && g.open !== null, 'the title ignores an auto-repeated P');
+  press('Escape', 'Escape', true);
+  need(g.screen === 'title' && g.open !== null, 'the title ignores an auto-repeated Esc');
   stepSetting('ArrowLeft', 3);
   need(sized('easy'), 'the setting moves to EASY over an ULTIMATE save');
-  // A held P or Esc repeats; the title ignores the repeat, as it does Space's.
-  press('KeyP', 'p', true);
-  need(g.screen === 'title' && g.confirm === null, 'the title ignores an auto-repeated P');
-  press('Escape', 'Escape', true);
-  need(g.screen === 'title' && g.confirm === null, 'the title ignores an auto-repeated Esc');
-  press('KeyP', 'p');
-  yes();
-  need(g.screen === 'play' && sized('ultimate') && g.sim.bd.x === old.x && g.sim.bd.y === old.y, 'RESUME plays the ULTIMATE save on its board');
-  click('play', 'pause');
+  loadsAt('ultimate', old);
+  need(g.world.size.w === 6 && g.world.size.h === 4, 'LOAD plays the ULTIMATE save on its board');
+  softTap(g, click, 'play', 'pause');
   click('pause', 'title');
-  g.open = null;
   const easy = saveAt('easy');
   stepSetting('ArrowRight', 1);
   need(sized('medium'), 'the setting moves to MEDIUM over an EASY save');
-  resumesAt('easy', easy);
+  loadsAt('easy', easy);
 
-  // NEW SEED rolls a new seed and keeps the slot.
-  click('play', 'pause');
+  // RESET rolls a new seed and keeps the slot.
+  softTap(g, click, 'play', 'pause');
   click('pause', 'title');
   const kept = load(saveKey(1)), code = g.code;
-  click('title', 'new');
-  click('newrun', 'seed');
-  click('newrun', 'back');
-  need(g.code !== code && kept !== null && load(saveKey(1)) === kept, 'NEW SEED changes the seed and keeps the slot');
+  click('title', 'reset');
+  need(g.code !== code && kept !== null && load(saveKey(1)) === kept, 'RESET changes the seed and keeps the slot');
 
   // The best tomb is per seed and difficulty; ULTIMATE keeps the bare seed code.
   click('title', 'resume');
@@ -7514,7 +7596,7 @@ function walkOut(g, n, doomAt = 0, budget = 4000) {
   return { ticks, coins };
 }
 
-/** A record of the self-test's MEDIUM seed with nothing earned; `putSave` fills in what a step changes. */
+/** A record of the self-test's MEDIUM seed with nothing earned, as revision 1's beta wrote it, with no `played`; `putSave` fills in what a step changes. */
 const SAVE_BASE = { id: 'AAAAAAAA', save: 'K7Q2-M9XA:13', level: 'medium', start: '0,0', net: 0, high: 0, wallet: 0, continues: 0, recent: [] };
 
 /** Stores slot n's record, made of SAVE_BASE and `over`, as text. */
@@ -7539,10 +7621,11 @@ const savesText = () => SAVE_SLOTS.map((n) => load(saveKey(n))).join('\u0001');
 /** True when the game's economy is clean: no slot, no save and wallet 0. */
 const isClean = (g) => g.slot === null && g.saveId === null && g.wallet === 0;
 
-/** A clean run bound to slot n, emptied first: its first coin or counted tomb takes the slot. */
-function bindSlot(g, n) {
-  unstore(saveKey(n));
-  cleanState(g, n);
+/** A clean run over three empty slots, the free-slot rule armed: its first coin or counted tomb takes slot 1. */
+function armSlot(g) {
+  clearSaves();
+  cleanState(g);
+  g.armed = true;
 }
 
 /** Sends game `h` a keydown, as the window would a key; `h` is a game made by `reload`, with no listener of its own. */
@@ -7550,10 +7633,10 @@ function keyTo(h, code, key, repeat = false) {
   onKeyDown(h, new KeyboardEvent('keydown', { code, key, repeat, bubbles: true, cancelable: true }));
 }
 
-/** Game `h` plays slot n's row from the slot list and answers Y at CONTINUE SLOT n?. */
-function continueSlot(h, n) {
+/** Game `h` loads slot n from LOAD, by T and the slot's digit. */
+function loadSlot(h, n) {
+  keyTo(h, 'KeyT', 't');
   keyTo(h, `Digit${n}`, String(n));
-  keyTo(h, 'KeyY', 'y');
 }
 
 /** Draws a frame, so the touch layer places its keys, then clicks soft key `id` of screen `sid`. */
@@ -7562,7 +7645,7 @@ function softTap(g, click, sid, id) {
   click(sid, id);
 }
 
-/** The slot list with no run open, as at startup. The economy stays as it is. */
+/** The title with no run open, as at startup. The economy stays as it is. */
 function openTitle(g) {
   g.open = null;
   g.saveIn = null;
@@ -7657,7 +7740,7 @@ function walkToCell(h, goal, what) {
   return coins;
 }
 
-/** The oil steps of the touch leg, from the slot list with no run open. Each run is bound to slot 1. */
+/** The oil steps of the touch leg, from the title with no run open. Each run takes slot 1 at its first coin. */
 function oilLeg(g, { need, click }) {
   setDifficulty(g, 'medium');
   useCode(g, SELFTEST_CODE);
@@ -7669,8 +7752,7 @@ function oilLeg(g, { need, click }) {
   const take = (jar, burn) => {
     clearSaves();
     openTitle(g);
-    click('title', 's1');
-    softTap(g, click, 'newrun', 'begin');
+    softTap(g, click, 'title', 'begin');
     const id = coinId(jar.bd, jar.cell);
     let delta = null;
     g.sim.burn = burn;
@@ -7693,24 +7775,19 @@ function oilLeg(g, { need, click }) {
 }
 
 /**
- * The gamepad steps of the touch leg, from the slot list with no run open.
- * Each button change polls the fake gamepad, as the frame loop does.
+ * The gamepad steps of the touch leg, from the title with no run open. Each
+ * button change polls the fake gamepad, as the frame loop does.
  */
 function gamepadLeg(g, { need, click, fake }) {
   const hold = (...buttons) => {
     fake.held = new Set(buttons);
     pollGamepads();
   };
-  const tap = (button) => {
-    hold(button);
-    hold();
-  };
-  const A = 0, B = 1, SELECT = 8, START = 9, DOWN = 13, LEFT = 14, RIGHT = 15;
+  const A = 0, B = 1, SELECT = 8, START = 9, LEFT = 14;
   setDifficulty(g, 'medium');
   useCode(g, SELFTEST_CODE);
   openTitle(g);
-  click('title', 'new');
-  click('newrun', 'begin');
+  click('title', 'begin');
   const run = g.sim;
 
   g.press = 0;
@@ -7752,59 +7829,7 @@ function gamepadLeg(g, { need, click, fake }) {
   g.press = 0;
   g.release = 0;
   g.jump = false;
-
-  // CONTINUE? by gamepad: Start asks; A and Start change nothing; Select answers no and B yes.
-  const board = g.world.startPoint().board;
-  clearSaves();
-  putSave(1, { save: encodeSave(SELFTEST_CODE, board.x, board.y), net: 20, high: 20, wallet: 300 });
   cleanState(g);
-  openTitle(g);
-  tap(START);
-  need(g.screen === 'title' && g.confirm !== null, 'RESUME with no open run asks CONTINUE? by a gamepad\'s Start');
-  tap(A);
-  tap(START);
-  need(g.screen === 'title' && g.confirm !== null && isClean(g), 'a gamepad answers CONTINUE? A and Start change nothing');
-  tap(SELECT);
-  need(g.screen === 'title' && g.confirm === null && isClean(g), 'a gamepad answers CONTINUE? Select answers no');
-  tap(START);
-  tap(B);
-  need(g.screen === 'play' && g.wallet === 300 && tombCount(g.sim) === 20, 'a gamepad answers CONTINUE? B answers yes');
-  g.press = 0;
-  g.release = 0;
-  g.jump = false;
-
-  // A controller reaches every choice over three used slots, the pad alone: Down to the N NEW RUN row and B
-  // open NEW RUN unbound; Select returns; Down, Right and B enter erasing; B on a used row asks ERASE SLOT n?,
-  // where A and Start answer nothing, Select no and B yes, removing that key alone.
-  clearSaves();
-  for (const n of SAVE_SLOTS) putSave(n, { id: `${'ABC'[n - 1]}AAAAAAA`, wallet: n });
-  cleanState(g);
-  openTitle(g);
-  for (let i = 0; i < 3; i++) tap(DOWN);
-  tap(B);
-  need(g.screen === 'newrun' && g.bind === null, 'a controller\'s Down and B open NEW RUN unbound from the N NEW RUN row');
-  tap(SELECT);
-  need(g.screen === 'title' && g.cursor === NEW_ROW, 'a controller\'s Select returns from NEW RUN to the slot list');
-  const enterErasing = () => {
-    for (let i = 0; i < 3; i++) tap(DOWN);
-    tap(RIGHT);
-    tap(B);
-    need(g.screen === 'title' && g.erasing && g.cursor === 0, 'a controller\'s Down, Right and B enter erasing');
-    tap(B);
-    need(g.confirm !== null && g.confirm.kind === 'erase' && g.confirm.n === 1, 'a controller\'s B on a used row asks ERASE SLOT 1?');
-  };
-  const before = savesText();
-  enterErasing();
-  tap(A);
-  tap(START);
-  need(g.confirm !== null && savesText() === before, 'a controller\'s A and Start answer nothing at ERASE SLOT 1?');
-  tap(SELECT);
-  need(g.confirm === null && !g.erasing && savesText() === before, 'a controller\'s Select answers no at ERASE SLOT 1?');
-  enterErasing();
-  tap(B);
-  need(heldSave(1).state === 'absent' && saveNow(2) !== null && saveNow(3) !== null, 'a controller\'s B at ERASE SLOT 1? removes that key alone');
-  cleanState(g);
-  clearSaves();
 }
 
 /** Walks game `h` toward `home` until its feet lie more than 12 px from `spot`, so a walk to the spot runs ticks. */
@@ -7814,7 +7839,7 @@ function walkAway(h, home, spot) {
   runTicks(h, auto, far, 600, 'the walk leaves the coin');
 }
 
-/** The coin steps of the touch leg, from the slot list with no run open. */
+/** The coin steps of the touch leg, from the title with no run open. */
 function coinLeg(g, { need, click, press }) {
   const rates = { easy: 1, medium: 2, hard: 5, ultimate: 10 };
   const onLevel = (d) => {
@@ -7822,14 +7847,12 @@ function coinLeg(g, { need, click, press }) {
     useCode(g, SELFTEST_CODE);
   };
 
-  // Step 1: the first coin of tomb (0, 0) at MEDIUM takes the slot its EMPTY row bound.
+  // Step 1: the first coin of tomb (0, 0) at MEDIUM takes slot 1, the lowest free.
   cleanState(g);
   clearSaves();
   onLevel('medium');
   openTitle(g);
-  click('title', 's1');
-  need(g.screen === 'newrun' && g.bind === 1, 'an EMPTY row opens NEW RUN bound to its slot');
-  click('newrun', 'begin');
+  click('title', 'begin');
   need(g.screen === 'play' && g.earned === 0, 'BEGIN starts a run with no coins earned');
   const coin = firstCoin(g.world);
   need(coin !== null, 'tomb (0, 0) holds a coin at MEDIUM');
@@ -7865,19 +7888,18 @@ function coinLeg(g, { need, click, press }) {
   click('over', 'continue');
   need(g.screen === 'play' && g.sim !== run && takes(g) === 0, 'the end screen CONTINUE keeps the coin taken');
   const later = reload();
-  continueSlot(later, 1);
-  need(later.screen === 'play' && takes(later) === 0, 'RESUME after a reload keeps the coin taken');
+  loadSlot(later, 1);
+  need(later.screen === 'play' && takes(later) === 0, 'LOAD after a reload keeps the coin taken');
   openTitle(g);
-  click('title', 'new');
-  click('newrun', 'begin');
+  click('title', 'begin');
   need(g.screen === 'play' && takes(g) === 1, 'BEGIN lays the coin back');
 
-  // Step 3: each level from an EMPTY slot. A rise of the high pays the level's rate, and a replay of the
+  // Step 3: each level over empty slots. A rise of the high pays the level's rate, and a replay of the
   // tomb pays nothing, since the save's high already holds it. Each wallet check nets out the floor coins
   // the walk took, which lie back with every new run.
   for (const d of DIFFICULTIES) {
     const label = difficultyLabel(d);
-    bindSlot(g, 1);
+    armSlot(g);
     onLevel(d);
     const first = oneTombOn(g, 0);
     need(g.wallet - first.coins === rates[d], `a rise of the high pays ${rates[d]} at ${label}`);
@@ -7891,8 +7913,7 @@ function coinLeg(g, { need, click, press }) {
   clearSaves();
   onLevel('medium');
   openTitle(g);
-  click('title', 's1');
-  click('newrun', 'begin');
+  click('title', 'begin');
   const start = g.wallet;
   walkToItem(g, firstCoin(g.world));
   oneTombOn(g, 0);
@@ -7906,15 +7927,14 @@ function coinLeg(g, { need, click, press }) {
   need(g.earned === g.wallet - start, 'the coins earned this run still equal the wallet\'s gain after CONTINUE');
   draw(g, 0);
 
-  // Step 5: the coins and jars of the last two tombs, from slot 1 empty at MEDIUM. A is tomb (0, 0), B the
+  // Step 5: the coins and jars of the last two tombs, over empty slots at MEDIUM. A is tomb (0, 0), B the
   // tomb its exit leads to and C the tomb B's exit leads to. A pinned walk holds the burn at 100 s before
   // every tick, so its contact tick shows whether the jar added its 60 s; a long walk starts with the torch
   // full.
   clearSaves();
   onLevel('medium');
   openTitle(g);
-  click('title', 's1');
-  click('newrun', 'begin');
+  click('title', 'begin');
   const first = firstCoin(g.world), firstId = coinId(first.bd, first.cell, first.i);
   const [jar, jar2] = tombJars(g.world);
   const qa = exitCell(g.world, 0, 0), intoB = g.world.board(qa.x, qa.y);
@@ -7927,7 +7947,7 @@ function coinLeg(g, { need, click, press }) {
   };
   const resumed = () => {
     const h = reload();
-    continueSlot(h, 1);
+    loadSlot(h, 1);
     return h;
   };
   // The coin takes the slot, then the jar; the walk out stores the serial at B.
@@ -7962,9 +7982,9 @@ function coinLeg(g, { need, click, press }) {
   need(paid !== null && paid.coins === 1 && paid.wallet === 1, 'a coin two tombs back lies back');
 }
 
-/** The two-games step of the touch leg, from the slot list with no run open. */
+/** The two-games step of the touch leg, from the title with no run open. */
 function twoGamesLeg(g, { need }) {
-  // Two games that restored one save share its id. A second game, made before the first one's write,
+  // Two games that loaded one save share its id. A second game, made before the first one's write,
   // earns after it; the merge keeps both.
   cleanState(g);
   clearSaves();
@@ -7984,13 +8004,13 @@ function twoGamesLeg(g, { need }) {
 /**
  * The splash steps of the touch leg. `oneTombOn(g, 99)` crosses tomb 100
  * through the shipped tick, so each step reads the screen the game chose.
- * Each run is bound to slot 1.
+ * Each run takes slot 1, free, at its first counted tomb.
  */
 function splashLeg(g, { need, click, press }) {
 
   // Step 1: the first crossing of tomb 100 shows TORCHBEARER and pays the rate plus 100, at every level.
   for (const d of DIFFICULTIES) {
-    bindSlot(g, 1);
+    armSlot(g);
     setDifficulty(g, d);
     useCode(g, SELFTEST_CODE);
     const label = difficultyLabel(d);
@@ -8059,7 +8079,7 @@ function splashLeg(g, { need, click, press }) {
   // fresh save on slot 1 holds no high, so the crossing pays again.
   const { ticks } = oneTombOn(g, 99);
   const level = g.world.difficulty;
-  bindSlot(g, 1);
+  armSlot(g);
   const before = g.wallet;
   const ended = oneTombOn(g, 99, ticks);
   need(g.screen === 'over' && tombCount(g.sim) === 100, 'a run that ends on the crossing of tomb 100 shows the end screen');
@@ -8068,7 +8088,7 @@ function splashLeg(g, { need, click, press }) {
 }
 
 /**
- * The RESUME steps of the touch leg, from the slot list with no run open. Each
+ * The load steps of the touch leg, from the title with no run open. Each
  * `reload` is a fresh game over the same storage, as after a page reload.
  */
 function resumeLeg(g, { need, click }) {
@@ -8077,8 +8097,7 @@ function resumeLeg(g, { need, click }) {
   useCode(g, SELFTEST_CODE);
   clearSaves();
   openTitle(g);
-  click('title', 's1');
-  click('newrun', 'begin');
+  click('title', 'begin');
   oneTombOn(g, 1);
   const count = tombCount(g.sim);
   draw(g, 0);
@@ -8087,29 +8106,23 @@ function resumeLeg(g, { need, click }) {
 
   // The count survives a reload through the slot.
   const resumed = reload();
-  continueSlot(resumed, 1);
-  need(count >= 2 && resumed.screen === 'play' && tombCount(resumed.sim) === count, `RESUME after a reload continues at TOMB ${count}`);
+  loadSlot(resumed, 1);
+  need(count >= 2 && resumed.screen === 'play' && tombCount(resumed.sim) === count, `LOAD after a reload continues at TOMB ${count}`);
   need(resumed.sim.start.u === 0 && resumed.sim.start.v === 0 && resumed.earned === 0, 'a resumed run keeps its start tomb and earns afresh');
 
-  // A typed copy of the slot's serial continues it; another code does not, as it carries no count.
-  const typed = (text) => {
-    const h = reload();
-    h.typing = text;
-    submitTyped(h);
-    if (h.confirm) keyTo(h, 'KeyY', 'y');
-    return tombCount(h.sim);
-  };
-  const elsewhere = encodeSave(SELFTEST_CODE, g.sim.bd.x + 1, g.sim.bd.y);
-  need(typed(saved) === count, `a typed copy of the slot's serial continues at TOMB ${count}`);
-  need(typed(elsewhere) === 0, 'another save code starts at TOMB 0');
+  // A typed copy of the slot's serial continues it.
+  const typed = reload();
+  typed.typing = saved;
+  submitTyped(typed);
+  need(tombCount(typed.sim) === count, `a typed copy of the slot's serial continues at TOMB ${count}`);
 
   // A save at net 99 under a high of 100 crosses back up to its high: TOMB 100 holds, nothing pays and no
   // splash shows.
   const exit = exitBoard(g.world), at = encodeSave(SELFTEST_CODE, exit.x, exit.y);
   putSave(1, { save: at, net: 99, high: 100 });
   const late = reload();
-  continueSlot(late, 1);
-  need(tombCount(late.sim) === 100 && late.sim.net === 99, 'RESUME after a reload continues at TOMB 100 from net 99');
+  loadSlot(late, 1);
+  need(tombCount(late.sim) === 100 && late.sim.net === 99, 'LOAD after a reload continues at TOMB 100 from net 99');
   const was = late.wallet;
   const chain = late.world.tombFlames(0, 0).chains[0], auto = createAutopilot(late.world, [chain[chain.length - 1]]);
   let coins = 0;
@@ -8120,9 +8133,9 @@ function resumeLeg(g, { need, click }) {
 }
 
 /**
- * CONTINUE SLOT n? and the continue count, from the slot list with no run
- * open: the touch keys, P and a typed serial ask over slot 1's row, Y restores
- * the record drawn, and only a death raises the count.
+ * Loads and a new run's clean start, from the title with no run open: LOAD's
+ * SLOT 1 key and a typed serial load slot 1's record, and BEGIN and any other
+ * typed code start clean.
  */
 function continueLeg(g, { need, click, press }) {
   setDifficulty(g, 'medium');
@@ -8130,27 +8143,22 @@ function continueLeg(g, { need, click, press }) {
   const coin = firstCoin(g.world), first = g.world.startPoint().board;
   const serial = encodeSave(SELFTEST_CODE, first.x, first.y);
   // Slot 1 holds 300 coins and TOMB 20 at tomb (0, 0)'s first board; slots 2 and 3 are empty.
-  const toTitle = () => {
+  const toStart = () => {
     clearSaves();
     putSave(1, { save: serial, net: 20, high: 20, wallet: 300 });
     cleanState(g);
     openTitle(g);
   };
-  const typeIn = (text) => {
-    press('KeyN', 'n');
-    withPrompt(text, () => softTap(g, click, 'newrun', 'type'));
+  const pasteCode = (text) => {
+    press('KeyT', 't');
+    withPrompt(text, () => softTap(g, click, 'load', 'type'));
   };
   const tap = (sid, which) => softTap(g, click, sid, which);
-  // CONTINUE SLOT 1? stands on the slot list over the slot...
-  const over = () => g.screen === 'title' && g.confirm !== null && g.confirm.kind === 'continue' && g.confirm.n === 1
-    && g.confirm.held.record.wallet === 300 && g.confirm.held.record.high === 20;
-  // ...and has restored nothing.
-  const asks = () => over() && isClean(g);
-  // The slot list after a played, restored run: wallet 300 under save AAAAAAAA, not clean.
+  // The title after a played, loaded run: wallet 300 under save AAAAAAAA, not clean.
   const played = () => {
-    toTitle();
-    tap('title', 's1');
-    press('KeyY', 'y');
+    toStart();
+    press('KeyT', 't');
+    tap('load', 's1');
     endRun(g);
     tap('over', 'title');
     need(g.screen === 'title' && g.saveId === SAVE_BASE.id && g.wallet === 300, 'a played run leaves the title with its wallet');
@@ -8159,556 +8167,37 @@ function continueLeg(g, { need, click, press }) {
     && g.sim.collected.size === 0;
 
   // A typed serial on another seed starts clean.
-  toTitle();
-  typeIn('K7Q2-M9XA:13');
+  toStart();
+  pasteCode('K7Q2-M9XA:13');
   need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'a new serial starts with no coins');
 
-  // SLOT 1 asks CONTINUE SLOT 1?; N, from the slot row and from TYPE CODE, returns to the slot list and keeps the slot.
-  toTitle();
-  tap('title', 's1');
-  need(asks(), 'RESUME with no open run asks CONTINUE? by the touch SLOT 1 key');
-  press('KeyN', 'n');
-  need(g.screen === 'title' && g.confirm === null && g.open === null && isClean(g) && saveNow(1).wallet === 300,
-    'N returns to the slot list and erases nothing');
-  press('KeyP', 'p');
-  need(asks(), 'RESUME with no open run asks CONTINUE? by P');
-  press('KeyN', 'n');
-  typeIn(serial);
-  press('Escape', 'Escape');
-  need(g.screen === 'title' && g.confirm === null, 'Esc answers no to CONTINUE?');
-  typeIn(serial);
-  need(asks(), 'TYPE CODE with the slot\'s serial asks CONTINUE?');
-  press('KeyN', 'n');
-  need(g.screen === 'title' && g.confirm === null && isClean(g) && saveNow(1).wallet === 300, 'N returns to the title with no coins from TYPE CODE');
-  press('KeyP', 'p');
-  press('KeyQ', 'q');
-  need(g.screen === 'title' && g.confirm === null, 'Q answers no to CONTINUE?');
-
-  // CONTINUE? takes no repeated key and no key that answers neither way.
-  press('KeyP', 'p');
-  press('KeyY', 'y', true);
-  press('Enter', 'Enter', true);
-  press('KeyN', 'n', true);
-  press('Escape', 'Escape', true);
-  need(asks(), 'CONTINUE? ignores a repeated key');
-  press('Space', ' ');
-  press('KeyP', 'p');
-  press('KeyL', 'l');
-  need(asks(), 'CONTINUE? ignores a key that answers neither way');
-
-  // Y and Enter restore the slot's wallet and TOMB 20, with every coin back on the floor.
-  press('KeyY', 'y');
-  need(restored(), 'Y restores the slot\'s wallet and TOMB 20');
+  // LOAD's SLOT 1 key loads the slot's wallet and TOMB 20, with every coin back on the floor.
+  toStart();
+  press('KeyT', 't');
+  tap('load', 's1');
+  need(restored(), 'a load restores the slot\'s wallet and TOMB 20');
   walkToItem(g, coin);
   need(g.wallet === 301 && g.earned === 1, 'a coin of the restored tomb lies back and pays one');
   endRun(g);
   draw(g, 0);
   click('over', 'continue');
   need(g.screen === 'play' && g.saveId === SAVE_BASE.id && g.wallet === 301 && saveNow(1).id === SAVE_BASE.id, 'Continue keeps the run\'s slot and coins');
-  toTitle();
-  typeIn(serial);
-  press('Enter', 'Enter');
-  need(restored(), 'Enter answers yes to CONTINUE? from TYPE CODE');
-
-  // Y restores the record CONTINUE? showed, not whatever is stored when Y comes.
-  toTitle();
-  tap('title', 's1');
-  need(asks(), 'RESUME with no open run asks CONTINUE? before the slot changes');
-  putSave(1, { id: 'BBBBBBBB', save: encodeSave(SELFTEST_CODE, first.x + 1, first.y), wallet: 7 });
-  press('KeyY', 'y');
-  need(restored() && saveNow(1).id === 'BBBBBBBB', 'Y restores the snapshot CONTINUE? showed');
+  toStart();
+  pasteCode(serial);
+  need(restored(), 'a typed copy of the slot\'s serial loads it');
 
   // A typed serial and BEGIN start clean after a played run.
   played();
-  typeIn('K7Q2-M9XA:13');
+  pasteCode('K7Q2-M9XA:13');
   need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'a typed serial other than the slot\'s starts clean');
   played();
-  tap('title', 'new');
-  tap('newrun', 'begin');
+  tap('title', 'begin');
   need(g.screen === 'play' && isClean(g) && tombCount(g.sim) === 0, 'BEGIN after a restored run starts with no coins at TOMB 0');
-
-  // The soft keys answer CONTINUE?.
-  toTitle();
-  tap('title', 's1');
-  tap('confirm', 'no');
-  need(g.screen === 'title' && g.confirm === null && isClean(g), 'the soft keys answer CONTINUE? NO');
-  tap('title', 's1');
-  tap('confirm', 'yes');
-  need(restored(), 'the soft keys answer CONTINUE? YES');
-
-  // The continue count: only a death raises it. Each death ends the torch through the sim, so the tick's own
-  // endRun writes; a bare endRun leaves the run live and stores no rise.
-  const die = () => {
-    g.sim.burn = 0;
-    g.sim.ember = TICK / 2;
-    runTicks(g, () => [0, 0, false], () => g.screen === 'over', 10, 'the torch dies');
-  };
-  toTitle();
-  tap('title', 's1');
-  press('KeyY', 'y');
-  need(restored() && g.sim.continues === 0, 'Y restores a slot at 0 continues');
-  die();
-  draw(g, 0);
-  click('over', 'continue');
-  need(g.screen === 'play' && g.sim.continues === 1, 'a death and CONTINUE raise the continue count to 1');
-  press('KeyP', 'p');
-  press('KeyP', 'p');
-  need(g.screen === 'play' && g.sim.continues === 1, 'P and P hold the continue count at 1');
-  press('KeyP', 'p');
-  press('KeyQ', 'q');
-  press('KeyP', 'p');
-  need(g.screen === 'play' && g.sim.continues === 1, 'Q, the title and RESUME hold the continue count at 1');
-  die();
-  need(g.sim.continues === 1 && saveNow(1).continues === 2, 'a second death stores 2 in the slot while the end screen shows 1');
-  draw(g, 0);
-  press('KeyQ', 'q');
-  need(g.screen === 'title', 'Q leaves the end screen for the title');
-  tap('title', 's1');
-  press('KeyY', 'y');
-  need(restored() && g.sim.continues === 2, 'Q, RESUME and Y restore the stored count of 2');
-  draw(g, 0);
-  click('play', 'pause');
-  const after = reload();
-  continueSlot(after, 1);
-  need(after.screen === 'play' && after.sim.continues === 2 && saveNow(1).continues === 2, 'a PAUSE, a reload, RESUME and Y hold the count at 2');
-  openTitle(g);
-  click('title', 'new');
-  click('newrun', 'begin');
-  need(g.screen === 'play' && g.sim.continues === 0, 'BEGIN starts the continue count at 0');
-
-  // Two live games on one save share the count by maximum: one dies, the other's next write adopts the rise.
-  toTitle();
-  tap('title', 's1');
-  press('KeyY', 'y');
-  const twin = reload();
-  continueSlot(twin, 1);
-  need(restored() && twin.screen === 'play' && twin.sim.continues === 0, 'two games restore one slot at 0 continues');
-  die();
-  need(saveNow(1).continues === 1 && twin.sim.continues === 0, 'a death stores the raised count before the other game writes');
-  commit(twin, twin.point);
-  need(twin.sim.continues === 1 && saveNow(1).continues === 1, 'a live game adopts another\'s death on its next write');
 }
 
 /**
- * The farming loops, at MEDIUM. A is tomb (0, 0) and B the tomb its exit leads
- * to; each run starts on A's exit board, which is no entry, and crosses its
- * exit door into B, raising the high to 1. Stepping back onto that board, a
- * PAUSE or a SAVE through SAVE IN? pairs it with the net there, so a reload, a
- * restore and the step forward never raise TOMB n, the save's high or the
- * wallet past the coins the walks take.
- */
-function farmLeg(g, { need }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  const t = g.world.tomb(0, 0), X = exitBoard(g.world);
-  const gate = { x: X.x, y: X.y, cell: X.doors.find((dr) => dr.dir === t.exit).cell };
-  const across = g.world.step(X, gate.cell, t.exit), into = { x: across.board.x, y: across.board.y, cell: across.cell };
-  need(!X.entry, 'tomb (0, 0)\'s exit board is no entry at MEDIUM');
-  const H = 1;
-  // Before each PAUSE or SAVE IN?, the explorer stands on no entry, its net apart from the entry save point's.
-  const offEntry = (h, what) => need(!h.sim.bd.entry && h.sim.here.net !== h.sim.entry.net, `${what}: the explorer stands on no entry, off the entry's net`);
-  const holds = (h, wallet, what) => need(h.screen === 'play' && tombCount(h.sim) === H && saveNow(1).high === H
-    && h.wallet === wallet && saveNow(1).wallet === wallet, what);
-  const start = (slot) => {
-    clearSaves();
-    openTitle(g);
-    cleanState(g, slot);
-    begin(g, X.p);
-  };
-
-  // Bound: the run takes slot 1 at the crossing into B, then three times steps back, PAUSEs, reloads,
-  // restores the slot and steps forward into B again.
-  start(1);
-  let coins = walkToCell(g, into, 'the walk into tomb B');
-  need(g.screen === 'play' && tombCount(g.sim) === H && saveNow(1) !== null && saveNow(1).id === g.saveId, 'the bound crossing into B takes slot 1 at TOMB 1');
-  let wallet = g.wallet - coins, h = g;
-  for (let loop = 1; loop <= 3; loop++) {
-    coins += walkToCell(h, gate, 'the walk back into tomb A');
-    offEntry(h, `bound loop ${loop}`);
-    keyTo(h, 'KeyP', 'p');
-    h = reload();
-    continueSlot(h, 1);
-    coins += walkToCell(h, into, 'the walk forward into tomb B');
-    holds(h, wallet + coins, `bound loop ${loop}: TOMB n, the high and the wallet hold at H`);
-  }
-
-  // Unbound: the crossing into B opens SAVE IN?, which Q dismisses. Each loop steps back, pauses, saves to
-  // slot 1 through SAVE IN?, reloads, restores the slot and steps forward into B again; another tab then
-  // erases the slot, so the run's next write stores nothing and it plays on unsaved.
-  start(null);
-  coins = walkToCell(g, into, 'the unbound walk into tomb B');
-  need(g.screen === 'savein' && tombCount(g.sim) === H, 'the unbound crossing into B opens SAVE IN?');
-  keyTo(g, 'KeyQ', 'q');
-  need(g.screen === 'play' && g.saveId === null, 'Q on SAVE IN? plays on unsaved');
-  wallet = g.wallet - coins;
-  h = g;
-  for (let loop = 1; loop <= 3; loop++) {
-    coins += walkToCell(h, gate, 'the walk back into tomb A');
-    offEntry(h, `unbound loop ${loop}`);
-    keyTo(h, 'KeyP', 'p');
-    need(h.screen === 'pause' && h.saveId === null, `unbound loop ${loop}: the pause is unsaved`);
-    keyTo(h, 'Enter', 'Enter');
-    need(h.screen === 'savein' && h.saveIn.rows[0].n === 1, `unbound loop ${loop}: SAVE opens SAVE IN? on slot 1`);
-    keyTo(h, 'Enter', 'Enter');
-    need(h.screen === 'pause' && h.slot === 1 && saveNow(1) !== null && saveNow(1).id === h.saveId, `unbound loop ${loop}: SAVE IN? binds the run to slot 1`);
-    h = reload();
-    continueSlot(h, 1);
-    coins += walkToCell(h, into, 'the walk forward into tomb B');
-    holds(h, wallet + coins, `unbound loop ${loop}: TOMB n, the high and the wallet hold at H`);
-    unstore(saveKey(1));
-  }
-}
-
-/**
- * An EMPTY row binds: Enter on it opens NEW RUN SLOT n, whose run writes
- * nothing until its first coin, which writes the slot with no SAVE IN?.
- */
-function emptyRowLeg(g, { need, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  clearSaves();
-  putSave(1, { id: 'AAAAAAAA', wallet: 5 });
-  cleanState(g);
-  openTitle(g);
-  press('ArrowDown', 'ArrowDown');
-  press('Enter', 'Enter');
-  need(g.screen === 'newrun' && g.bind === 2, 'Enter on an EMPTY row opens NEW RUN SLOT 2');
-  press('Enter', 'Enter');
-  need(g.screen === 'play' && g.slot === 2 && g.saveId === null, 'BEGIN from NEW RUN SLOT 2 binds the run to slot 2');
-  // Before the coin, a PAUSE and Q, and a reload, leave the slot EMPTY.
-  press('KeyP', 'p');
-  press('KeyQ', 'q');
-  need(g.screen === 'title' && heldSave(2).state === 'absent', 'a PAUSE and Q before the first coin leave the bound slot EMPTY');
-  reload();
-  need(heldSave(2).state === 'absent', 'a reload before the first coin leaves the bound slot EMPTY');
-  press('KeyP', 'p');
-  need(g.screen === 'play' && g.slot === 2, 'P returns to the bound run');
-  walkToItem(g, firstCoin(g.world));
-  need(g.screen === 'play' && saveNow(2) !== null && saveNow(2).wallet === 1 && saveNow(2).id === g.saveId && saveNow(1).wallet === 5,
-    'the first coin writes slot 2 with no SAVE IN?');
-}
-
-/**
- * An unbound run asks SAVE IN? at its first coin, holding the run: empty rows
- * first, OVERWRITE over a used one, Q to play on unsaved, and SAVE on the
- * unsaved pause. SAVE IN? ignores the play keys. A milestone's tick shows SAVE
- * IN? before the splash, and a tick that ends the run shows none.
- */
-function saveInLeg(g, { need, click, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  const fresh = () => {
-    cleanState(g);
-    openTitle(g);
-    click('title', 'new');
-    click('newrun', 'begin');
-  };
-  const tap = (sid, which) => softTap(g, click, sid, which);
-  // Slot 1 used, slots 2 and 3 empty.
-  clearSaves();
-  putSave(1, { id: 'AAAAAAAA', wallet: 5, net: 3, high: 3 });
-  fresh();
-  const run = g.sim, coin = firstCoin(g.world);
-  walkToItem(g, coin);
-  need(g.screen === 'savein' && g.sim === run && g.wallet === 1 && g.saveId === null, 'N, BEGIN and the first coin hold the run under SAVE IN?');
-  need(g.saveIn.order === '231' && g.saveIn.cursor === 0, 'SAVE IN? lists the empty rows first, the cursor on the first');
-  const time = run.time;
-  for (let i = 0; i < 30; i++) tick(g);
-  need(g.screen === 'savein' && run.time === time, 'the run stands still under SAVE IN?');
-  const before = savesText();
-  press('Space', ' ');
-  press('KeyP', 'p');
-  press('Enter', 'Enter', true);
-  need(g.screen === 'savein' && g.saveId === null && savesText() === before, 'Space, P and an auto-repeated Enter answer nothing on SAVE IN?');
-  // A used row asks OVERWRITE SLOT 1?, whose N returns to SAVE IN?.
-  press('ArrowDown', 'ArrowDown');
-  press('ArrowDown', 'ArrowDown');
-  press('Enter', 'Enter');
-  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 1 && savesText() === before, 'a used row asks OVERWRITE SLOT 1?');
-  press('KeyN', 'n');
-  need(g.screen === 'savein' && g.confirm === null && savesText() === before, 'N at OVERWRITE returns to SAVE IN?');
-  // Picking an empty row stores the wallet the run held at the pick, no more.
-  const slot1 = load(saveKey(1));
-  tap('savein', 's2');
-  need(g.screen === 'play' && g.slot === 2 && saveNow(2) !== null && saveNow(2).id === g.saveId && saveNow(2).wallet === 1
-    && load(saveKey(1)) === slot1 && heldSave(3).state === 'absent', 'picking an empty row stores the wallet the run held, no more');
-
-  // OVERWRITE's Y writes that slot alone.
-  fresh();
-  walkToItem(g, coin);
-  need(g.screen === 'savein' && g.saveIn.order === '312', 'SAVE IN? lists slot 3, then the used slots in row order');
-  const slot2 = load(saveKey(2));
-  tap('savein', 's1');
-  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 1, 'SLOT 1 asks OVERWRITE SLOT 1?');
-  tap('confirm', 'yes');
-  need(g.screen === 'play' && g.slot === 1 && saveNow(1).id === g.saveId && g.saveId !== 'AAAAAAAA' && saveNow(1).wallet === 1
-    && load(saveKey(2)) === slot2 && heldSave(3).state === 'absent', 'OVERWRITE\'s Y writes that slot alone');
-
-  // Q plays on unsaved, and SAVE IN? asks no more by itself; the unsaved pause's SAVE opens it again.
-  fresh();
-  walkToItem(g, coin);
-  need(g.screen === 'savein', 'the next unbound run\'s first coin asks SAVE IN?');
-  const held = savesText();
-  tap('savein', 'back');
-  need(g.screen === 'play' && g.saveId === null && savesText() === held, 'BACK on SAVE IN? plays on unsaved');
-  walkToItem(g, { ...coin, i: 1 });
-  need(g.screen === 'play' && g.wallet === 2, 'a dismissed SAVE IN? asks no more by itself');
-  draw(g, 0);
-  click('play', 'pause');
-  draw(g, 0);
-  need(g.screen === 'pause' && g.saveId === null && touch.soft('pause', 'save').getBoundingClientRect().width > 0, 'the unsaved pause shows SAVE');
-  click('pause', 'save');
-  need(g.screen === 'savein' && g.saveIn.from === 'pause', 'SAVE on the unsaved pause opens SAVE IN?');
-  press('KeyQ', 'q');
-  need(g.screen === 'pause' && g.saveId === null, 'Q returns SAVE IN? to the unsaved pause');
-
-  // A tick that crosses a milestone shows SAVE IN? before the splash, and a tick that ends the run shows none.
-  cleanState(g);
-  const { ticks } = oneTombOn(g, 99);
-  need(g.screen === 'savein' && g.saveIn.splash && g.saveIn.splash.k === 1 && g.saveIn.splash.paid, 'a milestone tick shows SAVE IN? before the splash');
-  press('KeyQ', 'q');
-  need(g.screen === 'splash' && g.splash.k === 1, 'SAVE IN?\'s answer shows the splash it held back');
-  cleanState(g);
-  oneTombOn(g, 99, ticks);
-  need(g.screen === 'over' && g.saveIn === null, 'a tick that ends the run shows no SAVE IN?');
-}
-
-/** A DAMAGED slot reads DAMAGED, binds a run as an EMPTY one does, leads SAVE IN?'s rows and keeps ERASE hidden. */
-function damagedLeg(g, { need, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  clearSaves();
-  putSave(1, { id: 'AAAAAAAA' });
-  store(saveKey(2), '{not json');
-  putSave(3, { id: 'CCCCCCCC' });
-  cleanState(g);
-  openTitle(g);
-  need(heldSave(2).state === 'damaged' && ROW_LABEL[heldSave(2).state] === 'DAMAGED', 'a slot holding an unparseable string reads DAMAGED, never EMPTY');
-  need(!eraseShows(), 'ERASE stays hidden while a slot is DAMAGED');
-  press('KeyN', 'n');
-  press('Enter', 'Enter');
-  walkToItem(g, firstCoin(g.world));
-  need(g.screen === 'savein' && g.saveIn.order === '213', 'SAVE IN? lists the DAMAGED slot among the first rows');
-  press('KeyQ', 'q');
-  openTitle(g);
-  press('ArrowDown', 'ArrowDown');
-  press('Enter', 'Enter');
-  need(g.screen === 'newrun' && g.bind === 2, 'Enter on a DAMAGED row opens NEW RUN SLOT 2');
-  press('Enter', 'Enter');
-  walkToItem(g, firstCoin(g.world));
-  need(g.screen === 'play' && saveNow(2) !== null && saveNow(2).id === g.saveId, 'a DAMAGED row\'s run takes the slot at its first coin');
-}
-
-/** A newer build's record reads NEWER, plays nothing, stays off SAVE IN? and out of erasing, and keeps its text. */
-function newerLeg(g, { need, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  const newer = JSON.stringify({ v: 2, id: 'NNNNNNNN', save: SAVE_BASE.save, level: 'medium', skins: ['gold'] });
-  clearSaves();
-  putSave(1, { id: 'AAAAAAAA' });
-  store(saveKey(2), newer);
-  putSave(3, { id: 'CCCCCCCC' });
-  cleanState(g);
-  openTitle(g);
-  need(heldSave(2).state === 'newer' && ROW_LABEL[heldSave(2).state] === 'NEWER', 'a slot holding a v 2 record reads NEWER');
-  press('Digit2', '2');
-  press('ArrowDown', 'ArrowDown');
-  press('Enter', 'Enter');
-  need(g.screen === 'title' && g.confirm === null && g.cursor === 1, 'Enter and the digit of a NEWER row do nothing');
-  // ERASE shows beside a NEWER slot, and erasing skips it.
-  need(eraseShows(), 'ERASE shows over three slots held');
-  press('KeyE', 'e');
-  press('ArrowDown', 'ArrowDown');
-  need(g.erasing && g.cursor === 2, 'erasing skips the NEWER row');
-  press('Digit2', '2');
-  need(g.confirm === null, 'a NEWER row\'s digit asks no ERASE');
-  press('KeyQ', 'q');
-  // SAVE IN? does not list it.
-  press('KeyN', 'n');
-  press('Enter', 'Enter');
-  walkToItem(g, firstCoin(g.world));
-  need(g.screen === 'savein' && g.saveIn.order === '13', 'SAVE IN? does not list a NEWER slot');
-  press('KeyQ', 'q');
-  need(load(saveKey(2)) === newer, 'a NEWER slot\'s stored text is unchanged after the leg');
-}
-
-/** Restoring slot n shows slot n, and the open run's own row resumes it. */
-function restoreLeg(g, { need, click, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  const first = g.world.startPoint().board, X = exitBoard(g.world);
-  const one = encodeSave(SELFTEST_CODE, first.x, first.y), two = encodeSave(SELFTEST_CODE, X.x, X.y);
-  clearSaves();
-  putSave(1, { id: 'AAAAAAAA', save: one, net: 4, high: 7, wallet: 70 });
-  putSave(2, { id: 'BBBBBBBB', save: two, net: 30, high: 31, wallet: 310 });
-  cleanState(g);
-  openTitle(g);
-  click('title', 's2');
-  const c = g.confirm;
-  need(c !== null && c.kind === 'continue' && c.n === 2 && c.held.record.save === two && c.held.record.high === 31 && c.held.record.wallet === 310,
-    'slot 2\'s row opens CONTINUE SLOT 2? with its own serial, TOMB n and coins');
-  softTap(g, click, 'confirm', 'yes');
-  need(g.screen === 'play' && g.slot === 2 && tombCount(g.sim) === 31 && g.sim.net === 30 && g.wallet === 310 && hereCode(g) === two,
-    'Y plays slot 2 at its high and wallet');
-  // The open run's row resumes it, its burn unchanged.
-  const run = g.sim;
-  run.burn = BURN_S / 3;
-  press('KeyP', 'p');
-  press('KeyQ', 'q');
-  need(g.screen === 'title' && g.open !== null && g.open.sim === run && g.cursor === 1, 'Q from pause leaves the run open, the cursor on its slot');
-  press('Enter', 'Enter');
-  need(g.screen === 'play' && g.sim === run && run.burn === BURN_S / 3, 'Enter on the open run\'s own row resumes the same run, its burn unchanged');
-  // A code typed on NEW RUN equal to slot 2's serial opens CONTINUE SLOT 2?.
-  cleanState(g);
-  openTitle(g);
-  click('title', 'new');
-  withPrompt(two, () => click('newrun', 'type'));
-  need(g.screen === 'title' && g.confirm !== null && g.confirm.n === 2 && g.confirm.held.record.save === two,
-    'a code typed on NEW RUN equal to slot 2\'s serial opens CONTINUE SLOT 2?');
-  press('KeyN', 'n');
-}
-
-/**
- * ERASE: absent beside an empty slot; over three used slots, E and a digit, or
- * the touch keys, ask ERASE SLOT n?, which removes that key alone at Y and
- * nothing at N, Q or Esc. Erasing the open run's slot unbinds it.
- */
-function eraseLeg(g, { need, click, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  const tap = (sid, which) => softTap(g, click, sid, which);
-  clearSaves();
-  putSave(1, { id: 'AAAAAAAA' });
-  putSave(2, { id: 'BBBBBBBB' });
-  cleanState(g);
-  openTitle(g);
-  press('KeyE', 'e');
-  need(!g.erasing && g.confirm === null && !eraseShows() && touch.soft('title', 'erase').getBoundingClientRect().width === 0,
-    'with a slot EMPTY, E does nothing and E ERASE is absent');
-  putSave(3, { id: 'CCCCCCCC' });
-  const before = savesText();
-  for (const [code, key] of [['KeyN', 'n'], ['KeyQ', 'q'], ['Escape', 'Escape']]) {
-    press('KeyE', 'e');
-    press('Digit2', '2');
-    need(g.confirm !== null && g.confirm.kind === 'erase' && g.confirm.n === 2 && savesText() === before, 'E and a digit open ERASE SLOT 2?');
-    press(code, key);
-    need(g.screen === 'title' && g.confirm === null && !g.erasing && savesText() === before, `${key} at ERASE SLOT 2? removes nothing`);
-  }
-  tap('title', 'erase');
-  need(g.erasing, 'the ERASE key enters erasing');
-  tap('erasing', 'back');
-  need(!g.erasing && savesText() === before, 'BACK leaves erasing');
-  tap('title', 'erase');
-  tap('erasing', 'e2');
-  need(g.confirm !== null && g.confirm.kind === 'erase' && g.confirm.n === 2, 'ERASE 2 asks ERASE SLOT 2?');
-  tap('confirm', 'yes');
-  need(g.screen === 'title' && !g.erasing && heldSave(2).state === 'absent' && saveNow(1).id === 'AAAAAAAA' && saveNow(3).id === 'CCCCCCCC',
-    'Y removes that key alone');
-  // An erase of the open run's slot unbinds it at Y, and P resumes it unsaved.
-  putSave(2, { id: 'BBBBBBBB' });
-  openTitle(g);
-  press('Digit3', '3');
-  press('KeyY', 'y');
-  const run = g.sim;
-  press('KeyP', 'p');
-  press('KeyQ', 'q');
-  press('KeyE', 'e');
-  press('Digit3', '3');
-  press('KeyY', 'y');
-  need(heldSave(3).state === 'absent' && g.open !== null && g.open.slot === null && g.open.saveId === null,
-    'ERASE of the open run\'s slot unbinds the run at its Y');
-  press('KeyP', 'p');
-  need(g.screen === 'play' && g.sim === run && g.saveId === null, 'P resumes the open run unsaved');
-}
-
-/**
- * Another tab overwrites, then erases, the first game's slot: each time the
- * first game's next write stores nothing, it plays on unsaved and its next
- * coin asks SAVE IN?.
- */
-function otherTabLeg(g, { need, click, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  const coin = firstCoin(g.world);
-  clearSaves();
-  putSave(2, { id: 'BBBBBBBB' });
-  putSave(3, { id: 'CCCCCCCC' });
-  cleanState(g);
-  openTitle(g);
-  click('title', 's1');
-  click('newrun', 'begin');
-  walkToItem(g, coin);
-  need(saveNow(1) !== null && saveNow(1).id === g.saveId, 'the first game takes slot 1 at its first coin');
-  // The other game overwrites slot 1 under its own id.
-  const other = reload();
-  keyTo(other, 'KeyN', 'n');
-  keyTo(other, 'Enter', 'Enter');
-  walkToItem(other, coin);
-  keyTo(other, 'Enter', 'Enter');
-  keyTo(other, 'KeyY', 'y');
-  need(saveNow(1).id === other.saveId && other.saveId !== g.saveId, 'a second game overwrites slot 1 under another id');
-  const theirs = load(saveKey(1));
-  press('KeyP', 'p');
-  need(load(saveKey(1)) === theirs && g.saveId === null && g.slot === null, 'the first game\'s next write stores nothing after another tab\'s overwrite');
-  press('KeyP', 'p');
-  walkToItem(g, { ...coin, i: 1 });
-  need(g.screen === 'savein', 'the unsaved first game\'s next coin asks SAVE IN?');
-  // It takes slot 1 back through OVERWRITE; the other game, unsaved at its next write, erases it.
-  press('Enter', 'Enter');
-  press('KeyY', 'y');
-  need(g.screen === 'play' && saveNow(1).id === g.saveId, 'the first game takes slot 1 back through OVERWRITE');
-  keyTo(other, 'KeyP', 'p');
-  keyTo(other, 'KeyQ', 'q');
-  keyTo(other, 'KeyE', 'e');
-  keyTo(other, 'Digit1', '1');
-  keyTo(other, 'KeyY', 'y');
-  need(heldSave(1).state === 'absent' && other.saveId === null, 'the second game erases slot 1');
-  press('KeyP', 'p');
-  need(heldSave(1).state === 'absent' && g.saveId === null, 'the first game\'s next write stores nothing after another tab\'s erase');
-  press('KeyP', 'p');
-  walkToItem(g, { ...coin, i: 2 });
-  need(g.screen === 'savein', 'the first game\'s next coin asks SAVE IN? again');
-  press('KeyQ', 'q');
-}
-
-/**
- * The confirm re-reads: OVERWRITE SLOT n? and ERASE SLOT n?, drawn before
- * another game rewrote slot n under another id, redraw at Y with the stored
- * record and write or remove nothing.
- */
-function rereadLeg(g, { need, click, press }) {
-  setDifficulty(g, 'medium');
-  useCode(g, SELFTEST_CODE);
-  clearSaves();
-  for (const n of SAVE_SLOTS) putSave(n, { id: `${'ABC'[n - 1]}AAAAAAA` });
-  cleanState(g);
-  openTitle(g);
-  click('title', 'new');
-  click('newrun', 'begin');
-  walkToItem(g, firstCoin(g.world));
-  press('Enter', 'Enter');
-  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 1 && g.confirm.held.record.id === 'AAAAAAAA', 'SAVE IN? asks OVERWRITE SLOT 1?');
-  putSave(1, { id: 'DDDDDDDD', wallet: 9 });
-  const rewritten = load(saveKey(1));
-  press('KeyY', 'y');
-  need(g.screen === 'savein' && g.confirm !== null && g.confirm.held.record.id === 'DDDDDDDD' && load(saveKey(1)) === rewritten && g.saveId === null,
-    'OVERWRITE redraws at Y with the stored record and writes nothing');
-  press('KeyN', 'n');
-  press('KeyQ', 'q');
-  openTitle(g);
-  press('KeyE', 'e');
-  press('Digit3', '3');
-  need(g.confirm !== null && g.confirm.kind === 'erase' && g.confirm.held.record.id === 'CAAAAAAA', 'E and 3 ask ERASE SLOT 3?');
-  putSave(3, { id: 'EEEEEEEE' });
-  const third = load(saveKey(3));
-  press('KeyY', 'y');
-  need(g.confirm !== null && g.confirm.held.record.id === 'EEEEEEEE' && load(saveKey(3)) === third, 'ERASE redraws at Y and removes nothing');
-  press('KeyN', 'n');
-}
-
-/**
- * The migration steps of the touch leg, from the slot list with no run open.
- * A page reload migrates the old slot, or the seven legacy keys of a HARD save
+ * The migration steps of the touch leg, from the title with no run open. A
+ * page reload migrates the old slot, or the seven legacy keys of a HARD save
  * at TOMB 20 with a wallet of 57, to slot 1 once per device.
  */
 function legacyLeg(g, { need }) {
@@ -8738,15 +8227,15 @@ function legacyLeg(g, { need }) {
     store(LEGACY_KEYS.paid, JSON.stringify({ [key]: 20, [stranger]: 9 }));
   };
   const gone = () => Object.values(LEGACY_KEYS).every((k) => load(k) === null);
-  // A page reload migrates, and slot 1's row asks CONTINUE SLOT 1? over the migrated save.
+  // A page reload migrates, and LOAD opens on the migrated save's row, slot 1.
   const ask = () => {
     const h = reload();
-    keyTo(h, 'Digit1', '1');
+    keyTo(h, 'KeyT', 't');
     return h;
   };
 
   // The old slot, of TOMB 20 and a record of 50, migrates to slot 1 at net 20 and high 50 and stays as
-  // stored, for older builds; erasing every slot then never brings it back.
+  // stored, for older builds; emptying every slot then never brings it back.
   fresh();
   const old = JSON.stringify({
     id: 'QQQQQQQQ', save: serial, level, start: '0,0', solved: twenty, wallet: 57, coins: [], tombs: ['0,0'], record: 50, continues: 1, recent: [],
@@ -8758,25 +8247,25 @@ function legacyLeg(g, { need }) {
     && load(OLD_SLOT_KEY) === old && load(MIGRATED_KEY) === '1', 'the old slot migrates to slot 1 at net 20 and high 50 and stays as stored');
   clearSaves();
   reload();
-  need(heldSave(1).state === 'absent' && load(OLD_SLOT_KEY) === old, 'erasing every slot never brings the old save back');
+  need(heldSave(1).state === 'absent' && load(OLD_SLOT_KEY) === old, 'emptying every slot never brings the old save back');
 
   // The legacy keys migrate once, with the device wallet, and go.
   oldKeys();
   let h = ask();
-  need(h.confirm !== null, 'RESUME over a legacy save asks CONTINUE?');
-  const slot = h.confirm.held.record;
+  need(h.screen === 'load' && h.row === 0 && saveNow(1) !== null, 'LOAD over a legacy save opens on its row');
+  const slot = saveNow(1);
   need(slot.wallet === 57 && slot.net === 20 && slot.high === 20 && slot.level === level, 'a legacy save keeps its wallet, TOMB and difficulty');
   need(load(MIGRATED_KEY) === '1' && gone(), 'a legacy save adopts the device wallet once');
-  keyTo(h, 'KeyY', 'y');
-  need(h.screen === 'play' && h.wallet === 57 && tombCount(h.sim) === 20 && h.difficulty === level, 'Y plays a legacy save at its wallet, TOMB and difficulty');
+  keyTo(h, 'Enter', 'Enter');
+  need(h.screen === 'play' && h.wallet === 57 && tombCount(h.sim) === 20 && h.difficulty === level, 'LOAD plays a legacy save at its wallet, TOMB and difficulty');
 
   // A save with no difficulty beside it plays at ULTIMATE, the 6x4 world, whatever the stacked world's save left.
   oldKeys({ difficulty: null });
   store(STACKED, 'easy');
   h = ask();
-  need(h.confirm.held.record.level === 'ultimate', 'a legacy save with no stored difficulty adopts at ULTIMATE');
-  keyTo(h, 'KeyY', 'y');
-  need(h.screen === 'play' && h.difficulty === 'ultimate' && h.world.difficulty === 'ultimate', 'Y plays a legacy save with no stored difficulty at ULTIMATE');
+  need(saveNow(1).level === 'ultimate', 'a legacy save with no stored difficulty adopts at ULTIMATE');
+  keyTo(h, 'Enter', 'Enter');
+  need(h.screen === 'play' && h.difficulty === 'ultimate' && h.world.difficulty === 'ultimate', 'LOAD plays a legacy save with no stored difficulty at ULTIMATE');
   unstore(STACKED);
 
   // The run counts only when it names the save.
@@ -8784,27 +8273,1160 @@ function legacyLeg(g, { need }) {
   const board = boardCoords(1, 0, 0, g.world.size), elsewhere = encodeSave(SELFTEST_CODE, board.x, board.y);
   oldKeys({ save: elsewhere, run: null });
   h = ask();
-  need(h.confirm.held.record.net === 0 && h.confirm.held.record.start === '1,0', 'a legacy save without a run resumes at its own tomb');
-  keyTo(h, 'KeyY', 'y');
+  need(saveNow(1).net === 0 && saveNow(1).start === '1,0', 'a legacy save without a run resumes at its own tomb');
+  keyTo(h, 'Enter', 'Enter');
   need(h.screen === 'play' && h.sim.net === 0 && h.sim.start.u === 1 && h.sim.start.v === 0 && h.point.start === '1,0',
-    'Y plays a legacy save without a run from its own tomb');
+    'LOAD plays a legacy save without a run from its own tomb');
   oldKeys({ run: { save: encodeSave(SELFTEST_CODE, first.x + 1, first.y), start: '0,0', solved: twenty } });
   h = ask();
-  need(h.confirm.held.record.net === 0, 'a legacy run naming another save migrates at net 0');
+  need(saveNow(1).net === 0, 'a legacy run naming another save migrates at net 0');
   fresh();
 }
+
+// The matrix legs prove design §6, a leg a row. Each check's message opens
+// with its cell, as `M1F`, so a mutation row names the cell it breaks.
+
+// Slot n's valid record in a matrix leg: id `slotId(n)`, wallet 10n, played n
+// hours after PLAYED, the serial SAVE_BASE's unless a leg sets it.
+const HOUR = 3600000;
+const PLAYED = Date.UTC(2026, 9, 25);
+const slotId = (n) => `${'ABC'[n - 1]}AAAAAAA`;
+// A newer build's record.
+const NEWER_TEXT = JSON.stringify({ v: 2, id: 'NNNNNNNN', save: SAVE_BASE.save, level: 'medium', skins: ['gold'] });
+
+/**
+ * Fills the three slots by `spec`, a character a slot: '.' EMPTY, 'd'
+ * DAMAGED, 'n' NEWER and 'v' slot n's valid record, whose fields `over[n]`
+ * changes.
+ */
+function fill(spec, over = {}) {
+  SAVE_SLOTS.forEach((n, i) => {
+    if (spec[i] === '.') unstore(saveKey(n));
+    else if (spec[i] === 'd') store(saveKey(n), '{not json');
+    else if (spec[i] === 'n') store(saveKey(n), NEWER_TEXT);
+    else putSave(n, { id: slotId(n), wallet: 10 * n, played: PLAYED + n * HOUR, ...over[n] });
+  });
+}
+
+/** Storage refuses writes while `on`. A store of the pad's side makes `storage.failed()` follow at once. */
+function refuse(on) {
+  refuseWrites = on;
+  store(KEY_PAD, padSide(load(KEY_PAD)));
+}
+
+/** The title with no run open over slots `spec` (fill), at MEDIUM on the self-test seed, the economy clean. */
+function fresh(g, spec, over) {
+  fill(spec, over);
+  cleanState(g);
+  setDifficulty(g, 'medium');
+  if (g.code !== SELFTEST_CODE) useCode(g, SELFTEST_CODE);
+  openTitle(g);
+}
+
+/** The serial of the self-test seed's start board at MEDIUM. */
+function startSerial() {
+  const { board } = createWorld(SELFTEST_CODE, { difficulty: 'medium' }).startPoint();
+  return encodeSave(SELFTEST_CODE, board.x, board.y);
+}
+
+/** The serial of tomb (0, 0)'s exit board at MEDIUM: a maze board of the self-test seed apart from the start board. */
+function exitSerial() {
+  const X = exitBoard(createWorld(SELFTEST_CODE, { difficulty: 'medium' }));
+  return encodeSave(SELFTEST_CODE, X.x, X.y);
+}
+
+/** Game `h` types `text` into LOAD's code entry, opening LOAD from the title, a key a character, then Enter. */
+function typeIn(h, text) {
+  if (h.screen === 'title') keyTo(h, 'KeyT', 't');
+  keyTo(h, 'KeyT', 't');
+  for (const ch of text) keyTo(h, /[0-9]/.test(ch) ? `Digit${ch}` : /[A-Z]/.test(ch) ? `Key${ch}` : ch === '-' ? 'Minus' : 'Semicolon', ch);
+  keyTo(h, 'Enter', 'Enter');
+}
+
+/** Game `h` stands still for n ticks of its own tick. */
+function stand(h, n) {
+  for (let i = 0; i < n; i++) {
+    h.keys.clear();
+    Object.assign(h, { press: 0, release: 0, jump: false });
+    tick(h);
+  }
+}
+
+/** The torch of game `h`'s run dies through its own tick, whose endRun writes. */
+function die(h) {
+  h.sim.burn = 0;
+  h.sim.ember = TICK / 2;
+  runTicks(h, () => [0, 0, false], () => h.screen === 'over', 10, 'the torch dies');
+}
+
+/** True when the last frame drew the note: a pixel of the overlay's note line is set. */
+function noteDrawn() {
+  const px = view.getContext('2d').getImageData(80, NOTE_Y, 160, 8).data;
+  for (let i = 3; i < px.length; i += 4) if (px[i] !== 0) return true;
+  return false;
+}
+
+/** True when the last LOAD frame drew nothing on slot n's second line: its pixels match the panel's right of it. */
+function timeBlank(n) {
+  const y = ROWS_Y[n - 1] + 9, ctx = view.getContext('2d');
+  const ref = ctx.getImageData(250, y, 1, 1).data, px = ctx.getImageData(84, y, 80, 7).data;
+  for (let i = 0; i < px.length; i++) if (px[i] !== ref[i % 4]) return false;
+  return true;
+}
+
+/** An open run on the title that holds no slot and 5 coins, as one the free-slot rule left unsaved; returns its sim. */
+function openUnsaved(g) {
+  cleanState(g);
+  begin(g);
+  g.wallet = 5;
+  const run = g.sim;
+  leaveOpen(g);
+  draw(g, 0);
+  return run;
+}
+
+/** M8, Enter or a digit on an EMPTY, DAMAGED or NEWER row of LOAD: nothing loads, starts or asks. */
+function m8Leg(g, { need }) {
+  // Enter and the digit on each of slots `rows`, LOAD's cursor walked from its first row down.
+  const tries = (rows) => {
+    const sim = g.sim, kept = savesText();
+    keyTo(g, 'KeyT', 't');
+    for (let i = 0; i < 3; i++) keyTo(g, 'ArrowUp', 'ArrowUp');
+    for (const n of SAVE_SLOTS) {
+      if (rows.includes(n)) {
+        keyTo(g, 'Enter', 'Enter');
+        keyTo(g, `Digit${n}`, String(n));
+      }
+      keyTo(g, 'ArrowDown', 'ArrowDown');
+    }
+    return g.screen === 'load' && g.confirm === null && g.typing === null && g.sim === sim && savesText() === kept;
+  };
+  fresh(g, '.dv');
+  need(heldSave(2).state === 'damaged' && ROW_LABEL[heldSave(2).state] === 'DAMAGED', 'a slot holding an unparseable string reads DAMAGED, never EMPTY');
+  need(tries([1, 2]), 'M8F Enter and the digits of an EMPTY and a DAMAGED row do nothing');
+  fresh(g, 'vnv');
+  need(heldSave(2).state === 'newer' && ROW_LABEL[heldSave(2).state] === 'NEWER', 'a slot holding a v 2 record reads NEWER');
+  need(tries([2]), 'M8U Enter and the digit of a NEWER row do nothing');
+  fresh(g, 'nnn');
+  need(tries([1, 2, 3]), 'M8N Enter and the digits of three NEWER rows do nothing');
+  fresh(g, '...');
+  refuse(true);
+  need(tries([1, 2, 3]), 'M8N with storage refusing writes Enter and the digits of EMPTY rows do nothing');
+  refuse(false);
+}
+
+/** M19, two games BEGIN at once over one free slot: the first write takes it, and the other plays on as row 11. */
+function m19Leg(g, { need }) {
+  fresh(g, '.vv');
+  keyTo(g, 'Enter', 'Enter');
+  const other = reload();
+  keyTo(other, 'Enter', 'Enter');
+  need(g.screen === 'play' && other.screen === 'play' && g.armed && other.armed, 'M19F two games BEGIN at once over one free slot');
+  earnFake(g);
+  const won = load(saveKey(1));
+  earnFake(other);
+  need(g.slot === 1 && saveNow(1).id === g.saveId && load(saveKey(1)) === won && other.saveId === null && !other.armed,
+    'M19F the first write takes the free slot, and the other game plays on unsaved');
+}
+
+/** M11, another game fills the free slot before this run's first write: the next free one takes it, or none does. */
+function m11Leg(g, { need }) {
+  // M11F: slots 1 and 2 free; the other game's first coin takes slot 1.
+  fresh(g, '..v');
+  keyTo(g, 'Enter', 'Enter');
+  const other = reload();
+  keyTo(other, 'Enter', 'Enter');
+  earnFake(other);
+  earnFake(g);
+  need(other.slot === 1 && saveNow(1).id === other.saveId && g.slot === 2 && saveNow(2).id === g.saveId
+    && g.noteText === 'SAVED IN SLOT 2' && g.noteTicks === NOTE_TICKS, 'M11F the first coin after another game filled slot 1 takes slot 2 and notes it');
+  // M11U: slot 1 alone free; the other game's first coin takes it.
+  fresh(g, '.vv');
+  keyTo(g, 'Enter', 'Enter');
+  const second = reload();
+  keyTo(second, 'Enter', 'Enter');
+  earnFake(second);
+  const full = savesText();
+  earnFake(g);
+  need(g.saveId === null && !g.armed && savesText() === full && g.noteText === NOT_SAVED && g.noteTicks === NOTE_TICKS,
+    'M11U the first coin after another game filled the last free slot notes NOT SAVED: PAUSE TO SAVE');
+  g.noteTicks = 0;
+  earnFake(g);
+  need(g.saveId === null && savesText() === full && g.noteTicks === 0, 'M11U the unsaved run writes nothing more by itself');
+}
+
+/**
+ * M1, BEGIN: over a free slot the first coin takes the lowest and notes it for
+ * 120 ticks of play; over three full slots the pick marks a slot that the
+ * first coin overwrites; with no slot writable the run plays unsaved.
+ */
+function m1Leg(g, { need }) {
+  // M1F: slot 1 used, slots 2 and 3 free.
+  fresh(g, 'v..');
+  const before = savesText();
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'play' && g.armed && g.saveId === null && savesText() === before, 'M1F BEGIN over a free slot asks nothing and writes nothing');
+  earnFake(g);
+  need(g.slot === 2 && saveNow(2).id === g.saveId && heldSave(3).state === 'absent' && savesText().startsWith(before.split('\u0001')[0]),
+    'M1F the first coin takes slot 2, the lowest free');
+  need(g.noteText === 'SAVED IN SLOT 2' && g.noteTicks > 0, 'M1F the first coin notes SAVED IN SLOT 2');
+  draw(g, 0);
+  need(noteDrawn(), 'M1F the note draws in play');
+  stand(g, 60);
+  need(g.noteTicks === 60, 'M1F the note keeps 60 of its 120 ticks after 60 ticks of play');
+  keyTo(g, 'KeyP', 'p');
+  for (let i = 0; i < 30; i++) tick(g);
+  keyTo(g, 'KeyP', 'p');
+  need(g.noteTicks === 60, 'M1F a pause holds the note');
+  stand(g, 59);
+  draw(g, 0);
+  need(noteDrawn(), 'M1F the note still draws on its 120th tick of play');
+  stand(g, 1);
+  draw(g, 0);
+  need(g.noteTicks === 0 && !noteDrawn(), 'M1F the note lasts 120 ticks of play');
+
+  // M1U: all three full, slot 2 played least recently.
+  fresh(g, 'vvv', { 2: { played: PLAYED } });
+  const full = savesText();
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'pick' && g.row === 1 && savesText() === full, 'M1U BEGIN over three full slots opens the pick, its cursor on the least recently played');
+  keyTo(g, 'Enter', 'Enter', true);
+  keyTo(g, 'KeyY', 'y', true);
+  keyTo(g, 'Enter', 'Enter', true);
+  need(g.screen === 'pick' && g.confirm === null && g.mark === null && savesText() === full, 'M1U a held Enter from the title marks no slot');
+  keyTo(g, 'Enter', 'Enter');
+  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 2, 'M1U Enter asks OVERWRITE SLOT 2?');
+  keyTo(g, 'Enter', 'Enter', true);
+  keyTo(g, 'KeyY', 'y', true);
+  need(g.screen === 'pick' && g.confirm !== null && g.mark === null && savesText() === full, 'M1U OVERWRITE SLOT 2? ignores a repeated Y and Enter');
+  keyTo(g, 'KeyN', 'n');
+  need(g.screen === 'pick' && g.confirm === null, 'M1U N at OVERWRITE SLOT 2? returns to the pick');
+  keyTo(g, 'Digit2', '2');
+  keyTo(g, 'KeyY', 'y');
+  need(g.screen === 'play' && g.mark !== null && g.mark.n === 2 && g.mark.id === slotId(2) && g.saveId === null && savesText() === full,
+    'M1U Y marks slot 2 and writes nothing before the first coin');
+  earnFake(g);
+  need(g.slot === 2 && saveNow(2).id === g.saveId && g.saveId !== slotId(2) && saveNow(1).id === slotId(1) && saveNow(3).id === slotId(3)
+    && g.noteText === 'SAVED IN SLOT 2', 'M1U the first coin overwrites slot 2 alone');
+  // Y over a slot another game rewrote under another id redraws; over a slot emptied since, BEGIN's rules run again.
+  fresh(g, 'vvv');
+  keyTo(g, 'Enter', 'Enter');
+  keyTo(g, 'Digit1', '1');
+  putSave(1, { id: 'DDDDDDDD', wallet: 9 });
+  keyTo(g, 'KeyY', 'y');
+  need(g.screen === 'pick' && g.confirm !== null && g.confirm.held.record.id === 'DDDDDDDD' && g.mark === null,
+    'M1U Y over a slot rewritten under another id redraws OVERWRITE SLOT 1?');
+  unstore(saveKey(1));
+  keyTo(g, 'KeyY', 'y');
+  need(g.screen === 'play' && g.armed && g.mark === null, 'M1U Y over a slot emptied since starts the run under the free-slot rule');
+
+  // M1N: three NEWER slots, then storage refusing writes over free ones.
+  for (const [what, spec, warning] of [['three NEWER slots', 'nnn', 'SAVES FROM A NEWER GAME: RELOAD'], ['storage refusing writes', '...', 'SAVES OFF: COPY YOUR CODE']]) {
+    fresh(g, spec);
+    if (spec === '...') refuse(true);
+    const kept = savesText();
+    keyTo(g, 'Enter', 'Enter');
+    need(g.screen === 'play' && savesText() === kept, `M1N BEGIN over ${what} plays unsaved and asks nothing`);
+    earnFake(g);
+    need(g.saveId === null && g.noteTicks === 0 && savesText() === kept, `M1N over ${what} the first coin writes nothing and notes nothing`);
+    keyTo(g, 'KeyP', 'p');
+    need(g.screen === 'pause' && !saveOffered(g), `M1N over ${what} the pause offers no SAVE`);
+    keyTo(g, 'KeyQ', 'q');
+    need(titleWarning() === warning, `M1N over ${what} the title warns of the cause`);
+    refuse(false);
+  }
+  // The take that does not land: writes refused after BEGIN over a free slot.
+  fresh(g, '...');
+  keyTo(g, 'Enter', 'Enter');
+  refuseWrites = true;
+  earnFake(g);
+  need(g.saveId === null && g.slot === null && g.noteTicks === 0 && heldSave(1).state === 'absent', 'M1N a take whose store does not land binds nothing and notes nothing');
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'KeyQ', 'q');
+  need(titleWarning() === 'SAVES OFF: COPY YOUR CODE', 'M1N the title then reads SAVES OFF: COPY YOUR CODE');
+  refuse(false);
+}
+
+/** M2, a typed seed on LOAD becomes the title's shown seed, and LOAD returns to the title. */
+function m2Leg(g, { need }) {
+  for (const [cell, spec] of [['M2F', 'v..'], ['M2U', 'vvv'], ['M2N', 'nnn']]) {
+    fresh(g, spec);
+    const kept = savesText();
+    typeIn(g, '2222-3333');
+    need(g.screen === 'title' && g.code === '22223333' && g.typing === null && savesText() === kept, `${cell} a typed seed becomes the shown seed, back on the title`);
+  }
+}
+
+/** M10, P on the title resumes the open run, and with none open does nothing. */
+function m10Leg(g, { need }) {
+  for (const [cell, spec] of [['M10F', 'v..'], ['M10U', 'vvv'], ['M10N', 'nnn']]) {
+    fresh(g, spec);
+    const sim = g.sim, kept = savesText();
+    keyTo(g, 'KeyP', 'p');
+    need(g.screen === 'title' && g.sim === sim && g.confirm === null && savesText() === kept, `${cell} P with no run open does nothing`);
+    begin(g);
+    const run = g.sim;
+    leaveOpen(g);
+    keyTo(g, 'KeyP', 'p');
+    need(g.screen === 'play' && g.sim === run, `${cell} P on the title resumes the open run`);
+  }
+}
+
+/** M6, Enter on a valid LOAD row loads it at once at its level, TOMB n and coins, bound to its slot. */
+function m6Leg(g, { need }) {
+  const two = startSerial();
+  for (const [cell, spec] of [['M6F', 'vv.'], ['M6U', 'vvv']]) {
+    fresh(g, spec, { 2: { save: two, level: 'hard', net: 30, high: 31, wallet: 310 } });
+    setDifficulty(g, 'easy');
+    const kept = savesText();
+    keyTo(g, 'KeyT', 't');
+    for (let i = 0; i < 3; i++) keyTo(g, 'ArrowUp', 'ArrowUp');
+    keyTo(g, 'ArrowDown', 'ArrowDown');
+    keyTo(g, 'Enter', 'Enter');
+    need(g.screen === 'play' && g.slot === 2 && g.saveId === slotId(2) && g.world.difficulty === 'hard' && g.difficulty === 'hard'
+      && tombCount(g.sim) === 31 && g.sim.net === 30 && g.wallet === 310 && g.point.save === two && savesText() === kept,
+    `${cell} Enter on slot 2's row loads it at its level, TOMB n and coins`);
+  }
+}
+
+/** M7, Enter on the open run's own row resumes it, with no rebuild. */
+function m7Leg(g, { need }) {
+  // Slot 1 was played ahead of the clock, so its row, not the open run's, is the most recently played.
+  for (const [cell, spec] of [['M7F', 'v..'], ['M7U', 'vv.']]) {
+    fresh(g, spec, { 1: { played: Date.UTC(2100, 0, 1) } });
+    keyTo(g, 'Enter', 'Enter');
+    earnFake(g);
+    const n = g.slot, run = g.sim;
+    run.burn = BURN_S / 3;
+    keyTo(g, 'KeyP', 'p');
+    keyTo(g, 'KeyQ', 'q');
+    keyTo(g, 'KeyT', 't');
+    need(g.screen === 'load' && n !== null && g.row === n - 1, `${cell} LOAD's cursor starts on the open run's own row`);
+    keyTo(g, 'Enter', 'Enter');
+    need(g.screen === 'play' && g.sim === run && run.burn === BURN_S / 3, `${cell} Enter on the open run's own row resumes the same run, its burn unchanged`);
+  }
+}
+
+/** M22, a serial of a slot's seed at another board, from earlier in its run, matches no slot: a new run, as row 4. */
+function m22Leg(g, { need }) {
+  fresh(g, 'v..', { 1: { save: startSerial(), net: 5, high: 5, wallet: 50 } });
+  typeIn(g, exitSerial());
+  need(g.screen === 'play' && tombCount(g.sim) === 0 && g.wallet === 0 && g.slot === null, 'M22 another save code starts at TOMB 0');
+}
+
+/** M21, a serial that two slots hold loads the lower. */
+function m21Leg(g, { need }) {
+  const s = startSerial();
+  fresh(g, 'v.v', { 1: { save: s, wallet: 11 }, 3: { save: s, wallet: 33 } });
+  typeIn(g, s);
+  need(g.screen === 'play' && g.slot === 1 && g.saveId === slotId(1) && g.wallet === 11, 'M21 a serial in two slots loads the lower');
+}
+
+/** M3, a typed serial matching a valid slot loads that slot at its level, and over full slots overwrites nothing. */
+function m3Leg(g, { need }) {
+  const two = startSerial();
+  for (const [cell, spec] of [['M3F', 'vv.'], ['M3U', 'vvv']]) {
+    fresh(g, spec, { 2: { save: two, level: 'hard', net: 5, high: 6, wallet: 60 } });
+    setDifficulty(g, 'easy');
+    const kept = savesText();
+    typeIn(g, two);
+    need(g.screen === 'play' && g.slot === 2 && g.saveId === slotId(2) && g.world.difficulty === 'hard' && tombCount(g.sim) === 6
+      && g.wallet === 60 && savesText() === kept, `${cell} a typed serial matching slot 2 loads slot 2 at its level, writing nothing`);
+  }
+}
+
+/**
+ * M5, the typed serial of the open run resumes it with no rebuild: through
+ * its own row when the run is bound and its slot holds the serial, and as the
+ * open run's serial when it holds no slot.
+ */
+function m5Leg(g, { need }) {
+  // Pauses the run, which writes a bound run's serial, and leaves it open with its torch at a third; the
+  // typed serial must resume it unchanged.
+  const resumes = (cell, what, refused = false) => {
+    const run = g.sim;
+    run.burn = BURN_S / 3;
+    keyTo(g, 'KeyP', 'p');
+    const serial = hereCode(g);
+    if (refused) refuse(true);
+    keyTo(g, 'KeyQ', 'q');
+    typeIn(g, serial);
+    need(g.screen === 'play' && g.sim === run && run.burn === BURN_S / 3, `${cell} the typed serial of ${what} resumes it, its burn unchanged`);
+    refuse(false);
+  };
+  // Bound: BEGIN's run takes slot 1 at its first coin.
+  for (const [cell, spec, refused] of [['M5F', '...', false], ['M5U', '.vv', false], ['M5N', '...', true]]) {
+    fresh(g, spec);
+    keyTo(g, 'Enter', 'Enter');
+    earnFake(g);
+    resumes(cell, `a bound open run whose slot holds it${refused ? ', storage refusing writes' : ''}`, refused);
+  }
+  // Unbound: the free-slot rule armed, a marked run, a run over three NEWER slots.
+  fresh(g, 'v..');
+  keyTo(g, 'Enter', 'Enter');
+  resumes('M5F', 'an open run holding no slot');
+  fresh(g, 'vvv');
+  keyTo(g, 'Enter', 'Enter');
+  keyTo(g, 'Digit1', '1');
+  keyTo(g, 'KeyY', 'y');
+  resumes('M5U', 'a marked open run');
+  fresh(g, 'nnn');
+  keyTo(g, 'Enter', 'Enter');
+  resumes('M5N', 'an open run over three NEWER slots');
+}
+
+/** M4, a typed serial matching no slot starts a run at the setting under BEGIN's rules, as row 1. */
+function m4Leg(g, { need }) {
+  const elsewhere = exitSerial();
+  // M4F: slot 1 used.
+  fresh(g, 'v..');
+  setDifficulty(g, 'easy');
+  let kept = savesText();
+  typeIn(g, elsewhere);
+  need(g.screen === 'play' && g.world.difficulty === 'easy' && tombCount(g.sim) === 0 && g.armed && savesText() === kept,
+    'M4F a typed serial matching no slot starts a run at the setting, asking nothing');
+  earnFake(g);
+  need(g.slot === 2 && saveNow(2).id === g.saveId && g.noteText === 'SAVED IN SLOT 2', 'M4F its first coin takes slot 2 and notes it');
+  // M4U: all three full.
+  fresh(g, 'vvv');
+  kept = savesText();
+  typeIn(g, elsewhere);
+  need(g.screen === 'pick' && g.pick.p === decodeSave(elsewhere).p && savesText() === kept, 'M4U a typed serial matching no slot opens the pick first');
+  keyTo(g, 'Digit1', '1');
+  keyTo(g, 'KeyY', 'y');
+  need(g.screen === 'play' && g.mark !== null && g.mark.n === 1 && hereCode(g) === elsewhere && savesText() === kept, 'M4U Y starts the typed run marked for slot 1');
+  earnFake(g);
+  need(g.slot === 1 && saveNow(1).id === g.saveId, 'M4U its first coin overwrites slot 1');
+  // M4N: three NEWER slots, then storage refusing writes.
+  for (const [what, spec, warning] of [['three NEWER slots', 'nnn', 'SAVES FROM A NEWER GAME: RELOAD'], ['storage refusing writes', '...', 'SAVES OFF: COPY YOUR CODE']]) {
+    fresh(g, spec);
+    if (spec === '...') refuse(true);
+    kept = savesText();
+    typeIn(g, elsewhere);
+    need(g.screen === 'play' && savesText() === kept, `M4N over ${what} a typed serial matching no slot plays unsaved and asks nothing`);
+    earnFake(g);
+    need(g.saveId === null && g.noteTicks === 0 && savesText() === kept, `M4N over ${what} its first coin writes nothing and notes nothing`);
+    keyTo(g, 'KeyP', 'p');
+    need(!saveOffered(g), `M4N over ${what} the pause offers no SAVE`);
+    keyTo(g, 'KeyQ', 'q');
+    need(titleWarning() === warning, `M4N over ${what} the title warns of the cause`);
+    refuse(false);
+  }
+}
+
+/**
+ * M9, every action that would discard an open run unsaved with progress asks
+ * LEAVE UNSAVED RUN? first: BEGIN, a typed save code that loads a slot or
+ * starts a run, and a load by Enter, a digit or a touch SLOT key. N returns to
+ * the screen that asked, and Y carries the action on.
+ */
+function m9Leg(g, { need, click }) {
+  const elsewhere = exitSerial();
+  // Each action, the screen it asks from, and what its yes makes of the open run `run`.
+  const loaded = (n) => (run) => g.screen === 'play' && g.slot === n && g.sim !== run && g.open === null;
+  const started = (run) => g.screen === 'play' && g.sim !== run && g.open === null && g.armed;
+  const picked = () => g.screen === 'pick';
+  const onLoad = () => { if (g.screen === 'title') keyTo(g, 'KeyT', 't'); };
+  const actions = {
+    BEGIN: [() => keyTo(g, 'Enter', 'Enter'), 'title'],
+    'a typed save code that loads slot 2': [() => typeIn(g, startSerial()), 'load'],
+    'a typed save code that starts a run': [() => typeIn(g, elsewhere), 'load'],
+    'Enter on slot 2\'s row': [() => {
+      onLoad();
+      for (const dir of ['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowDown']) keyTo(g, dir, dir);
+      keyTo(g, 'Enter', 'Enter');
+    }, 'load'],
+    'the digit 2': [() => { onLoad(); keyTo(g, 'Digit2', '2'); }, 'load'],
+    'the SLOT 2 key': [() => { onLoad(); softTap(g, click, 'load', 's2'); }, 'load'],
+  };
+  const asks = (cell, spec, what, done) => {
+    const [act, back] = actions[what];
+    fresh(g, spec, { 2: { save: startSerial() } });
+    const run = openUnsaved(g);
+    act();
+    need(g.confirm !== null && g.confirm.kind === 'leave' && g.screen === back && g.open !== null && g.open.sim === run, `${cell} ${what} asks LEAVE UNSAVED RUN?`);
+    keyTo(g, 'KeyN', 'n');
+    need(g.confirm === null && g.screen === back && g.open !== null && g.open.sim === run, `${cell} N at LEAVE UNSAVED RUN? after ${what} returns where it asked`);
+    act();
+    keyTo(g, 'KeyY', 'y');
+    need(done(run), `${cell} Y at LEAVE UNSAVED RUN? carries ${what} on`);
+    return run;
+  };
+  // A run whose slot another game took holds none.
+  fresh(g, '...');
+  keyTo(g, 'Enter', 'Enter');
+  earnFake(g);
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'KeyQ', 'q');
+  putSave(1, { id: 'DDDDDDDD' });
+  keyTo(g, 'Enter', 'Enter');
+  need(g.confirm !== null && g.confirm.kind === 'leave', 'M9F BEGIN over an open run whose slot another game took asks LEAVE UNSAVED RUN?');
+  asks('M9F', 'vv.', 'BEGIN', started);
+  asks('M9F', 'vv.', 'a typed save code that loads slot 2', loaded(2));
+  asks('M9F', 'vv.', 'a typed save code that starts a run', started);
+  for (const what of ['Enter on slot 2\'s row', 'the digit 2', 'the SLOT 2 key']) asks('M9F', 'vv.', what, loaded(2));
+  // Over three full slots the yes reaches the pick, and backing out of it keeps the run open.
+  for (const what of ['BEGIN', 'a typed save code that starts a run']) {
+    const run = asks('M9U', 'vvv', what, picked);
+    keyTo(g, 'KeyQ', 'q');
+    need(g.screen === 'title' && g.open !== null && g.open.sim === run, `M9U backing out of the pick after ${what} keeps the run open`);
+  }
+  asks('M9U', 'vvv', 'a typed save code that loads slot 2', loaded(2));
+  for (const what of ['Enter on slot 2\'s row', 'the digit 2', 'the SLOT 2 key']) asks('M9U', 'vvv', what, loaded(2));
+  for (const what of ['BEGIN', 'a typed save code that starts a run']) asks('M9N', 'nnn', what, started);
+}
+
+/** M12, another game overwrites or removes a bound run's slot: its next write takes the next free slot, or none. */
+function m12Leg(g, { need }) {
+  // M12F: the run takes slot 1; slot 2 free, slot 3 used.
+  fresh(g, '..v');
+  keyTo(g, 'Enter', 'Enter');
+  earnFake(g);
+  putSave(1, { id: 'DDDDDDDD', wallet: 9 });
+  const theirs = load(saveKey(1));
+  earnFake(g);
+  need(load(saveKey(1)) === theirs, 'M12F the first game\'s next write stores nothing after another tab\'s overwrite');
+  need(g.slot === 2 && saveNow(2).id === g.saveId && g.noteText === 'SAVED IN SLOT 2', 'M12F a run whose slot another game overwrote takes slot 2 at its next write and notes it');
+  // A stale page of revision 1 removes the run's slot, which its next write takes again under a fresh id.
+  const was = g.saveId;
+  unstore(saveKey(2));
+  g.noteTicks = 0;
+  earnFake(g);
+  need(g.slot === 2 && saveNow(2).id === g.saveId && g.saveId !== was && g.noteTicks === NOTE_TICKS, 'M12F a run whose slot another game removed takes the lowest free slot again and notes it');
+  // M12U: slots 2 and 3 used; the run takes slot 1, which another game overwrites.
+  fresh(g, '.vv');
+  keyTo(g, 'Enter', 'Enter');
+  earnFake(g);
+  putSave(1, { id: 'DDDDDDDD' });
+  const full = savesText();
+  earnFake(g);
+  need(savesText() === full && g.saveId === null && g.noteText === NOT_SAVED && g.noteTicks === NOTE_TICKS,
+    'M12U a run whose slot another game overwrote, all three full, notes NOT SAVED: PAUSE TO SAVE');
+  // M12N: a newer build writes over the run's slot beside two NEWER slots; another game removes it while
+  // storage refuses writes.
+  for (const [what, spec, warning] of [['three NEWER slots', '.nn', 'SAVES FROM A NEWER GAME: RELOAD'], ['storage refusing writes', '...', 'SAVES OFF: COPY YOUR CODE']]) {
+    fresh(g, spec);
+    keyTo(g, 'Enter', 'Enter');
+    earnFake(g);
+    if (spec === '.nn') store(saveKey(1), NEWER_TEXT);
+    else {
+      unstore(saveKey(1));
+      refuse(true);
+    }
+    const kept = savesText();
+    g.noteTicks = 0;
+    earnFake(g);
+    need(g.saveId === null && g.noteTicks === 0 && savesText() === kept, `M12N over ${what} a run whose slot another game took plays on unsaved and notes nothing`);
+    keyTo(g, 'KeyP', 'p');
+    need(!saveOffered(g), `M12N over ${what} the pause offers no SAVE`);
+    keyTo(g, 'KeyQ', 'q');
+    need(titleWarning() === warning, `M12N over ${what} the title warns of the cause`);
+    refuse(false);
+  }
+}
+
+/** M13, the marked slot changes before the run's first write: the free-slot rule, and with no slot free, none. */
+function m13Leg(g, { need }) {
+  // M13F: the pick marks slot 2, which another game rewrites under its own id; slot 3 then empties.
+  fresh(g, 'vvv');
+  keyTo(g, 'Enter', 'Enter');
+  keyTo(g, 'Digit2', '2');
+  keyTo(g, 'KeyY', 'y');
+  putSave(2, { id: 'DDDDDDDD' });
+  unstore(saveKey(3));
+  const theirs = load(saveKey(2));
+  earnFake(g);
+  need(load(saveKey(2)) === theirs && g.slot === 3 && saveNow(3).id === g.saveId && g.noteText === 'SAVED IN SLOT 3',
+    'M13F the first coin leaves a marked slot another game rewrote, and the free-slot rule takes slot 3');
+  // M13U: the same rewrite with all three still full.
+  fresh(g, 'vvv');
+  keyTo(g, 'Enter', 'Enter');
+  keyTo(g, 'Digit2', '2');
+  keyTo(g, 'KeyY', 'y');
+  putSave(2, { id: 'DDDDDDDD' });
+  const full = savesText();
+  earnFake(g);
+  need(savesText() === full && g.saveId === null && g.mark === null && g.noteText === NOT_SAVED,
+    'M13U the first coin over a marked slot another game rewrote, all three full, notes NOT SAVED: PAUSE TO SAVE');
+}
+
+/** M14, a quit, a death or a reload before the first coin writes no slot, and leaves a marked slot whole. */
+function m14Leg(g, { need }) {
+  for (const [cell, spec, mark] of [['M14F', 'v..', false], ['M14U', 'vvv', true]]) {
+    fresh(g, spec);
+    const kept = savesText();
+    keyTo(g, 'Enter', 'Enter');
+    if (mark) {
+      keyTo(g, 'Digit2', '2');
+      keyTo(g, 'KeyY', 'y');
+    }
+    keyTo(g, 'KeyP', 'p');
+    keyTo(g, 'KeyQ', 'q');
+    need(g.screen === 'title' && savesText() === kept, `${cell} a PAUSE and Q before the first coin leave every slot as it was`);
+    keyTo(g, 'KeyP', 'p');
+    die(g);
+    need(g.screen === 'over' && savesText() === kept, `${cell} a death before the first coin leaves every slot as it was`);
+    reload();
+    need(savesText() === kept, `${cell} a reload before the first coin leaves every slot as it was`);
+  }
+}
+
+/**
+ * M15, SAVE on the pause of a run holding no slot: SAVE IN? lists the free
+ * rows first and binds there; over full slots a used row asks OVERWRITE SLOT
+ * n?; with no slot writable the pause offers no SAVE.
+ */
+function m15Leg(g, { need, click }) {
+  const tap = (sid, which) => softTap(g, click, sid, which);
+  // M15F: another game fills slot 1 before the run's first coin, which finds all three full and pays in
+  // memory; slot 2 is then damaged and slot 3 emptied.
+  fresh(g, '.vv');
+  keyTo(g, 'Enter', 'Enter');
+  putSave(1, { id: 'DDDDDDDD' });
+  earnFake(g);
+  store(saveKey(2), '{not json');
+  unstore(saveKey(3));
+  const slot1 = load(saveKey(1));
+  keyTo(g, 'KeyP', 'p');
+  draw(g, 0);
+  need(g.screen === 'pause' && g.saveId === null && touch.soft('pause', 'save').getBoundingClientRect().width > 0, 'the unsaved pause shows SAVE');
+  tap('pause', 'save');
+  need(g.screen === 'savein', 'SAVE on the unsaved pause opens SAVE IN?');
+  need(g.saveIn.order === '231' && g.saveIn.cursor === 0, 'M15F SAVE IN? lists the free rows first, the DAMAGED one among them, the cursor on the first');
+  const before = savesText();
+  keyTo(g, 'Space', ' ');
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'Enter', 'Enter', true);
+  need(g.screen === 'savein' && g.saveId === null && savesText() === before, 'Space, P and an auto-repeated Enter answer nothing on SAVE IN?');
+  keyTo(g, 'KeyQ', 'q');
+  need(g.screen === 'pause' && g.saveId === null, 'Q returns SAVE IN? to the unsaved pause');
+  keyTo(g, 'Enter', 'Enter');
+  tap('savein', 's3');
+  need(g.screen === 'pause' && g.slot === 3 && saveNow(3) !== null && saveNow(3).id === g.saveId && saveNow(3).wallet === 1
+    && load(saveKey(1)) === slot1 && heldSave(2).state === 'damaged', 'picking an empty row stores the wallet the run held, no more');
+
+  // M15U: all three full; the pick marks slot 2, and the marked run pauses UNSAVED before its first coin.
+  fresh(g, 'vvv');
+  const full = savesText();
+  keyTo(g, 'Enter', 'Enter');
+  keyTo(g, 'Digit2', '2');
+  keyTo(g, 'KeyY', 'y');
+  keyTo(g, 'KeyP', 'p');
+  need(g.screen === 'pause' && g.saveId === null && saveOffered(g), 'M15U a marked run pauses UNSAVED and offers SAVE');
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'savein' && g.saveIn.order === '123', 'M15U SAVE IN? lists the used slots in row order');
+  keyTo(g, 'Enter', 'Enter');
+  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 1 && savesText() === full, 'M15U a used row asks OVERWRITE SLOT 1?');
+  keyTo(g, 'KeyN', 'n');
+  need(g.screen === 'savein' && g.confirm === null && savesText() === full, 'N at OVERWRITE returns to SAVE IN?');
+  keyTo(g, 'Enter', 'Enter');
+  putSave(1, { id: 'DDDDDDDD', wallet: 9 });
+  const rewritten = load(saveKey(1));
+  keyTo(g, 'KeyY', 'y');
+  need(g.screen === 'savein' && g.confirm !== null && g.confirm.held.record.id === 'DDDDDDDD' && load(saveKey(1)) === rewritten && g.saveId === null,
+    'OVERWRITE redraws at Y with the stored record and writes nothing');
+  keyTo(g, 'KeyY', 'y');
+  need(g.screen === 'pause' && g.slot === 1 && saveNow(1).id === g.saveId && g.mark === null && saveNow(2).id === slotId(2) && saveNow(3).id === slotId(3),
+    'OVERWRITE\'s Y writes that slot alone');
+  // A NEWER slot is never listed.
+  fresh(g, 'vnv');
+  keyTo(g, 'Enter', 'Enter');
+  keyTo(g, 'Digit1', '1');
+  keyTo(g, 'KeyY', 'y');
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'savein' && g.saveIn.order === '13', 'SAVE IN? does not list a NEWER slot');
+  need(load(saveKey(2)) === NEWER_TEXT, 'a NEWER slot\'s stored text is unchanged after the leg');
+
+  // M15N: three NEWER slots, then storage refusing writes over free ones.
+  for (const [what, spec] of [['three NEWER slots', 'nnn'], ['storage refusing writes', '...']]) {
+    fresh(g, spec);
+    keyTo(g, 'Enter', 'Enter');
+    if (spec === '...') refuse(true);
+    keyTo(g, 'KeyP', 'p');
+    draw(g, 0);
+    need(g.screen === 'pause' && g.saveId === null && touch.soft('pause', 'save').getBoundingClientRect().width === 0, `M15N over ${what} the unsaved pause offers no SAVE`);
+    keyTo(g, 'Enter', 'Enter');
+    need(g.screen === 'pause', `M15N over ${what} Enter on the pause opens nothing`);
+    refuse(false);
+  }
+}
+
+/**
+ * M16, a torch death, then Continue: the run keeps its slot and counts one
+ * continue, and with no slot writable plays on unsaved. Only a death raises
+ * the count: each death ends the torch through the sim, so the tick's own
+ * endRun writes, where a bare endRun leaves the run live and stores no rise.
+ */
+function m16Leg(g, { need, click, press }) {
+  setDifficulty(g, 'medium');
+  useCode(g, SELFTEST_CODE);
+  const serial = startSerial();
+  // Slot 1 holds 300 coins and TOMB 20 at tomb (0, 0)'s first board; slots 2 and 3 are empty.
+  const toStart = () => {
+    clearSaves();
+    putSave(1, { save: serial, net: 20, high: 20, wallet: 300 });
+    cleanState(g);
+    openTitle(g);
+  };
+  const restored = () => g.screen === 'play' && g.slot === 1 && g.saveId === SAVE_BASE.id && g.wallet === 300 && tombCount(g.sim) === 20;
+  toStart();
+  press('KeyT', 't');
+  press('Digit1', '1');
+  need(restored() && g.sim.continues === 0, 'a load restores a slot at 0 continues');
+  die(g);
+  draw(g, 0);
+  click('over', 'continue');
+  need(g.screen === 'play' && g.sim.continues === 1 && g.slot === 1 && g.saveId === SAVE_BASE.id,
+    'M16F a death and CONTINUE raise the continue count to 1 and keep slot 1');
+  press('KeyP', 'p');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim.continues === 1, 'P and P hold the continue count at 1');
+  press('KeyP', 'p');
+  press('KeyQ', 'q');
+  press('KeyP', 'p');
+  need(g.screen === 'play' && g.sim.continues === 1, 'Q, the title and RESUME hold the continue count at 1');
+  die(g);
+  need(g.sim.continues === 1 && saveNow(1).continues === 2, 'a second death stores 2 in the slot while the end screen shows 1');
+  draw(g, 0);
+  press('KeyQ', 'q');
+  need(g.screen === 'title', 'Q leaves the end screen for the title');
+  press('KeyT', 't');
+  press('Digit1', '1');
+  need(restored() && g.sim.continues === 2, 'Q and a load restore the stored count of 2');
+  draw(g, 0);
+  click('play', 'pause');
+  const after = reload();
+  loadSlot(after, 1);
+  need(after.screen === 'play' && after.sim.continues === 2 && saveNow(1).continues === 2, 'a PAUSE, a reload and a load hold the count at 2');
+  openTitle(g);
+  click('title', 'begin');
+  need(g.screen === 'play' && g.sim.continues === 0, 'BEGIN starts the continue count at 0');
+  // Two live games on one save share the count by maximum: one dies, the other's next write adopts the rise.
+  toStart();
+  press('KeyT', 't');
+  press('Digit1', '1');
+  const twin = reload();
+  loadSlot(twin, 1);
+  need(restored() && twin.screen === 'play' && twin.sim.continues === 0, 'two games restore one slot at 0 continues');
+  die(g);
+  need(saveNow(1).continues === 1 && twin.sim.continues === 0, 'a death stores the raised count before the other game writes');
+  commit(twin, twin.point);
+  need(twin.sim.continues === 1 && saveNow(1).continues === 1, 'a live game adopts another\'s death on its next write');
+  // M16U: all three full.
+  fresh(g, 'vvv');
+  loadSlot(g, 1);
+  die(g);
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'play' && g.slot === 1 && g.saveId === slotId(1) && g.sim.continues === 1 && saveNow(1).continues === 1,
+    'M16U a death and CONTINUE over three full slots keep slot 1 and count one continue');
+  // M16N: three NEWER slots.
+  fresh(g, 'nnn');
+  const kept = savesText();
+  keyTo(g, 'Enter', 'Enter');
+  earnFake(g);
+  die(g);
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'play' && g.saveId === null && g.sim.continues === 1 && g.noteTicks === 0 && savesText() === kept,
+    'M16N a death and CONTINUE over three NEWER slots play on unsaved, writing nothing and noting nothing');
+  keyTo(g, 'KeyP', 'p');
+  need(!saveOffered(g), 'M16N the pause offers no SAVE');
+  keyTo(g, 'KeyQ', 'q');
+  need(titleWarning() === 'SAVES FROM A NEWER GAME: RELOAD', 'M16N the title warns of a newer game\'s saves');
+}
+
+/** M17, BEGIN after loading slot 1 and Q: a new run that leaves slot 1 whole, or over full slots the pick offering slot 1. */
+function m17Leg(g, { need }) {
+  fresh(g, 'v..');
+  loadSlot(g, 1);
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'KeyQ', 'q');
+  const one = load(saveKey(1));
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'play' && g.armed && g.slot === null && load(saveKey(1)) === one, 'M17F BEGIN after a load and Q starts a new run, slot 1 untouched');
+  earnFake(g);
+  need(g.slot === 2 && saveNow(2).id === g.saveId && load(saveKey(1)) === one, 'M17F the new run\'s first coin takes slot 2, slot 1 untouched');
+  fresh(g, 'vvv');
+  loadSlot(g, 1);
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'KeyQ', 'q');
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'pick' && g.open !== null, 'M17U BEGIN after a load and Q over three full slots opens the pick');
+  keyTo(g, 'Digit1', '1');
+  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 1, 'M17U the pick offers slot 1, the loaded save');
+}
+
+/** M18, two games on one slot under one id merge by maximum, and each adopts the merged high at its next write. */
+function m18Leg(g, { need }) {
+  // A counted rise of game `h`'s high to `to`, written through the game's own tick write.
+  const rise = (h, to) => {
+    const was = tombCount(h.sim);
+    h.sim.net = to;
+    h.sim.high = to;
+    tickSave(h, 0, was, false, false);
+  };
+  for (const [cell, spec] of [['M18F', 'v..'], ['M18U', 'vvv']]) {
+    fresh(g, spec, { 1: { save: startSerial(), net: 2, high: 2, wallet: 10 } });
+    restore(g, 1, saveNow(1));
+    const b = reload();
+    restore(b, 1, saveNow(1));
+    rise(g, 5);
+    earnFake(b);
+    need(saveNow(1).high === 5 && saveNow(1).wallet === 10 + 3 * COIN_RATE.medium + 1 && b.wallet === saveNow(1).wallet,
+      `${cell} two games on one slot merge the wallet and the high by maximum`);
+    need(tombCount(b.sim) === 5, `${cell} game B's next write adopts the high game A raised, and B's TOMB n shows it`);
+  }
+}
+
+/** M20, a loaded save plays at its own level; L on the title changes only new runs; TOMB n never carries across levels. */
+function m20Leg(g, { need }) {
+  fresh(g, 'vv.', { 1: { save: startSerial(), level: 'hard', net: 4, high: 4 }, 2: { save: exitSerial(), level: 'medium', net: 9, high: 9 } });
+  setDifficulty(g, 'easy');
+  loadSlot(g, 1);
+  need(g.world.difficulty === 'hard' && g.world.size.w === 4 && tombCount(g.sim) === 4, 'M20 a loaded save plays at its level whatever the title shows');
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'KeyQ', 'q');
+  keyTo(g, 'KeyL', 'l');
+  need(g.difficulty === 'ultimate' && g.open !== null && g.open.world.difficulty === 'hard', 'M20 L on the title changes only new runs');
+  loadSlot(g, 2);
+  need(g.screen === 'play' && g.world.difficulty === 'medium' && g.difficulty === 'medium' && tombCount(g.sim) === 9,
+    'M20 a load over an open run at another level plays at the save\'s level');
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'KeyQ', 'q');
+  keyTo(g, 'KeyL', 'l');
+  keyTo(g, 'Enter', 'Enter');
+  need(g.screen === 'play' && g.world.difficulty === 'hard' && tombCount(g.sim) === 0, 'M20 BEGIN at another level starts at TOMB 0');
+}
+
+/**
+ * M24, revision 1's beta records: a record with no `played` reads valid,
+ * loads, and its row shows no time; its next write adds `played`. Boot shows
+ * the seed of the most recently played valid slot, and of the lowest valid
+ * slot when none carries `played`.
+ */
+function m24Leg(g, { need }) {
+  fresh(g, 'vv.', { 2: { played: undefined } });
+  need(heldSave(2).state === 'valid' && heldSave(2).record.played === undefined, 'M24 a record with no played reads valid');
+  keyTo(g, 'KeyT', 't');
+  for (let i = 0; i < 3; i++) keyTo(g, 'ArrowDown', 'ArrowDown');
+  draw(g, 0);
+  need(timeBlank(2) && !timeBlank(1), 'M24 its row shows no time, where a played row shows one');
+  keyTo(g, 'Digit2', '2');
+  need(g.screen === 'play' && g.slot === 2 && g.saveId === slotId(2), 'M24 a record with no played loads');
+  keyTo(g, 'KeyP', 'p');
+  need(Number.isSafeInteger(saveNow(2).played), 'M24 its next write adds played');
+  const a = encodeSave('22223333', 0, 0), b = encodeSave('44445555', 0, 0);
+  fill('.vv', { 2: { save: b, played: PLAYED + HOUR }, 3: { save: a, played: PLAYED } });
+  need(reload().code === '44445555', 'M24 boot shows the seed of the most recently played valid slot');
+  fill('.vv', { 2: { save: a, played: undefined }, 3: { save: b, played: undefined } });
+  need(reload().code === '22223333', 'M24 boot shows the lowest valid slot\'s seed when none carries played');
+}
+
+/**
+ * M26, the farming loops, at MEDIUM. A is tomb (0, 0) and B the tomb its exit
+ * leads to; each run starts on A's exit board, which is no entry, and crosses
+ * its exit door into B, raising the high to 1. Stepping back onto that board,
+ * a PAUSE or a SAVE through SAVE IN? pairs it with the net there, so a reload,
+ * a load and the step forward never raise TOMB n, the save's high or the
+ * wallet past the coins the walks take.
+ */
+function m26Leg(g, { need }) {
+  setDifficulty(g, 'medium');
+  useCode(g, SELFTEST_CODE);
+  const t = g.world.tomb(0, 0), X = exitBoard(g.world);
+  const gate = { x: X.x, y: X.y, cell: X.doors.find((dr) => dr.dir === t.exit).cell };
+  const across = g.world.step(X, gate.cell, t.exit), into = { x: across.board.x, y: across.board.y, cell: across.cell };
+  need(!X.entry, 'tomb (0, 0)\'s exit board is no entry at MEDIUM');
+  const H = 1;
+  // Before each PAUSE or SAVE IN?, the explorer stands on no entry, its net apart from the entry save point's.
+  const offEntry = (h, what) => need(!h.sim.bd.entry && h.sim.here.net !== h.sim.entry.net, `M26 ${what}: the explorer stands on no entry, off the entry's net`);
+  const holds = (h, wallet, what) => need(h.screen === 'play' && tombCount(h.sim) === H && saveNow(1).high === H
+    && h.wallet === wallet && saveNow(1).wallet === wallet, `M26 ${what}`);
+  // A clean run on A's exit board over slots `spec`, the free-slot rule armed.
+  const start = (spec) => {
+    fill(spec);
+    openTitle(g);
+    cleanState(g);
+    g.armed = true;
+    begin(g, X.p);
+  };
+
+  // Bound: the run takes slot 1, free, at the crossing into B, then three times steps back, PAUSEs, reloads,
+  // loads the slot through LOAD and steps forward into B again.
+  start('...');
+  let coins = walkToCell(g, into, 'the walk into tomb B');
+  need(g.screen === 'play' && tombCount(g.sim) === H && saveNow(1) !== null && saveNow(1).id === g.saveId, 'M26 the bound crossing into B takes slot 1 at TOMB 1');
+  let wallet = g.wallet - coins, h = g;
+  for (let loop = 1; loop <= 3; loop++) {
+    coins += walkToCell(h, gate, 'the walk back into tomb A');
+    offEntry(h, `bound loop ${loop}`);
+    keyTo(h, 'KeyP', 'p');
+    h = reload();
+    loadSlot(h, 1);
+    coins += walkToCell(h, into, 'the walk forward into tomb B');
+    holds(h, wallet + coins, `bound loop ${loop}: TOMB n, the high and the wallet hold at H`);
+  }
+
+  // Unbound: slots 2 and 3 hold other saves, and another game fills slot 1 before the crossing, whose first
+  // write then finds all three full, so the free-slot rule leaves the run unsaved. Each loop steps back,
+  // pauses, saves to slot 1 through SAVE IN? and OVERWRITE SLOT 1?, reloads, loads the slot and steps forward
+  // into B again. Another game then overwrites slot 1, so the loaded run's next write, at the step back,
+  // finds its slot taken and, all three full, the rule leaves it unsaved again.
+  start('.vv');
+  putSave(1, { id: 'DDDDDDDD' });
+  coins = walkToCell(g, into, 'the unbound walk into tomb B');
+  need(g.screen === 'play' && tombCount(g.sim) === H && g.saveId === null, 'M26 the unbound crossing into B finds all three full and plays on unsaved');
+  wallet = g.wallet - coins;
+  h = g;
+  for (let loop = 1; loop <= 3; loop++) {
+    coins += walkToCell(h, gate, 'the walk back into tomb A');
+    offEntry(h, `unbound loop ${loop}`);
+    keyTo(h, 'KeyP', 'p');
+    need(h.screen === 'pause' && h.saveId === null, `M26 unbound loop ${loop}: the pause is unsaved`);
+    keyTo(h, 'Enter', 'Enter');
+    need(h.screen === 'savein' && h.saveIn.rows[0].n === 1, `M26 unbound loop ${loop}: SAVE opens SAVE IN? on slot 1`);
+    keyTo(h, 'Enter', 'Enter');
+    keyTo(h, 'KeyY', 'y');
+    need(h.screen === 'pause' && h.slot === 1 && saveNow(1) !== null && saveNow(1).id === h.saveId, `M26 unbound loop ${loop}: SAVE IN? binds the run to slot 1`);
+    h = reload();
+    loadSlot(h, 1);
+    coins += walkToCell(h, into, 'the walk forward into tomb B');
+    holds(h, wallet + coins, `unbound loop ${loop}: TOMB n, the high and the wallet hold at H`);
+    putSave(1, { id: 'DDDDDDDD' });
+  }
+}
+
+/**
+ * M27K, the keyboard alone reaches the title, LOAD, code entry, the pick, both
+ * confirms and the pause's SAVE IN?. Code entry takes every keydown, so a held
+ * Backspace deletes once each, and the keyboard's P and Q type.
+ */
+function m27kLeg(g, { need, press }) {
+  const rows = (keys) => keys.map((k) => { press(k, k); return g.row; }).join();
+  fresh(g, 'v.v');
+  press('ArrowDown', 'ArrowDown');
+  press('ArrowDown', 'ArrowDown', true);
+  need(g.cursor === LOAD_ROW, 'M27K Down moves the title\'s cursor to LOAD and stops there');
+  press('ArrowUp', 'ArrowUp');
+  need(g.cursor === BEGIN_ROW, 'M27K Up moves the title\'s cursor back to BEGIN');
+  press('ArrowDown', 'ArrowDown');
+  press('Enter', 'Enter');
+  need(g.screen === 'load' && g.row === 2, 'M27K Enter on the lit LOAD opens LOAD, its cursor on the most recently played row');
+  need(rows(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown']) === '1,0,0,1,2,3,3',
+    'M27K LOAD\'s cursor visits every row, EMPTY included, and stops at the ends');
+  press('Enter', 'Enter');
+  need(g.typing === '', 'M27K Enter on T TYPE A CODE opens code entry');
+  for (const [code, key] of [['KeyP', 'p'], ['KeyQ', 'q'], ['KeyK', 'k'], ['KeyL', 'l']]) press(code, key);
+  need(g.screen === 'load' && g.typing === 'PQKL', 'M27K the keyboard\'s P and Q type into the code field');
+  press('Backspace', 'Backspace');
+  press('Backspace', 'Backspace', true);
+  press('Backspace', 'Backspace', true);
+  need(g.typing === 'P', 'M27K a repeated Backspace deletes once per keydown');
+  press('Escape', 'Escape');
+  need(g.screen === 'load' && g.typing === null, 'M27K Esc closes code entry to LOAD');
+  press('KeyT', 't');
+  press('Enter', 'Enter');
+  need(g.screen === 'load' && g.typing === null, 'M27K Enter on an empty field closes it');
+  press('Digit1', '1');
+  need(g.screen === 'play' && g.slot === 1, 'M27K a digit on LOAD loads its slot');
+  // The pick and its confirm, over three full slots.
+  fill('vvv');
+  press('KeyP', 'p');
+  press('KeyQ', 'q');
+  press('Enter', 'Enter');
+  need(g.screen === 'pick', 'M27K Enter on BEGIN over three full slots opens the pick');
+  need(rows(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowDown']) === '0,0,0,1,2,2', 'M27K the pick\'s cursor visits every row and stops at the ends');
+  press('Enter', 'Enter');
+  need(g.confirm !== null && g.confirm.n === 3, 'M27K Enter on the pick asks OVERWRITE SLOT 3?');
+  press('Escape', 'Escape');
+  press('Digit2', '2');
+  press('KeyN', 'n');
+  need(g.screen === 'pick' && g.confirm === null, 'M27K Esc and N at OVERWRITE SLOT n? return to the pick');
+  press('Digit2', '2');
+  press('KeyQ', 'q');
+  need(g.screen === 'title' && g.open !== null, 'M27K Q at OVERWRITE SLOT n? goes to the title');
+  press('Enter', 'Enter');
+  press('Digit2', '2');
+  press('KeyY', 'y');
+  need(g.screen === 'play' && g.mark !== null && g.mark.n === 2, 'M27K Y at OVERWRITE SLOT 2? marks slot 2');
+  // The pause's SAVE IN? and its OVERWRITE SLOT n?.
+  press('KeyP', 'p');
+  press('Enter', 'Enter');
+  press('ArrowDown', 'ArrowDown');
+  press('Enter', 'Enter');
+  need(g.screen === 'savein' && g.confirm !== null && g.confirm.n === 2, 'M27K Enter, Down and Enter on the unsaved pause ask OVERWRITE SLOT 2? on SAVE IN?');
+  press('KeyN', 'n');
+  press('Enter', 'Enter');
+  press('KeyY', 'y');
+  need(g.screen === 'pause' && g.slot === 2 && saveNow(2).id === g.saveId, 'M27K N, Enter and Y on SAVE IN? bind the run to slot 2');
+  // LEAVE UNSAVED RUN?.
+  openUnsaved(g);
+  press('KeyT', 't');
+  press('Digit1', '1');
+  need(g.confirm !== null && g.confirm.kind === 'leave', 'M27K a digit on LOAD over an unsaved run asks LEAVE UNSAVED RUN?');
+  press('KeyN', 'n');
+  press('Digit1', '1');
+  press('KeyY', 'y');
+  need(g.screen === 'play' && g.slot === 1 && g.open === null, 'M27K N and Y answer LEAVE UNSAVED RUN?');
+}
+
+/**
+ * M27T, touch's soft keys alone reach the title, LOAD, code entry, the pick,
+ * both confirms and the pause's SAVE IN?. The BEGIN key begins wherever the
+ * title's cursor stands.
+ */
+function m27tLeg(g, { need, click }) {
+  const tap = (sid, which) => softTap(g, click, sid, which);
+  fresh(g, 'v..');
+  // The cursor on LOAD, as a keyboard beside the touch screen leaves it.
+  g.cursor = LOAD_ROW;
+  tap('title', 'begin');
+  need(g.screen === 'play' && g.armed, 'M27T the BEGIN key begins with the cursor on LOAD');
+  tap('play', 'pause');
+  tap('pause', 'title');
+  tap('title', 'load');
+  need(g.screen === 'load', 'M27T the LOAD key opens LOAD');
+  tap('load', 'back');
+  need(g.screen === 'title', 'M27T BACK backs out of LOAD');
+  tap('title', 'load');
+  withPrompt(exitSerial(), () => tap('load', 'type'));
+  need(g.screen === 'play' && hereCode(g) === exitSerial() && g.armed, 'M27T TYPE CODE takes a pasted save code');
+  tap('play', 'pause');
+  tap('pause', 'title');
+  tap('title', 'load');
+  tap('load', 's1');
+  need(g.screen === 'play' && g.slot === 1, 'M27T SLOT 1 loads slot 1');
+  // The pick and its confirm, over three full slots.
+  fill('vvv');
+  tap('play', 'pause');
+  tap('pause', 'title');
+  tap('title', 'begin');
+  need(g.screen === 'pick', 'M27T BEGIN over three full slots opens the pick');
+  tap('pick', 'back');
+  need(g.screen === 'title', 'M27T BACK backs out of the pick');
+  tap('title', 'begin');
+  tap('pick', 's2');
+  need(g.confirm !== null && g.confirm.n === 2, 'M27T SLOT 2 on the pick asks OVERWRITE SLOT 2?');
+  tap('confirm', 'no');
+  need(g.screen === 'pick' && g.confirm === null, 'M27T NO returns to the pick');
+  tap('pick', 's2');
+  tap('confirm', 'yes');
+  need(g.screen === 'play' && g.mark !== null && g.mark.n === 2, 'M27T YES marks slot 2');
+  // The pause's SAVE IN?.
+  tap('play', 'pause');
+  tap('pause', 'save');
+  need(g.screen === 'savein' && g.saveIn.order === '123', 'M27T SAVE on the unsaved pause opens SAVE IN?');
+  tap('savein', 'back');
+  need(g.screen === 'pause', 'M27T BACK returns SAVE IN? to the pause');
+  tap('pause', 'save');
+  tap('savein', 's3');
+  tap('confirm', 'no');
+  need(g.screen === 'savein' && g.confirm === null, 'M27T NO at OVERWRITE SLOT 3? returns to SAVE IN?');
+  tap('savein', 's3');
+  tap('confirm', 'yes');
+  need(g.screen === 'pause' && g.slot === 3 && saveNow(3).id === g.saveId, 'M27T YES on SAVE IN?\'s OVERWRITE SLOT 3? binds the run there');
+  // LEAVE UNSAVED RUN?.
+  openUnsaved(g);
+  tap('title', 'load');
+  tap('load', 's1');
+  need(g.confirm !== null && g.confirm.kind === 'leave', 'M27T SLOT 1 over an unsaved run asks LEAVE UNSAVED RUN?');
+  tap('confirm', 'no');
+  tap('load', 's1');
+  tap('confirm', 'yes');
+  need(g.screen === 'play' && g.slot === 1 && g.open === null, 'M27T NO and YES answer LEAVE UNSAVED RUN?');
+}
+
+/**
+ * M27C, a controller alone reaches the title, LOAD, code entry, the pick, both
+ * confirms and the pause's SAVE IN?. A and Start answer no confirm, and Select
+ * backs out of LOAD and the pick. In code entry Start types nothing, Select
+ * closes the field, empty or not, and B on an empty field closes it.
+ */
+function m27cLeg(g, { need, fake }) {
+  const tap = (...buttons) => {
+    for (const b of buttons) {
+      fake.held = new Set([b]);
+      pollGamepads();
+      fake.held = new Set();
+      pollGamepads();
+    }
+  };
+  const A = 0, B = 1, SELECT = 8, START = 9, UP = 12, DOWN = 13;
+  fresh(g, 'v.v');
+  tap(DOWN, B);
+  need(g.screen === 'load', 'M27C Down and B open LOAD');
+  tap(SELECT);
+  need(g.screen === 'title', 'M27C Select backs out of LOAD');
+  tap(DOWN, B, DOWN, B);
+  need(g.screen === 'load' && g.typing === '', 'M27C Down and B on T TYPE A CODE open code entry');
+  tap(START, A);
+  need(g.screen === 'load' && g.typing === '', 'M27C Start and A type nothing in code entry');
+  tap(B);
+  need(g.screen === 'load' && g.typing === null, 'M27C B on an empty field closes code entry');
+  tap(B);
+  g.typing = 'K7';
+  tap(SELECT);
+  need(g.screen === 'load' && g.typing === null, 'M27C Select closes code entry holding a code');
+  tap(B, SELECT);
+  need(g.screen === 'load' && g.typing === null, 'M27C Select closes an empty code entry');
+  tap(UP, B);
+  need(g.screen === 'play' && g.slot === 3, 'M27C B on a LOAD row loads it');
+  // The pick and its confirm, over three full slots.
+  fill('vvv');
+  tap(START, SELECT, B);
+  need(g.screen === 'pick', 'M27C B on BEGIN over three full slots opens the pick');
+  tap(SELECT);
+  need(g.screen === 'title', 'M27C Select backs out of the pick');
+  tap(B, B);
+  const full = savesText();
+  tap(A, START);
+  need(g.screen === 'pick' && g.confirm !== null && savesText() === full, 'M27C A and Start answer nothing at OVERWRITE SLOT n?');
+  tap(SELECT);
+  need(g.screen === 'title' && g.confirm === null && savesText() === full, 'M27C Select answers no at OVERWRITE SLOT n?, to the title');
+  tap(B, B, B);
+  need(g.screen === 'play' && g.mark !== null, 'M27C B answers yes at OVERWRITE SLOT n?');
+  // The pause's SAVE IN? and its OVERWRITE SLOT n?.
+  tap(START, B, DOWN, B);
+  need(g.screen === 'savein' && g.confirm !== null && g.confirm.n === 2, 'M27C Start, B, Down and B ask OVERWRITE SLOT 2? on SAVE IN?');
+  tap(A, START);
+  need(g.confirm !== null && g.saveId === null, 'M27C A and Start answer nothing on SAVE IN?\'s OVERWRITE SLOT 2?');
+  tap(SELECT);
+  need(g.screen === 'savein' && g.confirm === null, 'M27C Select answers no on SAVE IN?\'s OVERWRITE SLOT 2?');
+  tap(B, B);
+  need(g.screen === 'pause' && g.slot === 2 && saveNow(2).id === g.saveId, 'M27C B and B bind the run to slot 2 through SAVE IN?');
+  // LEAVE UNSAVED RUN?.
+  openUnsaved(g);
+  tap(DOWN, B, B);
+  need(g.confirm !== null && g.confirm.kind === 'leave', 'M27C B on a LOAD row over an unsaved run asks LEAVE UNSAVED RUN?');
+  tap(A, START);
+  need(g.confirm !== null && g.confirm.kind === 'leave', 'M27C A and Start answer nothing at LEAVE UNSAVED RUN?');
+  tap(SELECT);
+  need(g.screen === 'load' && g.confirm === null && g.open !== null, 'M27C Select answers no at LEAVE UNSAVED RUN?');
+  tap(B, B);
+  need(g.screen === 'play' && g.open === null && g.slot !== null, 'M27C B answers yes at LEAVE UNSAVED RUN?');
+  g.press = 0;
+  g.release = 0;
+  g.jump = false;
+}
+
+// The touch leg's legs in order: the revision 1 legs, then the matrix's.
+const LEGS = [
+  difficultyLeg, coinLeg, twoGamesLeg, splashLeg, resumeLeg, continueLeg, legacyLeg, oilLeg, gamepadLeg,
+  m8Leg, m19Leg, m11Leg, m1Leg, m2Leg, m10Leg, m6Leg, m7Leg, m22Leg, m21Leg, m3Leg, m5Leg, m4Leg, m9Leg,
+  m12Leg, m13Leg, m14Leg, m15Leg, m16Leg, m17Leg, m18Leg, m20Leg, m24Leg, m26Leg, m27kLeg, m27tLeg, m27cLeg,
+];
 
 const DIRS = {
   ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
 };
 const DIR_BITS = { l: KEY.L, r: KEY.R, u: KEY.U, d: KEY.D };
 const JUMP_KEYS = ['Space', 'KeyZ'];
-// NEW RUN's keys that step the difficulty setting, stopping at the ends.
+// The title's keys that step the difficulty setting, stopping at the ends.
 const SETTING_STEP = { ArrowLeft: -1, KeyA: -1, ArrowRight: 1, KeyD: 1 };
 // The digit keys of the three slot rows.
 const SLOT_DIGITS = { Digit1: 1, Digit2: 2, Digit3: 3 };
-// The slot list's cursor rows: slots 1 to 3, then the N NEW RUN row.
-const NEW_ROW = 3;
+// The title cursor's two rows, and LOAD's fourth row, T TYPE A CODE, after its three slots.
+const BEGIN_ROW = 0, LOAD_ROW = 1, TYPE_ROW = 3;
 
 // ULTIMATE, the 6x4 world, keeps the bare seed code, so bests from before
 // difficulties carry over.
@@ -8824,24 +9446,24 @@ function writeBest(code, difficulty, high) {
   if (all[key] === undefined || high > all[key]) { all[key] = high; store(KEY_BEST, JSON.stringify(all)); }
 }
 
-/** The economy of a new run: bound to slot `slot` or none, no save, wallet 0. */
-function cleanState(g, slot = null) {
-  Object.assign(g, { slot, saveId: null, point: null, wallet: 0, asked: false });
+/** The economy of a new run: no slot, no mark, the free-slot rule unarmed and wallet 0. */
+function cleanState(g) {
+  Object.assign(g, { slot: null, saveId: null, point: null, wallet: 0, mark: null, armed: false });
 }
 
 /** The fields of the game's economy, which a run left open takes with it. */
 function economyOf(g) {
-  const { slot, saveId, point, wallet, asked } = g;
-  return { slot, saveId, point, wallet, asked };
+  const { slot, saveId, point, wallet, mark, armed } = g;
+  return { slot, saveId, point, wallet, mark, armed };
 }
 
 /**
  * A tick's one write and its pay: the tick took `coins`, the high rose from
  * `was`, `entered` an entry board and `moved` changed tomb or took a jar. A run
  * holding a save writes on any of them: an entry moves the serial to the entry
- * save point, and the rest keep it. A bound run's first coin or counted tomb
- * takes its slot at the entry save point; an unbound run pays in memory.
- * Returns the pay, { earned, seen }, or null when the tick earned nothing.
+ * save point, and the rest keep it. A run holding none claims a slot at its
+ * coin or counted tomb, at the entry save point. Returns the pay, { earned,
+ * seen }, or null when the tick earned nothing.
  */
 function tickSave(g, coins, was, entered, moved) {
   const s = g.sim, earns = coins > 0 || tombCount(s) > was;
@@ -8850,7 +9472,7 @@ function tickSave(g, coins, was, entered, moved) {
     if (entered) out = writeAt(g, s.entry, { coins, was });
     else if (earns || moved) out = commit(g, g.point, { coins, was });
   } else if (earns) {
-    out = g.slot !== null ? writeAt(g, s.entry, { bind: {}, coins, was }) : payInMemory(g, coins, was);
+    out = claim(g, pointOf(g, s.entry), { coins, was });
   }
   if (!earns) return null;
   g.earned += out.earned;
@@ -8865,23 +9487,26 @@ function createGame() {
     get screen() { return screen; },
     set screen(next) { screen = next; visit++; },
     get visit() { return visit; },
-    // A game starts clean: no slot, no save and wallet 0. A run binds to slot
-    // `slot`, takes it under `saveId` and writes its serial and net at `point`;
-    // `asked` holds once SAVE IN? was dismissed.
-    slot: null, saveId: null, point: null, wallet: 0, asked: false,
-    // The slot list: the cursor's row, 0 to 2 the slots and NEW_ROW the N NEW
-    // RUN row, whose lit choice `pick` is 'new' or 'erase', and whether it is
-    // erasing.
-    cursor: homeRow({ open: null }), pick: 'new', erasing: false,
-    // The slot NEW RUN binds its run to, or null for an unbound run.
-    bind: null,
-    // A confirm: { kind: 'continue' | 'erase' | 'overwrite', n, held }, slot n
-    // as drawn; null when none is asked.
+    // A game starts clean: no slot, no save and wallet 0. A run takes slot
+    // `slot` under `saveId` and writes its serial and net at `point`. A run
+    // holding none is marked for slot n, `mark` { n, id }, which its first
+    // coin or counted tomb overwrites while it holds `id`; or `armed`, its
+    // first coin or counted tomb taking the lowest free slot; or neither.
+    slot: null, saveId: null, point: null, wallet: 0, mark: null, armed: false,
+    // The title cursor's row, BEGIN_ROW or LOAD_ROW, and the LOAD and pick cursor's, 0 to TYPE_ROW.
+    cursor: BEGIN_ROW, row: 0,
+    // The run BEGIN's rules hold while the overwrite pick shows: { code, p }.
+    pick: null,
+    // A confirm on the title, LOAD or the pick: { kind: 'leave', go } or
+    // { kind: 'overwrite', n, held }, slot n as drawn; on SAVE IN? the
+    // overwrite alone; null when none is asked.
     confirm: null,
-    // SAVE IN?: { at, from, splash, rows, cursor, order } while it holds the run.
+    // The pause's SAVE IN?: { at, rows, cursor, order } while it shows.
     saveIn: null,
     // The coins the wallet has gained since the run began; Continue carries them.
     earned: 0,
+    // The note play shows for its ticks: its text and ink.
+    noteText: '', noteInk: 'm', noteTicks: 0,
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
     // Key edges since the last tick: KEY bits pressed and released, and a jump press.
     press: 0, release: 0, jump: false,
@@ -8891,7 +9516,7 @@ function createGame() {
     // The title's setting; `world` is always built at it.
     difficulty: storedDifficulty(KEY_DIFFICULTY, 'medium'),
     world: null, renderer: null, sim: null, preview: null,
-    // The run left for the title by Q: { slot, saveId, point, wallet, asked, code, world, renderer, preview, sim }.
+    // The run left for the title by Q: its economy, code, world, renderer, preview and sim.
     open: null,
     // The milestone the splash shows: { k, paid }, where paid is whether this crossing paid.
     splash: null,
@@ -8901,13 +9526,10 @@ function createGame() {
   };
 }
 
-/** The seed NEW RUN shows first: the lowest used slot's, else a rolled one. */
+/** The seed the title shows at boot: the most recently played valid slot's, else a rolled one. */
 function firstSeed() {
-  for (const n of SAVE_SLOTS) {
-    const held = heldSave(n);
-    if (held.state === 'valid') return decodeSave(held.record.save).code;
-  }
-  return rollCode();
+  const n = playedSlot(SAVE_SLOTS.map(heldSave), true);
+  return n === null ? rollCode() : decodeSave(heldSave(n).record.save).code;
 }
 
 /** A game as a page load makes one: the migration runs first, before the first title frame. */
@@ -8955,11 +9577,11 @@ function play(g) {
 }
 
 /**
- * Starts a new run at save position p, or at tomb (0, 0)'s first entry when p
- * is null. The new sim keeps the coins and jars taken in the tomb it starts in
- * and the tomb before it only when the `carry` holds them: the end screen's
- * Continue carries them and a restore of a save unpacks them. Any other start
- * takes none, and every coin and jar lies back.
+ * Starts a run at save position p, or at tomb (0, 0)'s first entry when p is
+ * null, with no note. The new sim keeps the coins and jars taken in the tomb
+ * it starts in and the tomb before it only when the `carry` holds them: the
+ * end screen's Continue carries them and a load of a save unpacks them. Any
+ * other start takes none, and every coin and jar lies back.
  */
 function begin(g, p = null, carry = null) {
   let start = g.world.startPoint();
@@ -8972,6 +9594,8 @@ function begin(g, p = null, carry = null) {
   g.open = null;
   g.confirm = null;
   g.saveIn = null;
+  g.pick = null;
+  g.noteTicks = 0;
   play(g);
 }
 
@@ -8987,24 +9611,45 @@ function beginSaved(g, p, run) {
   g.earned = 0;
 }
 
-/** BEGIN: a run from tomb (0, 0) with a clean economy, bound to the slot NEW RUN names. */
-function beginClean(g) {
-  cleanState(g, g.bind);
-  g.bind = null;
-  begin(g);
+/**
+ * BEGIN's rules for a new run of seed `code` from save position p, null for
+ * tomb (0, 0)'s first entry. Over an open run unsaved with progress it asks
+ * LEAVE UNSAVED RUN? first, unless `asked`. With a slot free, or none
+ * writable, the run starts with the free-slot rule armed; with all three full
+ * the overwrite pick asks first, and the open run stays open until the pick's
+ * yes.
+ */
+function beginRules(g, start, asked = false) {
+  if (!asked && leaving(g)) g.confirm = { kind: 'leave', go: () => beginRules(g, start, true) };
+  else if (!writable() || freeSlot() !== undefined) startRun(g, start, { armed: true });
+  else openPick(g, start);
+}
+
+/** BEGIN: a run of the shown seed from tomb (0, 0), under BEGIN's rules. */
+function beginNew(g) {
+  beginRules(g, { code: g.code, p: null });
+}
+
+/** Starts a new run of `start` with a clean economy and `claim`, its mark or the armed rule, closing any open run. */
+function startRun(g, start, claim) {
+  cleanState(g);
+  Object.assign(g, claim);
+  if (start.code !== g.code) useCode(g, start.code);
+  begin(g, start.p);
 }
 
 /**
- * Restores slot n's record `rec` into memory and begins its run at the
- * serial's board, at the record's difficulty, with its start tomb, net, high,
- * wallet, continue count and recent takes, closing any open run. The run is
- * bound to slot n under the record's id. The setting follows.
+ * Loads slot n's record `rec` into memory and begins its run at the serial's
+ * board, at the record's difficulty, with its start tomb, net, high, wallet,
+ * continue count and recent takes, closing any open run. The run is bound to
+ * slot n under the record's id, and writes nothing until its next save point.
+ * The setting follows.
  */
 function restore(g, n, rec) {
   const at = decodeSave(rec.save);
   keepSetting(g, rec.level);
   if (at.code !== g.code || g.world.difficulty !== rec.level) useCode(g, at.code);
-  Object.assign(g, { slot: n, saveId: rec.id, point: { save: rec.save, net: rec.net, start: rec.start }, wallet: rec.wallet, asked: false });
+  Object.assign(g, { slot: n, saveId: rec.id, point: { save: rec.save, net: rec.net, start: rec.start }, wallet: rec.wallet, mark: null, armed: false });
   const [u, v] = rec.start.split(',').map(Number);
   beginSaved(g, at.p, { entry: { p: at.p, net: rec.net }, high: rec.high, start: { u, v }, continues: rec.continues, ...unpackRecent(g.world, rec.recent) });
 }
@@ -9018,95 +9663,101 @@ function resumeOpen(g) {
   play(g);
 }
 
-/**
- * P, Esc and Start on the slot list: back to the open run, or with none open,
- * the lit slot row as Enter plays it. On the N NEW RUN row they do nothing.
- */
+/** P, Esc and Start on the title: back to the open run; with none open, nothing. */
 function resume(g) {
   if (g.open) resumeOpen(g);
-  else if (g.cursor < NEW_ROW) playRow(g, g.cursor + 1);
 }
 
 /**
- * Plays slot row n: the open run's own row resumes it; a used row asks
- * CONTINUE SLOT n?; an empty or damaged row opens NEW RUN bound to it; a newer
- * build's row does nothing.
+ * True when the open run is unsaved with progress: it holds no slot, and its
+ * wallet or high is above 0. A run bound to a slot that no longer holds its id
+ * holds none.
  */
-function playRow(g, n) {
-  if (g.open && g.open.slot === n) {
-    resumeOpen(g);
-    return;
-  }
-  const held = heldSave(n);
-  if (held.state === 'valid') g.confirm = { kind: 'continue', n, held };
-  else if (isFree(held)) openNewRun(g, n);
+function leaving(g) {
+  const o = g.open;
+  if (!o || (o.wallet <= 0 && tombCount(o.sim) <= 0)) return false;
+  if (o.saveId === null) return true;
+  const held = heldSave(o.slot);
+  return held.state !== 'valid' || held.record.id !== o.saveId;
 }
 
-/** Enter on the slot list: the lit slot row, or on the last row NEW RUN or, lit, erasing. */
-function enterRow(g) {
-  if (g.cursor < NEW_ROW) playRow(g, g.cursor + 1);
-  else if (g.pick === 'erase' && eraseShows()) startErasing(g);
-  else openNewRun(g, null);
-}
-
-/** Opens NEW RUN, bound to slot n or, with n null, unbound. */
-function openNewRun(g, n) {
-  g.screen = 'newrun';
-  g.bind = n;
-  g.typing = null;
-  g.note = '';
-}
-
-/** Moves the cursor to the used rows for erasing, while ERASE shows. */
-function startErasing(g) {
-  if (!eraseShows()) return;
-  g.erasing = true;
-  g.cursor = Number(usedRows()[0]) - 1;
-}
-
-/** Asks ERASE SLOT n? over a used row; any other row does nothing. */
-function askErase(g, n) {
-  const held = heldSave(n);
-  if (held.state === 'valid') g.confirm = { kind: 'erase', n, held };
+/** True when `held` is the open run's own row: a valid record under the open run's id. */
+function ownRow(g, held) {
+  return g.open !== null && g.open.saveId !== null && held.state === 'valid' && held.record.id === g.open.saveId;
 }
 
 /**
- * Answers CONTINUE SLOT n? and ERASE SLOT n?: Y and Enter are yes; N, Q and Esc
- * no, which returns to the slot list. Nothing else answers, and no repeat.
+ * Enter, a digit or a SLOT key on LOAD's row n, read now: the open run's own
+ * row resumes it; another valid row loads at once, after LEAVE UNSAVED RUN?
+ * over an open run unsaved with progress, unless `asked`; EMPTY, DAMAGED and
+ * NEWER rows do nothing.
+ */
+function loadRow(g, n, asked = false) {
+  const held = heldSave(n);
+  if (held.state !== 'valid') return;
+  if (ownRow(g, held)) resumeOpen(g);
+  else if (!asked && leaving(g)) g.confirm = { kind: 'leave', go: () => loadRow(g, n, true) };
+  else restore(g, n, held.record);
+}
+
+/** Opens LOAD, its cursor on the open run's own row, else the most recently played valid row, else T TYPE A CODE. */
+function openLoad(g) {
+  Object.assign(g, { typing: null, note: '', confirm: null, row: TYPE_ROW });
+  const helds = SAVE_SLOTS.map(heldSave), own = helds.findIndex((held) => ownRow(g, held));
+  const latest = playedSlot(helds, true);
+  if (own >= 0) g.row = own;
+  else if (latest !== null) g.row = latest - 1;
+  g.screen = 'load';
+}
+
+/** Opens the overwrite pick for the run `start`, its cursor on the least recently played valid row. */
+function openPick(g, start) {
+  g.pick = start;
+  g.confirm = null;
+  g.row = (playedSlot(SAVE_SLOTS.map(heldSave), false) || 1) - 1;
+  g.screen = 'pick';
+}
+
+/** The pick's row n, read now: a valid record asks OVERWRITE SLOT n?; any other row does nothing. */
+function pickRow(g, n) {
+  const held = heldSave(n);
+  if (held.state === 'valid') g.confirm = { kind: 'overwrite', n, held };
+}
+
+/**
+ * The pick's OVERWRITE SLOT n? yes re-reads slot n: the record drawn starts
+ * the run marked for slot n under that id; another valid record redraws the
+ * confirm; an empty, damaged or newer slot reruns BEGIN's rules, which ask no
+ * second LEAVE UNSAVED RUN?.
+ */
+function overwriteYes(g, c) {
+  const held = heldSave(c.n);
+  if (held.state === 'valid' && held.record.id === c.held.record.id) startRun(g, g.pick, { mark: { n: c.n, id: held.record.id } });
+  else if (held.state === 'valid') g.confirm = { ...c, held };
+  else {
+    g.confirm = null;
+    beginRules(g, g.pick, true);
+  }
+}
+
+/**
+ * Answers LEAVE UNSAVED RUN? and the pick's OVERWRITE SLOT n?: Y and Enter are
+ * yes. N and Esc are no, back to the screen that asked, and so is Q, which on
+ * the pick's confirm goes to the title. Nothing else answers, and no repeat.
  */
 function confirmKey(g, e) {
   if (e.repeat) return;
+  const c = g.confirm;
   if (e.code === 'KeyY' || e.key === 'Enter') {
-    const c = g.confirm;
-    if (c.kind === 'erase') {
-      eraseYes(g, c);
-      return;
-    }
-    g.confirm = null;
-    restore(g, c.n, c.held.record);
-  } else if (e.code === 'KeyN' || e.code === 'KeyQ' || e.key === 'Escape') {
-    g.confirm = null;
-    g.erasing = false;
+    if (c.kind === 'leave') {
+      g.confirm = null;
+      c.go();
+    } else overwriteYes(g, c);
+  } else if (e.code === 'KeyN' || e.key === 'Escape') g.confirm = null;
+  else if (e.code === 'KeyQ') {
+    if (c.kind === 'overwrite') toTitle(g);
+    else g.confirm = null;
   }
-}
-
-/**
- * ERASE SLOT n?'s yes removes the slot's key while it holds the record drawn.
- * A record under another id redraws the confirm; an empty, damaged or newer
- * key returns to the slot list. An erase of the open run's slot unbinds that
- * run at once.
- */
-function eraseYes(g, c) {
-  const out = eraseSave(slotIo, saveKey(c.n), c.held.record.id);
-  if (!out.ok && out.held.state === 'valid') {
-    g.confirm = { ...c, held: out.held };
-    return;
-  }
-  g.confirm = null;
-  g.erasing = false;
-  if (!out.ok) return;
-  g.cursor = c.n - 1;
-  if (g.open && g.open.slot === c.n) Object.assign(g.open, { slot: null, saveId: null, point: null, asked: false });
 }
 
 function hereCode(g) {
@@ -9119,40 +9770,49 @@ function entryCode(g) {
 }
 
 /**
- * NEW RUN's typed code: a used slot's serial asks CONTINUE SLOT n? over the
- * first such slot; any other save code starts a run at its board and a seed
- * becomes the shown seed, either keeping NEW RUN's binding.
+ * LOAD's typed answer: a valid slot's serial acts as Enter on the first such
+ * row; the open run's serial resumes it; any other save code starts a run at
+ * its board, at the setting, under BEGIN's rules; a seed becomes the title's
+ * shown seed and LOAD returns to the title; anything else reads NOT A SEED OR
+ * SAVE CODE.
  */
 function submitTyped(g) {
   const save = decodeSave(g.typing);
   if (save) {
     g.typing = null;
-    // A code carries no count or coins: only a slot's own serial restores its save.
+    // A code carries no count or coins: only a slot's own serial loads its save.
     const n = SAVE_SLOTS.find((k) => {
       const held = heldSave(k), kept = held.state === 'valid' && decodeSave(held.record.save);
       return kept && kept.code === save.code && kept.p === save.p;
     });
-    if (n !== undefined) {
-      if (save.code !== g.code) useCode(g, save.code);
-      g.screen = 'title';
-      g.bind = null;
-      g.confirm = { kind: 'continue', n, held: heldSave(n) };
-      return;
-    }
-    cleanState(g, g.bind);
-    g.bind = null;
-    if (save.code !== g.code) useCode(g, save.code);
-    beginSaved(g, save.p, null);
+    if (n !== undefined) loadRow(g, n);
+    else if (g.open && g.open.code === save.code && g.open.sim.bd.p === save.p) resumeOpen(g);
+    else beginRules(g, { code: save.code, p: save.p });
     return;
   }
   const c = parseCode(g.typing);
-  if (c) { useCode(g, c); g.typing = null; g.note = ''; return; }
+  if (c) {
+    useCode(g, c);
+    toTitle(g);
+    g.note = '';
+    return;
+  }
   g.note = 'NOT A SEED OR SAVE CODE';
 }
 
+// Set while pollGamepads dispatches a controller's key, so code entry tells a
+// pad's Select and Start from the keyboard's Q and P.
+let fromPad = false;
+
+/**
+ * Code entry on LOAD: Enter submits, or closes an empty field; Esc and a pad's
+ * Select close it; a pad's Start types nothing; Backspace deletes, repeats
+ * included; letters, digits, '-' and ':' type, the keyboard's P and Q too.
+ */
 function typingKey(g, e) {
-  if (e.key === 'Enter') submitTyped(g);
-  else if (e.key === 'Escape') { g.typing = null; g.note = ''; }
+  if (fromPad && e.code === 'KeyP') return;
+  if (e.key === 'Escape' || (fromPad && e.code === 'KeyQ') || (e.key === 'Enter' && g.typing === '')) { g.typing = null; g.note = ''; }
+  else if (e.key === 'Enter') submitTyped(g);
   else if (e.key === 'Backspace') g.typing = g.typing.slice(0, -1);
   else if (/^[0-9A-Za-z:\-]$/.test(e.key) && g.typing.length < TYPED_MAX) g.typing += e.key.toUpperCase();
 }
@@ -9164,53 +9824,66 @@ function visitLive(g) {
 }
 
 /**
- * The slot list: Up and Down move the cursor over the four rows and stop at the
- * ends; Left and Right choose NEW RUN or ERASE on the last. Enter plays the lit
- * row, and the digits, N and E act at once. Space does nothing.
+ * The title: Up and Down move the cursor between BEGIN and LOAD; Enter acts
+ * on the lit row; Space begins and T opens LOAD wherever it stands. P resumes
+ * an open run. R rolls a seed, K copies it, L and Left and Right step the
+ * setting and H swaps the pad's side. Every repeat but the arrows' does
+ * nothing.
  */
 function titleKey(g, e) {
   if (g.confirm) { confirmKey(g, e); return; }
-  if (g.erasing) { erasingKey(g, e); return; }
-  const dir = DIRS[e.code];
-  if (dir === 'u' || dir === 'd') g.cursor = Math.max(0, Math.min(NEW_ROW, g.cursor + (dir === 'd' ? 1 : -1)));
-  else if (dir) { if (g.cursor === NEW_ROW && eraseShows()) g.pick = dir === 'r' ? 'erase' : 'new'; }
-  else if (e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }
-  else if (e.repeat) return;
-  else if (e.key === 'Enter') enterRow(g);
-  else if (SLOT_DIGITS[e.code]) playRow(g, SLOT_DIGITS[e.code]);
-  else if (e.code === 'KeyN') openNewRun(g, null);
-  else if (e.code === 'KeyE') startErasing(g);
-}
-
-/** Erasing: Up and Down over the used rows; Enter or a used row's digit asks ERASE SLOT n?; N, Q and Esc go back. */
-function erasingKey(g, e) {
-  const dir = DIRS[e.code];
-  if (dir === 'u' || dir === 'd') {
-    const rows = usedRows(), at = rows.indexOf(String(g.cursor + 1));
-    const next = rows[Math.max(0, Math.min(rows.length - 1, at + (dir === 'd' ? 1 : -1)))];
-    if (next) g.cursor = Number(next) - 1;
+  const dir = DIRS[e.code], at = DIFFICULTIES.indexOf(g.difficulty);
+  if (dir === 'u' || dir === 'd') g.cursor = dir === 'd' ? LOAD_ROW : BEGIN_ROW;
+  else if (SETTING_STEP[e.code]) {
+    setDifficulty(g, DIFFICULTIES[Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))]);
+  } else if (e.code === 'KeyP' || e.key === 'Escape') { if (!e.repeat) resume(g); }
+  else if (e.code === 'KeyH') {
+    if (!e.repeat) {
+      g.side = g.side === 'left' ? 'right' : 'left';
+      store(KEY_PAD, g.side);
+    }
   } else if (e.repeat) return;
-  else if (e.key === 'Enter') askErase(g, g.cursor + 1);
-  else if (SLOT_DIGITS[e.code]) askErase(g, SLOT_DIGITS[e.code]);
-  else if (e.code === 'KeyN' || e.code === 'KeyQ' || e.key === 'Escape') g.erasing = false;
+  else if (e.key === 'Enter') { if (g.cursor === LOAD_ROW) openLoad(g); else beginNew(g); }
+  else if (e.code === 'Space') beginNew(g);
+  else if (e.code === 'KeyT') openLoad(g);
+  else if (e.code === 'KeyR') { useCode(g, rollCode()); g.note = ''; }
+  else if (e.code === 'KeyL') setDifficulty(g, DIFFICULTIES[(at + 1) % DIFFICULTIES.length]);
+  else if (e.code === 'KeyK') {
+    copyWithStatus(globalThis.navigator.clipboard, formatCode(g.code), (status) => { g.note = status; }, visitLive(g));
+  }
 }
 
 /**
- * NEW RUN: Enter and Space begin the shown seed at tomb 0; L cycles the
- * difficulty and Left and Right step it; R rolls a new seed; T opens code
- * entry; Q goes back to the slot list and drops the binding.
+ * LOAD: Up and Down move the cursor over the three slot rows and T TYPE A
+ * CODE, stopping at the ends; Enter acts on the lit row, a digit on its slot's
+ * row and T opens code entry; Q and Esc go back to the title. Every repeat but
+ * the arrows' does nothing.
  */
-function newRunKey(g, e) {
+function loadKey(g, e) {
+  if (g.confirm) { confirmKey(g, e); return; }
   if (g.typing !== null) { typingKey(g, e); return; }
-  const at = DIFFICULTIES.indexOf(g.difficulty);
-  if ((e.key === 'Enter' || e.code === 'Space') && !e.repeat) beginClean(g);
-  else if (e.code === 'KeyQ') { g.screen = 'title'; g.bind = null; g.note = ''; }
-  else if (e.code === 'KeyR') { useCode(g, rollCode()); g.note = ''; }
+  const dir = DIRS[e.code];
+  if (dir === 'u' || dir === 'd') g.row = Math.max(0, Math.min(TYPE_ROW, g.row + (dir === 'd' ? 1 : -1)));
+  else if (e.repeat) return;
+  else if (e.key === 'Enter') { if (g.row === TYPE_ROW) { g.typing = ''; g.note = ''; } else loadRow(g, g.row + 1); }
+  else if (SLOT_DIGITS[e.code]) loadRow(g, SLOT_DIGITS[e.code]);
   else if (e.code === 'KeyT') { g.typing = ''; g.note = ''; }
-  else if (e.code === 'KeyL') setDifficulty(g, DIFFICULTIES[(at + 1) % DIFFICULTIES.length]);
-  else if (SETTING_STEP[e.code]) {
-    setDifficulty(g, DIFFICULTIES[Math.max(0, Math.min(DIFFICULTIES.length - 1, at + SETTING_STEP[e.code]))]);
-  }
+  else if (e.code === 'KeyQ' || e.key === 'Escape') toTitle(g);
+}
+
+/**
+ * OVERWRITE WHICH SLOT?: Up and Down move the cursor over the three rows,
+ * stopping at the ends; Enter and a digit pick a row; Q and Esc go back to the
+ * title. Every repeat but the arrows' does nothing.
+ */
+function pickKey(g, e) {
+  if (g.confirm) { confirmKey(g, e); return; }
+  const dir = DIRS[e.code];
+  if (dir === 'u' || dir === 'd') g.row = Math.max(0, Math.min(SAVE_SLOTS.length - 1, g.row + (dir === 'd' ? 1 : -1)));
+  else if (e.repeat) return;
+  else if (e.key === 'Enter') pickRow(g, g.row + 1);
+  else if (SLOT_DIGITS[e.code]) pickRow(g, SLOT_DIGITS[e.code]);
+  else if (e.code === 'KeyQ' || e.key === 'Escape') toTitle(g);
 }
 
 function playKey(g, e) {
@@ -9229,21 +9902,14 @@ function playKey(g, e) {
   if (JUMP_KEYS.includes(e.code) && !e.repeat) g.jump = true;
 }
 
-/** Where the slot list's cursor starts: the open run's slot, else the first used slot, else slot 1. */
-function homeRow(g) {
-  if (g.open && g.open.slot !== null) return g.open.slot - 1;
-  const used = usedRows();
-  return used ? Number(used[0]) - 1 : 0;
-}
-
-/** Shows the slot list from another screen: the cursor at its home row and NEW RUN lit on the last. */
+/** Shows the title from another screen, its cursor on BEGIN. */
 function toTitle(g) {
-  Object.assign(g, { cursor: homeRow(g), pick: 'new', erasing: false, confirm: null, typing: null, bind: null });
+  Object.assign(g, { cursor: BEGIN_ROW, confirm: null, typing: null, pick: null });
   g.screen = 'title';
   titleCam(g);
 }
 
-/** Goes to the title with the run open: RESUME there returns to it unchanged. */
+/** Goes to the title with the run open: P there returns to it unchanged. */
 function leaveOpen(g) {
   g.open = { ...economyOf(g), code: g.code, world: g.world, renderer: g.renderer, preview: g.preview, sim: g.sim };
   toTitle(g);
@@ -9257,11 +9923,6 @@ function pauseKey(g, e) {
     g.copied = '';
   } else if (e.code === 'KeyC') {
     copyWithStatus(globalThis.navigator.clipboard, hereCode(g), (status) => { g.copied = status; }, visitLive(g));
-  } else if (e.code === 'KeyH') {
-    if (!e.repeat) {
-      g.side = g.side === 'left' ? 'right' : 'left';
-      store(KEY_PAD, g.side);
-    }
   } else if (e.key === 'Enter') {
     // An unsaved run's SAVE asks SAVE IN?, which binds at the explorer's board.
     if (!e.repeat && g.saveId === null) openSaveIn(g, g.sim.here);
@@ -9292,6 +9953,9 @@ function splashKey(g, e) {
   }
 }
 
+/** True while the pause offers SAVE: the run holds no slot and a slot is writable, so SAVE IN? lists a row. */
+const saveOffered = (g) => g.saveId === null && writable();
+
 /** SAVE IN?'s rows as { n, held }: every slot but a newer build's, empty and damaged first, each kind in slot order. */
 function saveInRows() {
   const free = [], used = [];
@@ -9303,41 +9967,32 @@ function saveInRows() {
   return [...free, ...used];
 }
 
-/**
- * Holds the run under SAVE IN?, which binds it at save point `at` to the slot
- * the player picks, and returns whether it opened: it does not while the
- * latest write failed or with no row to list. `splash` is the milestone the
- * tick held back, shown once SAVE IN? is answered.
- */
-function openSaveIn(g, at, splash = null) {
+/** Lists SAVE IN?'s rows from storage, the cursor on the first, and returns how many it lists. */
+function listSaveIn(si) {
   const rows = saveInRows();
-  if (!rows.length || storage.failed()) return false;
-  g.saveIn = { at, from: g.screen, splash, rows, cursor: 0, order: rows.map((r) => r.n).join('') };
+  Object.assign(si, { rows, cursor: 0, order: rows.map((r) => r.n).join('') });
+  return rows.length;
+}
+
+/** Opens SAVE IN? on the pause, which binds the run at save point `at` to the slot the player picks, while SAVE shows. */
+function openSaveIn(g, at) {
+  if (!saveOffered(g)) return;
+  const si = { at };
+  if (!listSaveIn(si)) return;
+  g.saveIn = si;
   g.screen = 'savein';
-  return true;
 }
 
-/** Redraws SAVE IN?'s rows from storage, the cursor on the first; with none left, the run plays on unsaved. */
-function redrawSaveIn(g) {
-  const rows = saveInRows();
-  if (!rows.length) {
-    closeSaveIn(g);
-    return;
-  }
-  Object.assign(g.saveIn, { rows, cursor: 0, order: rows.map((r) => r.n).join('') });
-}
-
-/** Leaves SAVE IN? for the screen it held: pause, or play and the milestone splash it held back. */
+/** Returns from SAVE IN? to the pause. */
 function closeSaveIn(g) {
-  const { from, splash } = g.saveIn;
   g.saveIn = null;
   g.confirm = null;
-  if (from === 'pause') {
-    g.screen = 'pause';
-    return;
-  }
-  play(g);
-  if (splash) showSplash(g, splash.k, splash.paid);
+  g.screen = 'pause';
+}
+
+/** Redraws SAVE IN?'s rows from storage; with none left, back to the pause. */
+function redrawSaveIn(g) {
+  if (!listSaveIn(g.saveIn)) closeSaveIn(g);
 }
 
 /** Whether a slot's state `now` differs from the one a confirm drew: emptied, filled or under another id. */
@@ -9348,10 +10003,10 @@ function changed(drawn, now) {
 
 /**
  * Picks SAVE IN?'s row: a slot that changed since it was drawn redraws the
- * rows; an empty or damaged one binds the run and writes it; a used one asks
- * OVERWRITE SLOT n?.
+ * rows; an empty or damaged one binds the run there and writes it, dropping
+ * any mark; a used one asks OVERWRITE SLOT n?.
  */
-function pickRow(g, row) {
+function saveRow(g, row) {
   if (!row) return;
   const held = heldSave(row.n);
   if (changed(row.held, held)) {
@@ -9362,20 +10017,18 @@ function pickRow(g, row) {
     g.confirm = { kind: 'overwrite', n: row.n, held };
     return;
   }
-  g.slot = row.n;
-  if (writeAt(g, g.saveIn.at, { bind: {} }).ok) closeSaveIn(g);
+  if (take(g, row.n, pointOf(g, g.saveIn.at)).ok) closeSaveIn(g);
   else redrawSaveIn(g);
 }
 
 /**
- * OVERWRITE SLOT n?'s yes binds the run there under a fresh id while the slot
- * holds the record drawn. A record under another id redraws the confirm; an
- * emptied or newer slot returns to SAVE IN?.
+ * SAVE IN?'s OVERWRITE SLOT n? yes binds the run there under a fresh id while
+ * the slot holds the record drawn. A record under another id redraws the
+ * confirm; an emptied or newer slot returns to SAVE IN?.
  */
-function overwriteYes(g) {
+function saveInYes(g) {
   const c = g.confirm;
-  g.slot = c.n;
-  const out = writeAt(g, g.saveIn.at, { bind: { over: c.held.record.id } });
+  const out = take(g, c.n, pointOf(g, g.saveIn.at), { over: c.held.record.id });
   if (out.ok) closeSaveIn(g);
   else if (out.held.state === 'valid') g.confirm = { ...c, held: out.held };
   else {
@@ -9386,31 +10039,27 @@ function overwriteYes(g) {
 
 /**
  * SAVE IN?: Up and Down move the cursor over its rows, and Enter or a listed
- * slot's digit picks; Q and Esc play on unsaved. OVERWRITE SLOT n? takes Y and
- * Enter for yes and N, Q and Esc for no, back to SAVE IN?. SAVE IN? opens
- * mid-play, so both ignore Space, P and every repeated key.
+ * slot's digit picks; Q and Esc return to the pause. OVERWRITE SLOT n? takes Y
+ * and Enter for yes and N, Q and Esc for no, back to SAVE IN?. Both ignore
+ * Space, P and every repeated key.
  */
 function saveInKey(g, e) {
   if (e.repeat) return;
   const si = g.saveIn;
   if (g.confirm) {
-    if (e.code === 'KeyY' || e.key === 'Enter') overwriteYes(g);
+    if (e.code === 'KeyY' || e.key === 'Enter') saveInYes(g);
     else if (e.code === 'KeyN' || e.code === 'KeyQ' || e.key === 'Escape') g.confirm = null;
     return;
   }
   const dir = DIRS[e.code];
   if (dir === 'u' || dir === 'd') si.cursor = Math.max(0, Math.min(si.rows.length - 1, si.cursor + (dir === 'd' ? 1 : -1)));
-  else if (e.key === 'Enter') pickRow(g, si.rows[si.cursor]);
-  else if (SLOT_DIGITS[e.code]) pickRow(g, si.rows.find((r) => r.n === SLOT_DIGITS[e.code]));
-  else if (e.code === 'KeyQ' || e.key === 'Escape') {
-    // Dismissed in play, SAVE IN? asks no more by itself.
-    if (si.from === 'play') g.asked = true;
-    closeSaveIn(g);
-  }
+  else if (e.key === 'Enter') saveRow(g, si.rows[si.cursor]);
+  else if (SLOT_DIGITS[e.code]) saveRow(g, si.rows.find((r) => r.n === SLOT_DIGITS[e.code]));
+  else if (e.code === 'KeyQ' || e.key === 'Escape') closeSaveIn(g);
 }
 
 const SCREEN_KEYS = {
-  title: titleKey, newrun: newRunKey, play: playKey, savein: saveInKey, pause: pauseKey, over: overKey, splash: splashKey,
+  title: titleKey, load: loadKey, pick: pickKey, play: playKey, savein: saveInKey, pause: pauseKey, over: overKey, splash: splashKey,
 };
 
 function onKeyDown(g, e) {
@@ -9480,6 +10129,8 @@ function milestoneHit(was, count, seen) {
 
 function tick(g) {
   if (g.screen !== 'play') return;
+  // The note counts ticks of play alone, so a pause or a splash holds it.
+  if (g.noteTicks > 0) g.noteTicks--;
   const s = g.sim;
   const was = tombCount(s), jars = s.jars.size, lead = s.recent[0];
   stepSim(g);
@@ -9491,52 +10142,52 @@ function tick(g) {
   const hit = pay && milestoneHit(was, tombCount(s), pay.seen);
   soundCues(g);
   followCam(g.cam, g.sim);
-  // A run that ends on the milestone's tick shows the end screen; the payout stands. An unsaved run's
-  // coin or counted tomb asks SAVE IN?, which shows the milestone's splash once answered.
+  // A run that ends on the milestone's tick shows the end screen; the payout stands.
   if (g.sim.state === 'over') endRun(g);
-  else if (pay && g.saveId === null && !g.asked && openSaveIn(g, s.entry, hit)) return;
   else if (hit) showSplash(g, hit.k, hit.paid);
 }
 
-/** The best tomb NEW RUN shows: the shown seed's, at the setting. */
+/** The best tomb the title shows: the shown seed's, at the setting. */
 function titleBest(g) {
   return readBest(g.code, g.difficulty);
 }
 
-/** The title's backdrop: the preview explorer under a veil, the game's name and the SAVES OFF warning. */
+/** The title's warning line: SAVES OFF while the latest store failed, else a newer game's saves while all three read NEWER. */
+function titleWarning() {
+  if (storage.failed()) return 'SAVES OFF: COPY YOUR CODE';
+  return allNewer() ? 'SAVES FROM A NEWER GAME: RELOAD' : '';
+}
+
+/** The backdrop of the title, LOAD and the pick: the preview explorer under a veil, the warning line and the game's name. */
 function titleScene(g, t) {
-  const r = g.renderer;
+  const r = g.renderer, warning = titleWarning();
   r.scene(g.preview, g.cam, t);
   r.ctx.fillStyle = shade(0.45);
   r.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  if (storage.failed()) r.text('SAVES OFF: COPY YOUR CODE', VIEW_W / 2, 4, 'o', { align: 'center' });
-  r.text('INFINITE MAZE', VIEW_W / 2, 30, 'm', { align: 'center', scale: 2 });
+  if (warning) r.text(warning, VIEW_W / 2, 4, 'o', { align: 'center' });
+  r.text('INFINITE MAZE', VIEW_W / 2, 18, 'm', { align: 'center', scale: 2 });
 }
 
-/** The cursor's bar behind the row at y: x to x + w, 11 px tall, edged gold on the left. */
-function bar(r, x, y, w) {
+/** The note line and the controls line under the title's, LOAD's and the pick's panels. */
+function titleFooter(g) {
+  const r = g.renderer;
+  if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
+  r.text(touch && touch.on ? 'D-PAD MOVE  RED BUTTON JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  P PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+}
+
+/** The cursor's bar behind the row at y: x to x + w, h px tall from y - 2, edged gold on the left. */
+function bar(r, x, y, w, h = 11) {
   r.ctx.fillStyle = PALETTE[3];
-  r.ctx.fillRect(x, y - 2, w, 11);
+  r.ctx.fillRect(x, y - 2, w, h);
   r.ctx.fillStyle = PALETTE[0x16];
-  r.ctx.fillRect(x, y - 2, 2, 11);
+  r.ctx.fillRect(x, y - 2, 2, h);
 }
 
 let coinSprite = null;
 
-/**
- * Slot n's row at y: its number, then EMPTY, DAMAGED or NEWER, or the
- * record's level, TOMB n (its high) and the coin sprite before the wallet,
- * which ends at x 248. A lit row stands on the cursor's bar.
- */
-function slotRow(g, held, n, y, lit, num = true) {
-  const r = g.renderer, ink = lit ? 'm' : 'b';
-  if (lit) bar(r, 65, y, 190);
-  if (num) r.text(String(n), 72, y, ink);
-  if (held.state !== 'valid') {
-    r.text(ROW_LABEL[held.state], 84, y, lit ? 'm' : held.state === 'damaged' ? 'o' : '7');
-    return;
-  }
-  const { level, high, wallet } = held.record, count = String(wallet);
+/** A save's level, TOMB n (its high) and the coin sprite before the wallet, which ends at x 248, on the row at y. */
+function recordLine(r, level, high, wallet, y, ink) {
+  const count = String(wallet);
   r.text(difficultyLabel(level), 84, y, ink);
   r.text(`TOMB ${high}`, 138, y, ink);
   r.text(count, 248, y, ink, { align: 'right' });
@@ -9544,81 +10195,110 @@ function slotRow(g, held, n, y, lit, num = true) {
   r.ctx.drawImage(coinSprite, 248 - textWidth(count) - 2 * (FONT_W + 1), y);
 }
 
-// The slot list's rows stand 14 px apart from y 64, the N NEW RUN row 4 px
-// lower. Its panel spans y 54..138, 54..124 in touch mode, which draws no hint.
-const ROW_Y = [64, 78, 92, 110];
-
-/** The slot list, or the CONTINUE SLOT n? or ERASE SLOT n? it asks. */
-function drawTitle(g, t) {
-  titleScene(g, t);
-  if (g.confirm) {
-    drawSlotConfirm(g);
+/**
+ * Slot n's row at y: its number, then EMPTY, DAMAGED or NEWER, or the
+ * record's level, TOMB n and coins. With `now`, the row takes a second line,
+ * the time since the record was played, and its cursor's bar spans both. A
+ * lit row stands on the cursor's bar.
+ */
+function slotRow(g, held, n, y, lit, { num = true, now = null } = {}) {
+  const r = g.renderer, ink = lit ? 'm' : 'b';
+  if (lit) bar(r, 65, y, 190, now === null ? 11 : 20);
+  if (num) r.text(String(n), 72, y, ink);
+  if (held.state !== 'valid') {
+    r.text(ROW_LABEL[held.state], 84, y, lit ? 'm' : held.state === 'damaged' ? 'o' : '7');
     return;
   }
-  const r = g.renderer, touchOn = touch && touch.on;
-  r.panel(62, 54, 196, touchOn ? 70 : 84);
-  for (const n of SAVE_SLOTS) slotRow(g, heldSave(n), n, ROW_Y[n - 1], g.cursor === n - 1);
-  // N NEW RUN, and E ERASE ending at x 248 while ERASE shows; the bar lights the lit choice.
-  const y = ROW_Y[NEW_ROW], erase = eraseShows(), lit = g.cursor === NEW_ROW && !g.erasing;
-  const litErase = lit && erase && g.pick === 'erase', litNew = lit && !litErase;
-  if (litNew) bar(r, 65, y, erase ? 66 : 190);
-  if (litErase) bar(r, 199, y, 56);
-  r.text('N', 72, y, litNew ? 'm' : 'b');
-  r.text('NEW RUN', 84, y, litNew ? 'm' : 'i');
-  if (erase) {
-    r.text('E', 207, y, litErase ? 'm' : 'b');
-    r.text('ERASE', 219, y, litErase ? 'm' : 'i');
-  }
-  if (!touchOn) r.text(g.erasing ? 'ENTER ERASE  Q BACK' : 'ENTER PLAY', VIEW_W / 2, 124, 'p', { align: 'center' });
-}
-
-/** CONTINUE SLOT n? and ERASE SLOT n?, in the slot list's panel: the record's serial, level, TOMB n and coins. */
-function drawSlotConfirm(g) {
-  const r = g.renderer, { kind, n, held } = g.confirm;
-  const { save, level, high, wallet, continues } = held.record;
-  r.panel(62, 54, 196, 84);
-  if (kind === 'erase') r.text(`ERASE SLOT ${n}?`, VIEW_W / 2, 62, 'o', { align: 'center' });
-  else r.text(`CONTINUE SLOT ${n}?`, VIEW_W / 2, 62, 'i', { align: 'center' });
-  r.text(save, 72, 78, 'c');
-  r.text(`${difficultyLabel(level)}  TOMB ${high}`, 72, 90, 'b');
-  r.text(kind === 'erase' ? `COINS  ${wallet}` : `COINS  ${wallet}  CONTINUES  ${continues}`, 72, 102, 'b');
-  r.text('Y YES  N NO', 72, 118, 'p');
+  const { level, high, wallet, played } = held.record;
+  recordLine(r, level, high, wallet, y, ink);
+  if (now !== null) r.text(playedLabel(played, now), 84, y + 9, lit ? 'm' : '9');
 }
 
 /**
- * NEW RUN: the header, naming the slot it binds; the seed with BEST TOMB n at
- * its right when a best is stored; the difficulty row; R NEW SEED and T TYPE A
- * CODE; or the code field while typing.
+ * The title: SEED, ENTER BEGIN, the difficulty row, R RESET and K COPY,
+ * T LOAD and the best tomb, the cursor's bar behind BEGIN or LOAD; or the
+ * LEAVE UNSAVED RUN? it asks.
  */
-function drawNewRun(g, t) {
+function drawTitle(g, t) {
   titleScene(g, t);
-  const r = g.renderer, touchOn = touch && touch.on, best = titleBest(g);
-  r.panel(62, 54, 196, touchOn && g.typing === null ? 74 : 88);
-  r.text(g.bind === null ? 'NEW RUN' : `NEW RUN  SLOT ${g.bind}`, VIEW_W / 2, 62, 'i', { align: 'center' });
-  if (g.typing !== null) {
-    // No label, so TYPED_MAX characters and the cursor fit the panel.
-    r.text(`${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 76, 'c');
-    r.text('ENTER  ACCEPT', 72, 90, 'b');
-    r.text('ESC    CANCEL', 72, 102, 'b');
-    r.text('SEED  XXXX-XXXX', 72, 116, '9');
-    r.text('SAVE  XXXX-XXXX:P', 72, 128, '9');
-  } else {
-    r.text('SEED', 72, 76, 'b');
-    r.text(formatCode(g.code), 108, 76, 'c');
-    if (best !== null) r.text(`BEST TOMB ${best}`, 248, 76, 'p', { align: 'right' });
-    drawSettingRow(g, 88);
-    r.text('R', 72, 100, 'b');
-    r.text('NEW SEED', 99, 100, 'b');
-    r.text('T', 72, 112, 'b');
-    r.text('TYPE A CODE', 99, 112, 'b');
-    if (!touchOn) r.text('ENTER BEGIN  Q BACK', VIEW_W / 2, 126, 'p', { align: 'center' });
+  const r = g.renderer, best = titleBest(g), begins = g.cursor === BEGIN_ROW;
+  if (g.confirm) drawConfirm(g);
+  else {
+    r.text('A TOMB WITHOUT END', VIEW_W / 2, 38, 'a', { align: 'center' });
+    r.panel(62, 50, 196, 88);
+    r.text(`SEED  ${formatCode(g.code)}`, VIEW_W / 2, 58, 'i', { align: 'center' });
+    bar(r, 65, begins ? 74 : 110, 190);
+    r.text('ENTER  BEGIN', 72, 74, begins ? 'm' : 'c');
+    drawSettingRow(g, 86);
+    r.text('R      RESET', 72, 98, 'b');
+    r.text('K COPY', 248, 98, 'b', { align: 'right' });
+    r.text('T      LOAD', 72, 110, begins ? 'b' : 'm');
+    r.text(best === null ? 'THE MOUTH OF THE TOMB' : `BEST TOMB  ${best}`, VIEW_W / 2, 124, 'p', { align: 'center' });
   }
-  if (g.note) r.text(g.note, VIEW_W / 2, 152, 'o', { align: 'center' });
-  r.text(touchOn ? 'D-PAD MOVE  RED BUTTON JUMP' : 'ARROWS/WASD MOVE  SPACE/Z JUMP  M MUTE  P PAUSE', VIEW_W / 2, 166, '9', { align: 'center' });
+  titleFooter(g);
+}
+
+// LOAD's and the pick's slot rows stand 20 px apart from y 58, each on two lines.
+const ROWS_Y = [58, 78, 98];
+
+/** LOAD: the three slot rows, T TYPE A CODE and the hint; the code field while typing; or the confirm it asks. */
+function drawLoad(g, t) {
+  titleScene(g, t);
+  const r = g.renderer, touchOn = touch && touch.on, now = Date.now();
+  if (g.confirm) drawConfirm(g);
+  else {
+    r.panel(62, 36, 196, touchOn ? 98 : 112);
+    r.text('LOAD', VIEW_W / 2, 44, 'i', { align: 'center' });
+    if (g.typing !== null) {
+      // No label, so TYPED_MAX characters and the cursor fit the panel.
+      r.text(`${g.typing}${Math.floor(t * 2) % 2 ? '_' : ' '}`, 72, 58, 'c');
+      r.text('ENTER  ACCEPT', 72, 72, 'b');
+      r.text('ESC    CANCEL', 72, 84, 'b');
+      r.text('SEED  XXXX-XXXX', 72, 98, '9');
+      r.text('SAVE  XXXX-XXXX:P', 72, 110, '9');
+    } else {
+      for (const n of SAVE_SLOTS) slotRow(g, heldSave(n), n, ROWS_Y[n - 1], g.row === n - 1, { now });
+      const lit = g.row === TYPE_ROW;
+      if (lit) bar(r, 65, 120, 190);
+      r.text('T', 72, 120, lit ? 'm' : 'b');
+      r.text('TYPE A CODE', 84, 120, lit ? 'm' : 'i');
+      if (!touchOn) r.text('ENTER LOAD  Q BACK', VIEW_W / 2, 134, 'p', { align: 'center' });
+    }
+  }
+  titleFooter(g);
+}
+
+/** OVERWRITE WHICH SLOT?: the three slot rows and the hint, or the OVERWRITE SLOT n? it asks. */
+function drawPick(g, t) {
+  titleScene(g, t);
+  const r = g.renderer, touchOn = touch && touch.on, now = Date.now();
+  if (g.confirm) drawConfirm(g);
+  else {
+    r.panel(62, 36, 196, touchOn ? 84 : 98);
+    r.text('OVERWRITE WHICH SLOT?', VIEW_W / 2, 44, 'o', { align: 'center' });
+    for (const n of SAVE_SLOTS) slotRow(g, heldSave(n), n, ROWS_Y[n - 1], g.row === n - 1, { now });
+    if (!touchOn) r.text('ENTER PICK  Q BACK', VIEW_W / 2, 120, 'p', { align: 'center' });
+  }
+  titleFooter(g);
+}
+
+/** LEAVE UNSAVED RUN?, naming the open run's level, TOMB n and coins, or the pick's OVERWRITE SLOT n? with the row as drawn and its time. */
+function drawConfirm(g) {
+  const r = g.renderer, c = g.confirm, touchOn = touch && touch.on;
+  r.panel(62, 36, 196, touchOn ? 44 : 58);
+  if (c.kind === 'leave') {
+    const o = g.open;
+    r.text('LEAVE UNSAVED RUN?', VIEW_W / 2, 44, 'o', { align: 'center' });
+    recordLine(r, o.world.difficulty, tombCount(o.sim), o.wallet, 60, 'b');
+  } else {
+    r.text(`OVERWRITE SLOT ${c.n}?`, VIEW_W / 2, 44, 'o', { align: 'center' });
+    slotRow(g, c.held, c.n, 60, false, { num: false, now: Date.now() });
+  }
+  if (!touchOn) r.text('Y YES  N NO', VIEW_W / 2, 82, 'p', { align: 'center' });
 }
 
 /**
- * NEW RUN's setting row at y: all four names after L, the current one lit.
+ * The title's setting row at y: all four names after L, the current one lit.
  * The row spans 149 px and ends at 248, the panel's text margin.
  */
 function drawSettingRow(g, y) {
@@ -9632,14 +10312,14 @@ function drawSettingRow(g, y) {
   }
 }
 
-/** SAVE IN? over the held run, rows 14 px apart from y 72, or the OVERWRITE SLOT n? it asks. */
+/** SAVE IN? over the paused run, rows 14 px apart from y 72, or the OVERWRITE SLOT n? it asks. */
 function drawSaveIn(g) {
   const r = g.renderer, touchOn = touch && touch.on, si = g.saveIn;
   if (g.confirm) {
     const { n, held } = g.confirm;
     r.panel(62, 60, 196, touchOn ? 40 : 54);
     r.text(`OVERWRITE SLOT ${n}?`, VIEW_W / 2, 68, 'o', { align: 'center' });
-    slotRow(g, held, n, 84, false, false);
+    slotRow(g, held, n, 84, false, { num: false });
     if (!touchOn) r.text('Y YES  N NO', VIEW_W / 2, 100, 'p', { align: 'center' });
     return;
   }
@@ -9677,8 +10357,8 @@ function pauseModel(g) {
 }
 
 // The panel spans y 2..177; its rules leave y 5..174 for rows at least 4 px
-// apart. An unsaved run's pause reads UNSAVED where SAVE CODE stands, and
-// Enter there saves.
+// apart. A run holding no slot pauses UNSAVED where SAVE CODE stands, and
+// Enter there saves while SAVE shows.
 function drawPause(g, t = 0) {
   const r = g.renderer;
   r.panel(50, 2, 220, 176);
@@ -9693,8 +10373,13 @@ function drawPause(g, t = 0) {
     r.text(g.copied ? `UNSAVED  ${g.copied}` : 'UNSAVED', VIEW_W / 2, 118, 'o', { align: 'center' });
     r.text(here, VIEW_W / 2, 129, 'i', { align: 'center' });
     if (touch && touch.on) return;
-    r.text('ENTER SAVE  P RESUME  Q TITLE', VIEW_W / 2, 145, 'b', { align: 'center' });
-    r.text('C COPY  M MUTE  ARROWS PAN', VIEW_W / 2, 156, 'b', { align: 'center' });
+    if (saveOffered(g)) {
+      r.text('ENTER SAVE  P RESUME  Q TITLE', VIEW_W / 2, 145, 'b', { align: 'center' });
+      r.text('C COPY  M MUTE  ARROWS PAN', VIEW_W / 2, 156, 'b', { align: 'center' });
+    } else {
+      r.text('P RESUME  ARROWS PAN  Q TITLE', VIEW_W / 2, 145, 'b', { align: 'center' });
+      r.text('M MUTE  C COPY', VIEW_W / 2, 156, 'b', { align: 'center' });
+    }
     return;
   }
   r.text(saveLabel(g.copied), VIEW_W / 2, 118, 'a', { align: 'center' });
@@ -9730,13 +10415,22 @@ function drawSplash(g) {
   r.text('ENTER CONTINUE  Q HOME', VIEW_W / 2, 112, 'b', { align: 'center' });
 }
 
+// The note stands centred under the HUD's top line, clear of the torch bar,
+// EMBER and the wallet and far above the explorer, whom the camera keeps near
+// the view's middle. Its text is built when the note is set, so a frame
+// builds nothing for it.
+const NOTE_Y = 14;
+const NOTE_AT = { align: 'center' };
+
 function draw(g, t) {
   if (g.screen === 'title') drawTitle(g, t);
-  else if (g.screen === 'newrun') drawNewRun(g, t);
+  else if (g.screen === 'load') drawLoad(g, t);
+  else if (g.screen === 'pick') drawPick(g, t);
   else {
     g.renderer.scene(g.sim, g.cam, t);
     g.renderer.hud(g.sim, g.wallet);
-    if (g.screen === 'pause') drawPause(g, t);
+    if (g.screen === 'play') { if (g.noteTicks > 0) g.renderer.text(g.noteText, VIEW_W / 2, NOTE_Y, g.noteInk, NOTE_AT); }
+    else if (g.screen === 'pause') drawPause(g, t);
     else if (g.screen === 'over') drawOver(g);
     else if (g.screen === 'splash') drawSplash(g);
     else if (g.screen === 'savein') drawSaveIn(g);
@@ -9749,10 +10443,15 @@ function draw(g, t) {
 // The standard-mapped gamepads, read through navigator at poll time.
 const gamepad = createGamepad(() => navigator.getGamepads());
 
-/** Sends the key events the gamepads have due, as the keyboard would. */
+/** Sends the key events the gamepads have due, as the keyboard would, marked as a pad's while they dispatch. */
 function pollGamepads() {
   for (const o of gamepad.poll()) {
-    window.dispatchEvent(new KeyboardEvent(o.type, { code: o.code, key: o.key, repeat: false, bubbles: true, cancelable: true }));
+    fromPad = true;
+    try {
+      window.dispatchEvent(new KeyboardEvent(o.type, { code: o.code, key: o.key, repeat: false, bubbles: true, cancelable: true }));
+    } finally {
+      fromPad = false;
+    }
   }
 }
 
@@ -9804,15 +10503,14 @@ function boot() {
   // A layout change moves the title's explorer with it.
   const refit = () => {
     fit();
-    if ((g.screen === 'title' || g.screen === 'newrun') && g.preview) titleCam(g);
+    if ((g.screen === 'title' || g.screen === 'load' || g.screen === 'pick') && g.preview) titleCam(g);
   };
   // `touch.refresh` reads this every frame; in play it reads no storage.
   touch = createTouch({
     state: () => ({
       screen: g.screen, typing: g.typing !== null, confirm: g.confirm !== null, muted: g.audio.muted, difficulty: g.difficulty, side: g.side,
-      resume: g.screen === 'title' && g.open !== null, erasing: g.erasing, erase: g.screen === 'title' && eraseShows(),
-      unsaved: g.screen === 'pause' && g.saveId === null,
-      rows: g.screen === 'savein' ? g.saveIn.order : g.screen === 'title' && g.erasing ? usedRows() : '',
+      resume: g.screen === 'title' && g.open !== null, save: g.screen === 'pause' && saveOffered(g),
+      rows: g.screen === 'savein' ? g.saveIn.order : '',
     }),
     onMode: refit,
   });

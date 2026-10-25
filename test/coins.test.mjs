@@ -10,7 +10,7 @@ import { createSim, step, feet, nodeXY, tombCount, runCarry, inputEdges, BURN_S,
 import { createAutopilot } from '../src/game/autopilot.mjs';
 import {
   OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, TOMB_ID, coinKey, coinId, parseSlot, legacySlot, parseWallet, parseIdSets, parsePaid, packRecent, unpackRecent,
-  SAVE_SLOTS, MIGRATED_KEY, saveKey, parseSave, serializeSave, risePay, commitSave, takeSave, eraseSave, migrateSaves,
+  SAVE_SLOTS, MIGRATED_KEY, saveKey, parseSave, serializeSave, risePay, commitSave, takeSave, migrateSaves, playedLabel, playedSlot,
 } from '../src/game/wallet.mjs';
 
 test('the level rates are 1, 2, 5 and 10', () => {
@@ -406,7 +406,7 @@ test('the continue count round-trips, damages a record unless a count, merges by
   assert.equal(createSim(world, start, { ...runCarry(a), continues: undefined }).continues, 0);
 });
 
-test('the end, pause and CONTINUE? screens draw the continue count: CONTINUES under COINS in the end panel, on the pause header\'s row at x 53, and in the COINS row of CONTINUE?', () => {
+test('the end and pause screens draw the continue count: CONTINUES under COINS in the end panel and on the pause header\'s row at x 53', () => {
   const src = readFileSync(new URL('../src/game/main.mjs', import.meta.url), 'utf8');
   const body = (name) => {
     const fn = src.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`));
@@ -429,10 +429,6 @@ test('the end, pause and CONTINUE? screens draw the continue count: CONTINUES un
   assert.ok(tomb && mark, 'drawPause draws TOMB n and CONTINUES n');
   assert.deepEqual(mark.slice(1).map(Number), [53, +tomb[2]], 'x 53 on the row of TOMB n');
   assert.ok(53 + textWidth('CONTINUES 99') <= 124 && 53 + textWidth('CONTINUES 100') > 124, 'flush against PAUSED up to 99');
-  // CONTINUE SLOT n?: the COINS row names the save's count.
-  const confirm = body('drawSlotConfirm');
-  assert.match(confirm, /const \{ save, level, high, wallet, continues \} = held\.record;/);
-  assert.match(confirm, /`COINS  \$\{wallet\}  CONTINUES  \$\{continues\}`, 72, 102, 'b'\);/);
 });
 
 // The end screen's row sits inside its panel and 4 px clear of every other row.
@@ -766,7 +762,7 @@ test('the save keys, and a record round-trips and reads absent, newer, valid or 
   for (const t of damaged) assert.equal(parseSave(t).state, 'damaged', t);
 });
 
-test('a record\'s unknown fields ride every write of its save, merges included, and no binding write', () => {
+test('M25 a record\'s unknown fields ride every write of its save, merges included, and leave with an overwrite', () => {
   const extra = { skins: ['gold', 'jade'], later: { n: 1 } };
   const io = putRecord(memoryIo(), 1, { net: 3, high: 3, wallet: 5 }, extra);
   const kept = () => {
@@ -786,7 +782,7 @@ test('a record\'s unknown fields ride every write of its save, merges included, 
   assert.deepEqual(kept(), { skins: undefined, later: undefined });
 });
 
-test('no write and no erase touches a newer build\'s record, and the bound write reports the run unbound', () => {
+test('no write touches a newer build\'s record, and the bound write reports the run unbound', () => {
   const newer = JSON.stringify({ v: 2, id: 'AAAAAAAA', save: SAVE, wallet: 900, skins: ['gold'] });
   const over = (op) => {
     const io = memoryIo();
@@ -799,7 +795,6 @@ test('no write and no erase touches a newer build\'s record, and the bound write
   assert.equal(over((io) => commitSave(io, K1, recordOf({ wallet: 5 }), { coins: 1 })).ok, false, 'a same-id write');
   assert.equal(over((io) => takeSave(io, K1, recordOf({ id: 'BBBBBBBB' }))).ok, false, 'a binding write');
   assert.equal(over((io) => takeSave(io, K1, recordOf({ id: 'BBBBBBBB' }), { over: 'AAAAAAAA' })).ok, false, 'OVERWRITE');
-  assert.equal(over((io) => eraseSave(io, K1, 'AAAAAAAA')).ok, false, 'ERASE');
   assert.equal(over((io) => migrateSaves(io)), false, 'migration');
 });
 
@@ -854,19 +849,15 @@ test('a same-id write merges wallet, high and continues by maximum and takes sav
   const filled = putRecord(memoryIo(), 1, { id: 'CCCCCCCC' }), before = filled.m.get(K1);
   const lost = takeSave(filled, K1, recordOf({ id: 'BBBBBBBB' }));
   assert.deepEqual([lost.ok, lost.held.state, lost.held.record.id, filled.m.get(K1)], [false, 'valid', 'CCCCCCCC', before]);
-  // OVERWRITE takes the record it drew and no other, under the run's own wallet; ERASE removes the record it drew and no other.
+  // OVERWRITE takes the record it drew and no other, under the run's own wallet.
   const over = putRecord(memoryIo(), 1, { id: 'CCCCCCCC', wallet: 143 });
   assert.equal(takeSave(over, K1, recordOf({ id: 'BBBBBBBB', wallet: 1 }), { over: 'CCCCCCCC' }).ok, true);
   assert.deepEqual([heldAt(over).record.id, heldAt(over).record.wallet], ['BBBBBBBB', 1], 'never the overwritten save\'s 143');
   assert.equal(takeSave(filled, K1, recordOf({ id: 'BBBBBBBB' }), { over: 'DDDDDDDD' }).ok, false);
   assert.equal(filled.m.get(K1), before);
-  assert.equal(eraseSave(filled, K1, 'DDDDDDDD').ok, false);
-  assert.equal(filled.m.get(K1), before);
-  assert.equal(eraseSave(filled, K1, 'CCCCCCCC').ok, true);
-  assert.equal(filled.load(K1), null);
 });
 
-test('migration moves the old slot or the legacy keys to slot 1 once per device, the marker after the write', () => {
+test('M23 migration moves the old slot or the legacy keys to slot 1 once per device, the marker after the write', () => {
   const twenty = Array.from({ length: 20 }, (_, i) => `0,${-1 - i}`);
   // An old slot of 20 solved tombs and a record of 50: net 20 and high 50, and the old slot stays as stored.
   const io = memoryIo();
@@ -877,7 +868,7 @@ test('migration moves the old slot or the legacy keys to slot 1 once per device,
   assert.equal(io.load(MIGRATED_KEY), '1');
   assert.equal(io.m.get(OLD_SLOT_KEY), old, 'the old slot is never written or removed');
   assert.deepEqual([heldAt(io, 2).state, heldAt(io, 3).state], ['absent', 'absent']);
-  // Once migrated, erasing every slot never brings the old save back.
+  // Once migrated, emptying every slot never brings the old save back.
   io.m.delete(K1);
   assert.equal(migrateSaves(io), false);
   assert.deepEqual([io.load(K1), io.m.size], [null, 2]);
@@ -917,4 +908,78 @@ test('migration moves the old slot or the legacy keys to slot 1 once per device,
   placed.m.set(OLD_SLOT_KEY, old);
   assert.equal(migrateSaves(placed), false);
   assert.deepEqual([placed.load(K1), placed.load(MIGRATED_KEY)], [null, null]);
+});
+
+// `played` (design §2, R9): a known field, optional, a safe integer when present.
+const T0 = Date.UTC(2026, 9, 25, 12);
+
+test('M24 a record of revision 1\'s beta, with no played, parses valid and its row shows no time', () => {
+  const text = serializeSave(recordOf());
+  assert.ok(!('played' in JSON.parse(text)), 'the write leaves played out');
+  const held = parseSave(text);
+  assert.equal(held.state, 'valid');
+  assert.deepEqual(held.record, recordOf());
+  assert.equal(playedLabel(held.record.played, T0), '');
+});
+
+test('played round-trips as a known field after recent, and damages a record unless a safe integer', () => {
+  const text = serializeSave(recordOf({ played: T0 }));
+  assert.deepEqual(Object.keys(JSON.parse(text)), ['v', 'id', 'save', 'level', 'start', 'net', 'high', 'wallet', 'continues', 'recent', 'played']);
+  assert.deepEqual(parseSave(text), { state: 'valid', record: recordOf({ played: T0 }), extra: {} });
+  for (const ok of [0, -5, Number.MAX_SAFE_INTEGER]) assert.equal(parseSave(serializeSave(recordOf({ played: ok }))).record.played, ok);
+  for (const bad of [1.5, '3', null, true, [1], Number.MAX_SAFE_INTEGER + 2]) {
+    assert.equal(parseSave(JSON.stringify({ ...JSON.parse(serializeSave(recordOf())), played: bad })).state, 'damaged', JSON.stringify(bad));
+  }
+});
+
+test('every write stores the writer\'s played: a same-id merge takes it, a take stores it, and migration writes none', () => {
+  const io = putRecord(memoryIo(), 1, { played: T0 });
+  commitSave(io, K1, recordOf({ played: T0 - 5000 }));
+  assert.equal(heldAt(io).record.played, T0 - 5000, 'the writer\'s, even an older one');
+  commitSave(io, K1, recordOf({ played: T0 + 7 }));
+  assert.equal(heldAt(io).record.played, T0 + 7);
+  const free = memoryIo();
+  takeSave(free, K1, recordOf({ id: 'BBBBBBBB', played: T0 }));
+  assert.equal(heldAt(free).record.played, T0);
+  takeSave(free, K1, recordOf({ id: 'CCCCCCCC', played: T0 + 1 }), { over: 'BBBBBBBB' });
+  assert.equal(heldAt(free).record.played, T0 + 1);
+  const old = memoryIo();
+  old.m.set(OLD_SLOT_KEY, JSON.stringify(olderSlot({ id: 'QQQQQQQQ' })));
+  assert.equal(migrateSaves(old), true);
+  assert.ok(!('played' in JSON.parse(old.m.get(K1))), 'migration writes no played');
+});
+
+test('the time since played reads in whole units rounded down, at every boundary', () => {
+  const s = 1000, m = 60 * s, h = 60 * m, d = 24 * h;
+  const cases = [
+    [0, 'JUST NOW'], [59 * s + 999, 'JUST NOW'], [-1, 'JUST NOW'], [-100 * d, 'JUST NOW'],
+    [m, '1 MIN AGO'], [2 * m - 1, '1 MIN AGO'], [59 * m + 59 * s, '59 MIN AGO'],
+    [h, '1 HR AGO'], [2 * h - 1, '1 HR AGO'], [23 * h + 59 * m, '23 HR AGO'],
+    [d, '1 DAY AGO'], [2 * d - 1, '1 DAY AGO'], [2 * d, '2 DAYS AGO'], [100 * d - 1, '99 DAYS AGO'],
+    [100 * d, 'LONG AGO'], [10000 * d, 'LONG AGO'],
+  ];
+  for (const [ago, label] of cases) assert.equal(playedLabel(T0 - ago, T0), label, `${ago} ms ago`);
+  assert.equal(playedLabel(undefined, T0), '', 'no played, no time');
+});
+
+test('the played order ranks a record without played oldest, ties going to the lower slot', () => {
+  const at = (...played) => played.map((t) => (t === null ? parseSave(null) : t === 'n'
+    ? parseSave(JSON.stringify({ v: 2 })) : parseSave(serializeSave(recordOf(t === undefined ? {} : { played: t })))));
+  assert.equal(playedSlot(at(T0, T0 + 1, T0 - 1), true), 2);
+  assert.equal(playedSlot(at(T0, T0 + 1, T0 - 1), false), 3);
+  assert.equal(playedSlot(at(undefined, T0, undefined), true), 2);
+  assert.equal(playedSlot(at(T0, undefined, T0 + 5), false), 2, 'no played ranks oldest');
+  assert.equal(playedSlot(at(undefined, undefined, undefined), true), 1, 'a tie goes to the lower slot');
+  assert.equal(playedSlot(at(undefined, undefined, undefined), false), 1);
+  assert.equal(playedSlot(at(T0, T0, T0), true), 1);
+  assert.equal(playedSlot(at(null, 'n', T0), true), 3, 'EMPTY and NEWER rows rank nowhere');
+  assert.equal(playedSlot(at(null, 'n', null), false), null);
+});
+
+test('a take whose store does not land takes nothing', () => {
+  const io = memoryIo();
+  io.store = () => false;
+  const out = takeSave(io, K1, recordOf({ id: 'BBBBBBBB', wallet: 3 }), { coins: 1 });
+  assert.equal(out.ok, false);
+  assert.equal(io.load(K1), null);
 });
