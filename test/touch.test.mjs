@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   layout, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, softKeys, screenId, keyRects, MARGIN, PANEL_X, textWidth,
-  FIRE_FRAC, FIRE_MIN, padSide, titleFeet, createQuickTaps,
+  FIRE_FRAC, FIRE_MIN, padSide, titleFeet, createQuickTaps, createSettle,
 } from '../src/game/touch.mjs';
 import { createFrame, placeFrame, deviceSpan } from '../src/game/camera.mjs';
 import { build } from '../tools/build.mjs';
@@ -787,6 +787,29 @@ test('an id that started quick and never ended lifts as a plain tap once it star
   assert.equal(q.lift(1, 3300), true);
 });
 
+test('a press beginning within 350 ms of the soft keys\' screen change drops, and one at 350 ms acts', () => {
+  const s = createSettle();
+  s.screen('title', 1000);
+  assert.equal(s.drops(1000), false, 'the first screen seen opens no window');
+  s.screen('confirm', 2000);
+  assert.equal(s.drops(2000), true, 'a press at the change drops');
+  assert.equal(s.drops(2349), true, 'a press 349 ms after the change drops');
+  assert.equal(s.drops(2350), false, 'a press 350 ms after the change acts');
+  assert.equal(s.drops(1999), false, 'a press that began before the change acts');
+});
+
+test('a change within one screen opens no window, and a change of screen opens a new one', () => {
+  const s = createSettle();
+  s.screen('title', 0);
+  s.screen('confirm', 1000);
+  s.screen('confirm', 1200);
+  assert.equal(s.since, 1000, 'the same screen seen again keeps the window it opened');
+  assert.equal(s.drops(1350), false, 'the window runs from the change, not the last sight');
+  s.screen('pick', 5000);
+  assert.equal(s.drops(5100), true);
+  assert.equal(s.drops(5350), false);
+});
+
 test('the title explorer keeps its spot in band and keyboard modes', () => {
   assert.deepEqual(titleFeet(layout(PORTRAIT)), [42, 108]);
   assert.deepEqual(titleFeet(layout({ w: 1280, h: 720, dpr: 2, touch: false })), [42, 108]);
@@ -796,8 +819,8 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 // The self-test's touch leg runs in Chrome. Set CHROME to its binary to run
 // it here, and again with the touch layer removed, a control mis-keyed, the
 // zoom guard dropped and each difficulty, pause-key, coin, recent-tomb, save,
-// count, continue-count, migration, splash, oil, pad-side, fire and gamepad
-// rule broken, and each cell of the save matrix (design §6) broken in turn.
+// count, continue-count, migration, splash, oil, pad-side, fire, gamepad,
+// settle-window and play-note rule broken, and each cell of the save matrix (design §6) broken in turn.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -890,6 +913,9 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["damaged: 'DAMAGED'", "damaged: 'EMPTY'", /^fail: touch a slot holding an unparseable string reads DAMAGED, never EMPTY/],
       ['  if (Number.isInteger(o.v) && o.v > SAVE_V) return NEWER;\n', '', /^fail: touch a slot holding a v 2 record reads NEWER/],
       ['take(g, c.n, pointOf(g, g.saveIn.at), { over: c.held.record.id })', 'take(g, c.n, pointOf(g, g.saveIn.at), { over: heldSave(c.n).record.id })', /^fail: touch OVERWRITE redraws at Y with the stored record and writes nothing/],
+      // The soft keys' settle window: none at all, and one that restarts on every placement.
+      ['at - since >= 0 && at - since < DOUBLE_TAP_MS', 'at - since >= 0 && at - since < 0', /^fail: touch settle a second press inside the window leaves OVERWRITE SLOT 2\? open/],
+      ['if (current !== null && sid !== current) since = at;', 'if (current !== null) since = at;', /^fail: touch settle two quick SOUND taps on one screen toggle twice/],
       // The save matrix, design §6: each cell broken in turn. A row whose cell shares its code with an earlier
       // column's cell is conditioned on its own column's state, U all three slots full or N none writable.
       // M1, BEGIN.

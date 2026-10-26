@@ -19,7 +19,7 @@ import {
   playedLabel, playedSlot,
 } from './wallet.mjs';
 import { createGamepad } from './gamepad.mjs';
-import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth } from './touch.mjs';
+import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth, DOUBLE_TAP_MS } from './touch.mjs';
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { createGuard, errorLine } from './loop.mjs';
@@ -2693,11 +2693,119 @@ function m27cLeg(g, { need, fake }) {
   g.jump = false;
 }
 
+/**
+ * The soft keys' settle window. A screen change puts another key where the
+ * tapped one stood; a press that begins within DOUBLE_TAP_MS of the change
+ * does nothing, and one at DOUBLE_TAP_MS acts. Presses are dispatched with
+ * chosen `timeStamp`s, so the leg waits for nothing.
+ */
+function settleLeg(g, { need }) {
+  const rect = (sid, id) => touch.soft(sid, id).getBoundingClientRect();
+  // A press that begins `after` ms after the soft keys' screen changed, lifts and clicks as a browser does.
+  const pressAt = (sid, id, after) => {
+    const el = touch.soft(sid, id), r = el.getBoundingClientRect();
+    need(r.width > 0 && r.height > 0, `settle ${sid}/${id} is shown`);
+    for (const type of ['pointerdown', 'pointerup']) {
+      const ev = new PointerEvent(type, { pointerId: 9, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'timeStamp', { value: touch.settledSince + after });
+      el.dispatchEvent(ev);
+    }
+    el.click();
+  };
+  const over = (was, sid, id, what) => {
+    const a = was, b = rect(sid, id);
+    need(Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top), `settle ${what}`);
+  };
+  const inside = DOUBLE_TAP_MS - 1, outside = DOUBLE_TAP_MS;
+
+  // The pick over three full slots: SLOT 2 asks OVERWRITE SLOT 2?, whose YES stands where SLOT 2 stood.
+  fresh(g, 'vvv');
+  const full = savesText();
+  keyTo(g, 'Enter', 'Enter');
+  draw(g, 0);
+  need(g.screen === 'pick', 'settle BEGIN over three full slots opens the pick');
+  const slot2 = rect('pick', 's2');
+  pressAt('pick', 's2', outside);
+  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 2, 'settle a press at DOUBLE_TAP_MS acts: SLOT 2 asks OVERWRITE SLOT 2?');
+  over(slot2, 'confirm', 'yes', 'YES of OVERWRITE SLOT 2? stands over where SLOT 2 stood');
+  pressAt('confirm', 'yes', inside);
+  need(g.screen === 'pick' && g.confirm !== null && g.mark === null && savesText() === full,
+    'settle a second press inside the window leaves OVERWRITE SLOT 2? open and marks no slot');
+  pressAt('confirm', 'yes', outside);
+  need(g.screen === 'play' && g.mark !== null && g.mark.n === 2, 'settle a press on YES after the window marks slot 2');
+
+  // LOAD over an open unsaved run: SLOT 2 asks LEAVE UNSAVED RUN?, whose YES overlaps SLOT 2.
+  fresh(g, 'vvv', { 2: { save: startSerial() } });
+  const run = openUnsaved(g);
+  keyTo(g, 'KeyT', 't');
+  draw(g, 0);
+  need(g.screen === 'load', 'settle T opens LOAD');
+  const loadSlot2 = rect('load', 's2');
+  pressAt('load', 's2', outside);
+  need(g.confirm !== null && g.confirm.kind === 'leave', 'settle a press at DOUBLE_TAP_MS acts: SLOT 2 asks LEAVE UNSAVED RUN?');
+  over(loadSlot2, 'confirm', 'yes', 'YES of LEAVE UNSAVED RUN? overlaps where SLOT 2 stood');
+  pressAt('confirm', 'yes', inside);
+  need(g.screen === 'load' && g.confirm !== null && g.open !== null && g.open.sim === run,
+    'settle a second press inside the window leaves LEAVE UNSAVED RUN? open and the run open');
+  pressAt('confirm', 'yes', outside);
+  need(g.screen === 'play' && g.open === null && g.slot === 2, 'settle a press on YES after the window loads slot 2');
+
+  // SAVE IN? over three full slots: a used row asks OVERWRITE SLOT 2?, whose YES stands where it stood.
+  fresh(g, 'vvv');
+  keyTo(g, 'Enter', 'Enter');
+  keyTo(g, 'Digit2', '2');
+  keyTo(g, 'KeyY', 'y');
+  keyTo(g, 'KeyP', 'p');
+  keyTo(g, 'Enter', 'Enter');
+  draw(g, 0);
+  need(g.screen === 'savein' && g.saveIn.order === '123', 'settle SAVE IN? lists the three used rows');
+  const saved = savesText();
+  const row2 = rect('savein', 's2');
+  pressAt('savein', 's2', outside);
+  need(g.confirm !== null && g.confirm.kind === 'overwrite' && g.confirm.n === 2, 'settle a press at DOUBLE_TAP_MS acts: SLOT 2 asks OVERWRITE SLOT 2? on SAVE IN?');
+  over(row2, 'confirm', 'yes', 'YES of SAVE IN?\'s OVERWRITE SLOT 2? stands over where SLOT 2 stood');
+  pressAt('confirm', 'yes', inside);
+  need(g.screen === 'savein' && g.confirm !== null && g.saveId === null && savesText() === saved,
+    'settle a second press inside the window leaves SAVE IN?\'s OVERWRITE SLOT 2? open and writes nothing');
+  pressAt('confirm', 'yes', outside);
+  need(g.screen === 'pause' && g.slot === 2 && g.saveId !== null, 'settle a press on YES after the window overwrites slot 2');
+
+  // A change within one screen opens no window: two quick SOUND taps toggle twice. The clock
+  // runs ahead of the title's change, so the first tap falls outside its window.
+  openTitle(g);
+  const realNow = performance.now.bind(performance), was = g.audio.muted;
+  performance.now = () => realNow() + 4 * DOUBLE_TAP_MS;
+  try {
+    const sound = touch.soft('title', 'sound');
+    const tapAt = (at) => {
+      for (const type of ['pointerdown', 'pointerup']) {
+        const ev = new PointerEvent(type, { pointerId: 9, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'timeStamp', { value: at });
+        sound.dispatchEvent(ev);
+      }
+      sound.click();
+    };
+    const first = performance.now();
+    tapAt(first);
+    need(g.audio.muted !== was, 'settle a press outside the window toggles SOUND');
+    tapAt(first + 50);
+    need(g.audio.muted === was, 'settle two quick SOUND taps on one screen toggle twice');
+  } finally {
+    delete performance.now;
+  }
+  // A click with no pointerdown before it acts at once on a screen just changed.
+  keyTo(g, 'KeyT', 't');
+  draw(g, 0);
+  touch.soft('load', 'back').click();
+  need(g.screen === 'title', 'settle a click with no press before it acts inside the window');
+}
+
 // The touch leg's legs in order: the revision 1 legs, then the matrix's.
 const LEGS = [
   difficultyLeg, coinLeg, twoGamesLeg, splashLeg, resumeLeg, continueLeg, legacyLeg, oilLeg, gamepadLeg,
   m8Leg, m19Leg, m11Leg, m1Leg, m2Leg, m10Leg, m6Leg, m7Leg, m22Leg, m21Leg, m3Leg, m5Leg, m4Leg, m9Leg,
   m12Leg, m13Leg, m14Leg, m15Leg, m16Leg, m17Leg, m18Leg, m20Leg, m24Leg, m26Leg, m27kLeg, m27tLeg, m27cLeg,
+  settleLeg,
 ];
 
 const DIRS = {

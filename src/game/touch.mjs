@@ -19,7 +19,7 @@ const MIN_GAP = 6;
 const KEY_H = 44;
 const KEY_MIN_W = 44;
 const PAUSE_W = 96;
-const DOUBLE_TAP_MS = 350;
+export const DOUBLE_TAP_MS = 350;
 // The pad and the fire button draw translucent over the view in overlay mode.
 const OVERLAY_ALPHA = 0.6;
 
@@ -473,6 +473,29 @@ export function createQuickTaps() {
 }
 
 /**
+ * The settle window of the soft keys. Keys stand by list position, so after a
+ * screen change another key may stand where the tapped one did, and the quick
+ * second tap of a double tap would answer the screen it opened. A press that
+ * begins within DOUBLE_TAP_MS of the soft keys' screen changing drops. The
+ * first screen seen starts no window; neither does a change within one screen.
+ * Times are `timeStamp` ms.
+ */
+export function createSettle() {
+  let current = null, since = -Infinity;
+  return {
+    /** Records that screen `sid` shows at `at`; a different screen from the last starts the window. */
+    screen(sid, at) {
+      if (current !== null && sid !== current) since = at;
+      current = sid;
+    },
+    /** True when a press beginning at `at` falls in the window. */
+    drops(at) { return at - since >= 0 && at - since < DOUBLE_TAP_MS; },
+    /** When the window opened; -Infinity before any screen change. */
+    get since() { return since; },
+  };
+}
+
+/**
  * Safari ignores user-scalable=no and zooms on a tap that starts within
  * DOUBLE_TAP_MS of the last lift. Cancelling that tap's touchend stops the
  * zoom and drops its click, so a soft key it starts and lifts on clicks
@@ -518,7 +541,8 @@ export function createTouch({ state, onMode }) {
   // Pointers holding the fire button. They never enter the pad's bookkeeping.
   const fireHeld = new Set();
   const buttons = new Map();
-  let on = touchAtBoot({
+  const settle = createSettle();
+  let on =touchAtBoot({
     maxTouchPoints: navigator.maxTouchPoints,
     coarse: Boolean(globalThis.matchMedia && matchMedia('(any-pointer: coarse)').matches),
     hash: location.hash,
@@ -554,10 +578,21 @@ export function createTouch({ state, onMode }) {
       el.tabIndex = -1;
       const cv = document.createElement('canvas');
       el.append(cv);
-      el.addEventListener('pointerdown', (e) => { e.preventDefault(); el.classList.add('down'); });
+      // A press is judged where it begins, so a long hold that lifts still drops. A click with no
+      // pointerdown before it (keyboard activation, a script) is not a press and acts.
+      let dropped = false;
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        dropped = settle.drops(e.timeStamp);
+        if (!dropped) el.classList.add('down');
+      });
       for (const t of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(t, () => el.classList.remove('down'));
+      el.addEventListener('pointercancel', () => { dropped = false; });
       el.addEventListener('click', () => {
         el.blur();
+        const drop = dropped;
+        dropped = false;
+        if (drop) return;
         if (k.act === 'type') typeCode(); else tap(k.code, k.key);
       });
       root.append(el);
@@ -663,6 +698,7 @@ export function createTouch({ state, onMode }) {
     const st = state();
     const sid = screenId(st);
     const shown = softKeys(st);
+    settle.screen(sid, performance.now());
     root.style.display = on ? 'block' : 'none';
     root.style.setProperty('--bg', rgba(PLATE, lay.mode === 'overlay' ? 0.72 : 1));
     root.style.setProperty('--bg-down', rgba(LIT, 1));
@@ -730,6 +766,8 @@ export function createTouch({ state, onMode }) {
       return lay;
     },
     refresh,
+    /** When the soft keys' screen last changed, in `timeStamp` ms; -Infinity before a change. */
+    get settledSince() { return settle.since; },
     /** The layout in force; null before the first `relayout`. */
     get lay() { return lay; },
     padEl,
