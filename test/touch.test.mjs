@@ -916,6 +916,9 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       // The soft keys' settle window: none at all, and one that restarts on every placement.
       ['at - since >= 0 && at - since < DOUBLE_TAP_MS', 'at - since >= 0 && at - since < 0', /^fail: touch settle a second press inside the window leaves OVERWRITE SLOT 2\? open/],
       ['if (current !== null && sid !== current) since = at;', 'if (current !== null) since = at;', /^fail: touch settle two quick SOUND taps on one screen toggle twice/],
+      // The play note outlasts Continue: the end screen's start must not clear it.
+      ['  g.pick = null;\n  play(g);\n}', '  g.pick = null;\n  g.noteTicks = 0;\n  play(g);\n}', /^fail: touch M16U CONTINUE keeps the note, which draws in play/],
+      ['  g.noteTicks = 0;\n  beginSaved(', '  beginSaved(', /^fail: touch M16U a load starts with no note/],
       // The save matrix, design §6: each cell broken in turn. A row whose cell shares its code with an earlier
       // column's cell is conditioned on its own column's state, U all three slots full or N none writable.
       // M1, BEGIN.

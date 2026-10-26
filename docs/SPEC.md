@@ -1143,8 +1143,9 @@ unsaved notes `NOT SAVED: PAUSE TO SAVE`. The note stands centred under the
 HUD's top line at y 14, clear of the torch bar, `EMBER` and the wallet and
 far above the explorer, whom the camera keeps near the view's middle. It lasts
 120 ticks of play, two seconds: pause, the splash and every other screen hold
-it, and it draws on the play screen alone. A new note replaces the old, and a
-run starts with none. With no slot writable, no note shows.
+it, and it draws on the play screen alone. A new note replaces the old. A new
+run and a load start with none, and the end screen's Continue keeps the run's.
+With no slot writable, no note shows.
 
 **SAVE IN?** A panel over the paused run, x 62 to 258, reads `SAVE IN?` and
 lists the slot rows a run may write, `EMPTY` and `DAMAGED` first, then the used

@@ -2303,6 +2303,29 @@ function m16Leg(g, { need, click, press }) {
   keyTo(g, 'Enter', 'Enter');
   need(g.screen === 'play' && g.slot === 1 && g.saveId === slotId(1) && g.sim.continues === 1 && saveNow(1).continues === 1,
     'M16U a death and CONTINUE over three full slots keep slot 1 and count one continue');
+  // A death write that notes NOT SAVED: PAUSE TO SAVE: another game overwrote the bound run's slot, so
+  // the write finds all three full. CONTINUE goes on with the same run and its note.
+  fresh(g, 'vvv');
+  loadSlot(g, 1);
+  putSave(1, { id: 'DDDDDDDD' });
+  die(g);
+  need(g.screen === 'over' && g.saveId === null && g.noteText === NOT_SAVED && g.noteTicks === NOTE_TICKS,
+    'M16U a death after another game overwrote the slot notes NOT SAVED: PAUSE TO SAVE');
+  keyTo(g, 'Enter', 'Enter');
+  draw(g, 0);
+  need(g.screen === 'play' && g.saveId === null && g.noteText === NOT_SAVED && g.noteTicks === NOTE_TICKS && noteDrawn(),
+    'M16U CONTINUE keeps the note, which draws in play');
+  stand(g, NOTE_TICKS - 1);
+  draw(g, 0);
+  need(g.noteTicks === 1 && noteDrawn(), 'M16U the kept note draws for its remaining ticks');
+  stand(g, 1);
+  draw(g, 0);
+  need(g.noteTicks === 0 && !noteDrawn(), 'M16U the kept note ends at its 120th tick');
+  // A load starts with no note, as a new run does.
+  fresh(g, 'vvv');
+  setNote(g, NOT_SAVED, 'o');
+  loadSlot(g, 1);
+  need(g.screen === 'play' && g.noteTicks === 0, 'M16U a load starts with no note');
   // M16N: three NEWER slots.
   fresh(g, 'nnn');
   const kept = savesText();
@@ -2970,10 +2993,11 @@ function play(g) {
 
 /**
  * Starts a run at save position p, or at tomb (0, 0)'s first entry when p is
- * null, with no note. The new sim keeps the coins and jars taken in the tomb
- * it starts in and the tomb before it only when the `carry` holds them: the
- * end screen's Continue carries them and a load of a save unpacks them. Any
- * other start takes none, and every coin and jar lies back.
+ * null. The new sim keeps the coins and jars taken in the tomb it starts in
+ * and the tomb before it only when the `carry` holds them: the end screen's
+ * Continue carries them and a load of a save unpacks them. Any other start
+ * takes none, and every coin and jar lies back. The play note stands as it
+ * is, so Continue keeps the run's.
  */
 function begin(g, p = null, carry = null) {
   let start = g.world.startPoint();
@@ -2987,7 +3011,6 @@ function begin(g, p = null, carry = null) {
   g.confirm = null;
   g.saveIn = null;
   g.pick = null;
-  g.noteTicks = 0;
   play(g);
 }
 
@@ -3022,10 +3045,11 @@ function beginNew(g) {
   beginRules(g, { code: g.code, p: null });
 }
 
-/** Starts a new run of `start` with a clean economy and `claim`, its mark or the armed rule, closing any open run. */
+/** Starts a new run of `start` with a clean economy, no note and `claim`, its mark or the armed rule, closing any open run. */
 function startRun(g, start, claim) {
   cleanState(g);
   Object.assign(g, claim);
+  g.noteTicks = 0;
   if (start.code !== g.code) useCode(g, start.code);
   begin(g, start.p);
 }
@@ -3035,7 +3059,7 @@ function startRun(g, start, claim) {
  * board, at the record's difficulty, with its start tomb, net, high, wallet,
  * continue count and recent takes, closing any open run. The run is bound to
  * slot n under the record's id, and writes nothing until its next save point.
- * The setting follows.
+ * The setting follows, and the run starts with no note.
  */
 function restore(g, n, rec) {
   const at = decodeSave(rec.save);
@@ -3043,6 +3067,7 @@ function restore(g, n, rec) {
   if (at.code !== g.code || g.world.difficulty !== rec.level) useCode(g, at.code);
   Object.assign(g, { slot: n, saveId: rec.id, point: { save: rec.save, net: rec.net, start: rec.start }, wallet: rec.wallet, mark: null, armed: false });
   const [u, v] = rec.start.split(',').map(Number);
+  g.noteTicks = 0;
   beginSaved(g, at.p, { entry: { p: at.p, net: rec.net }, high: rec.high, start: { u, v }, continues: rec.continues, ...unpackRecent(g.world, rec.recent) });
 }
 
