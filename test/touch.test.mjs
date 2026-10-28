@@ -1003,7 +1003,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['  g.sim.high = out.record.high;\n', '', /^fail: touch M18F game B's next write adopts the high game A raised/],
       ['  g.sim.high = out.record.high;\n', '  if (freeSlot() !== undefined) g.sim.high = out.record.high;\n', /^fail: touch M18U/],
       // M19, two games BEGIN at once over one free slot: the other game takes the winner's slot.
-      ["  const n = freeSlot();\n  if (n === undefined) {\n    g.armed = false;\n    setNote(g, NOT_SAVED, 'o');\n    return payInMemory(g, coins, was);\n  }\n  const out = take(g, n, point, { coins, was });\n", '  const n = freeSlot() || 1;\n  const out = take(g, n, point, { coins, was, over: isFree(heldSave(n)) ? null : heldSave(n).record.id });\n', /^fail: touch M19F the first write takes the free slot/],
+      ["  const n = freeSlot();\n  if (n === undefined) {\n    g.armed = false;\n    setNote(g, NOT_SAVED, 'o');\n    return payInMemory(g, coins, was);\n  }\n  return takeAndNote(g, n, point, { coins, was });\n", '  const n = freeSlot() || 1;\n  return takeAndNote(g, n, point, { coins, was, over: isFree(heldSave(n)) ? null : heldSave(n).record.id });\n', /^fail: touch M19F the first write takes the free slot/],
       // M20, M21, M22, M24, M26 and M27.
       ['  if (at.code !== g.code || g.world.difficulty !== rec.level) useCode(g, at.code);\n', '  if (at.code !== g.code || (g.open === null && g.world.difficulty !== rec.level)) useCode(g, at.code);\n', /^fail: touch M20 a load over an open run at another level/],
       ['    const n = SAVE_SLOTS.find((k) => {\n', '    const n = [...SAVE_SLOTS].reverse().find((k) => {\n', /^fail: touch M21/],
@@ -1017,7 +1017,9 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['    g.pausedAt = null;\n    writeAt(g, g.sim.here);', '    g.pausedAt = null;\n    writeAt(g, { p: g.sim.here.p, net: g.sim.entry.net });', /^fail: touch M26 bound loop 1: TOMB n, the high and the wallet hold at H/],
       ['openSaveIn(g, g.sim.here);', 'openSaveIn(g, { p: g.sim.here.p, net: g.sim.entry.net });', /^fail: touch M26 unbound loop 1: TOMB n, the high and the wallet hold at H/],
       ["  else if (e.key === 'Backspace') g.typing = g.typing.slice(0, -1);", "  else if (e.key === 'Backspace') { if (!e.repeat) g.typing = g.typing.slice(0, -1); }", /^fail: touch M27K a repeated Backspace deletes once per keydown/],
-      ['g.row = Math.max(0, Math.min(TYPE_ROW, g.row + ', 'g.row = Math.max(0, Math.min(TYPE_ROW - 1, g.row + ', /^fail: touch M27K LOAD's cursor visits every row/],
+      ['si.cursor = stepCursor(si.cursor, dir, si.rows.length - 1);', 'si.cursor = stepCursor(si.cursor, dir, si.rows.length);', /^fail: touch M27K SAVE IN\?'s cursor visits every row/],
+      ['  return takeAndNote(g, n, point, { ...pay, over: id });\n}', '  return take(g, n, point, { ...pay, over: id });\n}', /^fail: touch M1U the first coin overwrites slot 2 alone and notes it/],
+      ['g.row = stepCursor(g.row, dir, TYPE_ROW);', 'g.row = stepCursor(g.row, dir, TYPE_ROW - 1);', /^fail: touch M27K LOAD's cursor visits every row/],
       ["    { id: 'begin', label: 'BEGIN', ...K('Space', ' ') },", "    { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },", /^fail: touch M27T the BEGIN key begins with the cursor on LOAD/],
       ["(fromPad && e.code === 'KeyQ') || ", '', /^fail: touch M27C Select closes code entry holding a code/],
       ["  if (fromPad && e.code === 'KeyP') return;\n", '', /^fail: touch M27C Start and A type nothing in code entry/],

@@ -195,6 +195,17 @@ function take(g, n, point, { coins = 0, was = tombCount(g.sim), over = null } = 
 }
 
 /**
+ * A take of slot n that notes SAVED IN SLOT n when its store lands, and pays
+ * in memory when it does not. Returns the pay.
+ */
+function takeAndNote(g, n, point, { coins, was, over = null }) {
+  const out = take(g, n, point, { coins, was, over });
+  if (!out.ok) return payInMemory(g, coins, was);
+  setNote(g, `SAVED IN SLOT ${n}`, 'm');
+  return out;
+}
+
+/**
  * The free-slot rule at `point`: re-reads the slots and takes the lowest free
  * one, noting SAVED IN SLOT n. With all three full the run plays on unsaved,
  * noting NOT SAVED: PAUSE TO SAVE, and writes nothing more by itself. With no
@@ -209,10 +220,7 @@ function takeFree(g, point, { coins = 0, was = tombCount(g.sim) } = {}) {
     setNote(g, NOT_SAVED, 'o');
     return payInMemory(g, coins, was);
   }
-  const out = take(g, n, point, { coins, was });
-  if (!out.ok) return payInMemory(g, coins, was);
-  setNote(g, `SAVED IN SLOT ${n}`, 'm');
-  return out;
+  return takeAndNote(g, n, point, { coins, was });
 }
 
 /**
@@ -227,10 +235,7 @@ function markWrite(g, point, pay) {
     g.mark = null;
     return takeFree(g, point, pay);
   }
-  const out = take(g, n, point, { ...pay, over: id });
-  if (!out.ok) return payInMemory(g, pay.coins, pay.was);
-  setNote(g, `SAVED IN SLOT ${n}`, 'm');
-  return out;
+  return takeAndNote(g, n, point, { ...pay, over: id });
 }
 
 /**
@@ -1784,7 +1789,7 @@ function m1Leg(g, { need }) {
     'M1U Y marks slot 2 and writes nothing before the first coin');
   earnFake(g);
   need(g.slot === 2 && saveNow(2).id === g.saveId && g.saveId !== slotId(2) && saveNow(1).id === slotId(1) && saveNow(3).id === slotId(3)
-    && g.noteText === 'SAVED IN SLOT 2', 'M1U the first coin overwrites slot 2 alone');
+    && g.noteText === 'SAVED IN SLOT 2' && g.noteTicks === NOTE_TICKS, 'M1U the first coin overwrites slot 2 alone and notes it');
   // Y over a slot another game rewrote under another id redraws; over a slot emptied since, BEGIN's rules run again.
   fresh(g, 'vvv');
   keyTo(g, 'Enter', 'Enter');
@@ -2559,6 +2564,8 @@ function m27kLeg(g, { need, press }) {
   // The pause's SAVE IN? and its OVERWRITE SLOT n?.
   press('KeyP', 'p');
   press('Enter', 'Enter');
+  const cursors = ['ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowUp', 'ArrowUp'].map((k) => { press(k, k); return g.saveIn.cursor; });
+  need(cursors.join() === '0,1,2,2,1,0,0', 'M27K SAVE IN?\'s cursor visits every row and stops at the ends');
   press('ArrowDown', 'ArrowDown');
   press('Enter', 'Enter');
   need(g.screen === 'savein' && g.confirm !== null && g.confirm.n === 2, 'M27K Enter, Down and Enter on the unsaved pause ask OVERWRITE SLOT 2? on SAVE IN?');
@@ -3270,6 +3277,11 @@ function titleKey(g, e) {
   }
 }
 
+/** The cursor `at` stepped one row Up or Down by `dir`, 'u' or 'd', stopping at rows 0 and `last`. */
+function stepCursor(at, dir, last) {
+  return Math.max(0, Math.min(last, at + (dir === 'd' ? 1 : -1)));
+}
+
 /**
  * LOAD: Up and Down move the cursor over the three slot rows and T TYPE A
  * CODE, stopping at the ends; Enter acts on the lit row, a digit on its slot's
@@ -3280,7 +3292,7 @@ function loadKey(g, e) {
   if (g.confirm) { confirmKey(g, e); return; }
   if (g.typing !== null) { typingKey(g, e); return; }
   const dir = DIRS[e.code];
-  if (dir === 'u' || dir === 'd') g.row = Math.max(0, Math.min(TYPE_ROW, g.row + (dir === 'd' ? 1 : -1)));
+  if (dir === 'u' || dir === 'd') g.row = stepCursor(g.row, dir, TYPE_ROW);
   else if (e.repeat) return;
   else if (e.key === 'Enter') { if (g.row === TYPE_ROW) { g.typing = ''; g.note = ''; } else loadRow(g, g.row + 1); }
   else if (SLOT_DIGITS[e.code]) loadRow(g, SLOT_DIGITS[e.code]);
@@ -3296,7 +3308,7 @@ function loadKey(g, e) {
 function pickKey(g, e) {
   if (g.confirm) { confirmKey(g, e); return; }
   const dir = DIRS[e.code];
-  if (dir === 'u' || dir === 'd') g.row = Math.max(0, Math.min(SAVE_SLOTS.length - 1, g.row + (dir === 'd' ? 1 : -1)));
+  if (dir === 'u' || dir === 'd') g.row = stepCursor(g.row, dir, SAVE_SLOTS.length - 1);
   else if (e.repeat) return;
   else if (e.key === 'Enter') pickRow(g, g.row + 1);
   else if (SLOT_DIGITS[e.code]) pickRow(g, SLOT_DIGITS[e.code]);
@@ -3469,7 +3481,7 @@ function saveInKey(g, e) {
     return;
   }
   const dir = DIRS[e.code];
-  if (dir === 'u' || dir === 'd') si.cursor = Math.max(0, Math.min(si.rows.length - 1, si.cursor + (dir === 'd' ? 1 : -1)));
+  if (dir === 'u' || dir === 'd') si.cursor = stepCursor(si.cursor, dir, si.rows.length - 1);
   else if (e.key === 'Enter') saveRow(g, si.rows[si.cursor]);
   else if (SLOT_DIGITS[e.code]) saveRow(g, si.rows.find((r) => r.n === SLOT_DIGITS[e.code]));
   else if (e.code === 'KeyQ' || e.key === 'Escape') closeSaveIn(g);
