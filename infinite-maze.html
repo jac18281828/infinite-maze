@@ -6337,6 +6337,10 @@ function createQuickTaps() {
  * begins within DOUBLE_TAP_MS of the soft keys' screen changing drops. The
  * first screen seen starts no window; neither does a change within one screen.
  * Times are `timeStamp` ms.
+ *
+ * `drops` requires `at - since >= 0`: a press stamped before the change acts.
+ * When an engine's event clock and `performance.now()` disagree, the rule
+ * fails open and never swallows every press.
  */
 function createSettle() {
   let current = null, since = -Infinity;
@@ -6350,6 +6354,27 @@ function createSettle() {
     drops(at) { return at - since >= 0 && at - since < DOUBLE_TAP_MS; },
     /** When the window opened; -Infinity before any screen change. */
     get since() { return since; },
+  };
+}
+
+/**
+ * One soft key's press against the settle window. A press is judged where it
+ * begins, so a long hold that lifts still drops. A click with no press before
+ * it (keyboard activation, a script) is not a press and acts.
+ */
+function createSoftPress(settle) {
+  let dropped = false;
+  return {
+    /** Judges a press beginning at `at`; true when it drops. */
+    down(at) { return (dropped = settle.drops(at)); },
+    /** Clears the judgement of a cancelled press. */
+    cancel() { dropped = false; },
+    /** Ends the press at its click; true when the click is to do nothing. */
+    click() {
+      const drop = dropped;
+      dropped = false;
+      return drop;
+    },
   };
 }
 
@@ -6400,7 +6425,7 @@ function createTouch({ state, onMode }) {
   const fireHeld = new Set();
   const buttons = new Map();
   const settle = createSettle();
-  let on =touchAtBoot({
+  let on = touchAtBoot({
     maxTouchPoints: navigator.maxTouchPoints,
     coarse: Boolean(globalThis.matchMedia && matchMedia('(any-pointer: coarse)').matches),
     hash: location.hash,
@@ -6436,21 +6461,16 @@ function createTouch({ state, onMode }) {
       el.tabIndex = -1;
       const cv = document.createElement('canvas');
       el.append(cv);
-      // A press is judged where it begins, so a long hold that lifts still drops. A click with no
-      // pointerdown before it (keyboard activation, a script) is not a press and acts.
-      let dropped = false;
+      const press = createSoftPress(settle);
       el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
-        dropped = settle.drops(e.timeStamp);
-        if (!dropped) el.classList.add('down');
+        if (!press.down(e.timeStamp)) el.classList.add('down');
       });
       for (const t of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(t, () => el.classList.remove('down'));
-      el.addEventListener('pointercancel', () => { dropped = false; });
+      el.addEventListener('pointercancel', () => press.cancel());
       el.addEventListener('click', () => {
         el.blur();
-        const drop = dropped;
-        dropped = false;
-        if (drop) return;
+        if (press.click()) return;
         if (k.act === 'type') typeCode(); else tap(k.code, k.key);
       });
       root.append(el);
@@ -6633,7 +6653,7 @@ function createTouch({ state, onMode }) {
     soft: (sid, id) => buttons.get(`${sid}/${id}`).el,
   };
 }
-return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, DOUBLE_TAP_MS, layout, padSide, titleFeet, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, screenId, difficultyLabel, softKeys, textWidth, PANEL_X, keyRects, viewport, createQuickTaps, createSettle, createTouch };
+return { MARGIN, PAD_MAX, PAD_FRAC, FIRE_FRAC, FIRE_MIN, DOUBLE_TAP_MS, layout, padSide, titleFeet, nextTouchMode, touchAtBoot, padZone, createPad, SOFT, screenId, difficultyLabel, softKeys, textWidth, PANEL_X, keyRects, viewport, createQuickTaps, createSettle, createSoftPress, createTouch };
 })();
 
 // src/game/clipboard.mjs
@@ -9508,19 +9528,23 @@ function m27cLeg(g, { need, fake }) {
  */
 function settleLeg(g, { need }) {
   const rect = (sid, id) => touch.soft(sid, id).getBoundingClientRect();
-  // A press that begins `after` ms after the soft keys' screen changed, lifts and clicks as a browser does.
-  const pressAt = (sid, id, after) => {
-    const el = touch.soft(sid, id), r = el.getBoundingClientRect();
-    need(r.width > 0 && r.height > 0, `settle ${sid}/${id} is shown`);
+  // A press on `el` that begins at `at`, lifts and clicks as a browser does.
+  const press = (el, at) => {
     for (const type of ['pointerdown', 'pointerup']) {
       const ev = new PointerEvent(type, { pointerId: 9, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true });
-      Object.defineProperty(ev, 'timeStamp', { value: touch.settledSince + after });
+      Object.defineProperty(ev, 'timeStamp', { value: at });
       el.dispatchEvent(ev);
     }
     el.click();
   };
-  const over = (was, sid, id, what) => {
-    const a = was, b = rect(sid, id);
+  // The same press, `after` ms after the soft keys' screen changed.
+  const pressAt = (sid, id, after) => {
+    const el = touch.soft(sid, id), r = el.getBoundingClientRect();
+    need(r.width > 0 && r.height > 0, `settle ${sid}/${id} is shown`);
+    press(el, touch.settledSince + after);
+  };
+  const over = (a, sid, id, what) => {
+    const b = rect(sid, id);
     need(Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top), `settle ${what}`);
   };
   const inside = DOUBLE_TAP_MS - 1, outside = DOUBLE_TAP_MS;
@@ -9584,18 +9608,10 @@ function settleLeg(g, { need }) {
   performance.now = () => realNow() + 4 * DOUBLE_TAP_MS;
   try {
     const sound = touch.soft('title', 'sound');
-    const tapAt = (at) => {
-      for (const type of ['pointerdown', 'pointerup']) {
-        const ev = new PointerEvent(type, { pointerId: 9, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true });
-        Object.defineProperty(ev, 'timeStamp', { value: at });
-        sound.dispatchEvent(ev);
-      }
-      sound.click();
-    };
     const first = performance.now();
-    tapAt(first);
+    press(sound, first);
     need(g.audio.muted !== was, 'settle a press outside the window toggles SOUND');
-    tapAt(first + 50);
+    press(sound, first + 50);
     need(g.audio.muted === was, 'settle two quick SOUND taps on one screen toggle twice');
   } finally {
     delete performance.now;

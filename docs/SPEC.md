@@ -1351,11 +1351,11 @@ scrolls, zooms or selects.
   | over | CONTINUE (Enter), COPY (C), TITLE (Q) |
   | splash | CONTINUE (Enter), HOME (Q) |
 
-  A soft key's press that begins within 350 ms of the soft keys' screen
-  changing, the zoom guard's double-tap window that only a different screen
-  starts and never SOUND's label or a confirm's re-read, does nothing, so a
-  quick second tap cannot answer the screen the first opened; the pad, the fire
-  button, the keyboard and the controller are unaffected.
+  A soft-key press that begins within 350 ms of the soft keys' screen changing
+  does nothing, so a quick second tap cannot answer the screen the first
+  opened. The window is the zoom guard's; only a change of screen starts it,
+  never SOUND's label or a confirm's re-read. The pad, the fire button, the
+  keyboard and the controller are unaffected.
 
   BEGIN sends Space, which begins wherever the title's cursor stands, so on a
   device with a keyboard too it never opens LOAD. A SLOT key on a row that

@@ -2731,19 +2731,23 @@ function m27cLeg(g, { need, fake }) {
  */
 function settleLeg(g, { need }) {
   const rect = (sid, id) => touch.soft(sid, id).getBoundingClientRect();
-  // A press that begins `after` ms after the soft keys' screen changed, lifts and clicks as a browser does.
-  const pressAt = (sid, id, after) => {
-    const el = touch.soft(sid, id), r = el.getBoundingClientRect();
-    need(r.width > 0 && r.height > 0, `settle ${sid}/${id} is shown`);
+  // A press on `el` that begins at `at`, lifts and clicks as a browser does.
+  const press = (el, at) => {
     for (const type of ['pointerdown', 'pointerup']) {
       const ev = new PointerEvent(type, { pointerId: 9, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true });
-      Object.defineProperty(ev, 'timeStamp', { value: touch.settledSince + after });
+      Object.defineProperty(ev, 'timeStamp', { value: at });
       el.dispatchEvent(ev);
     }
     el.click();
   };
-  const over = (was, sid, id, what) => {
-    const a = was, b = rect(sid, id);
+  // The same press, `after` ms after the soft keys' screen changed.
+  const pressAt = (sid, id, after) => {
+    const el = touch.soft(sid, id), r = el.getBoundingClientRect();
+    need(r.width > 0 && r.height > 0, `settle ${sid}/${id} is shown`);
+    press(el, touch.settledSince + after);
+  };
+  const over = (a, sid, id, what) => {
+    const b = rect(sid, id);
     need(Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top), `settle ${what}`);
   };
   const inside = DOUBLE_TAP_MS - 1, outside = DOUBLE_TAP_MS;
@@ -2807,18 +2811,10 @@ function settleLeg(g, { need }) {
   performance.now = () => realNow() + 4 * DOUBLE_TAP_MS;
   try {
     const sound = touch.soft('title', 'sound');
-    const tapAt = (at) => {
-      for (const type of ['pointerdown', 'pointerup']) {
-        const ev = new PointerEvent(type, { pointerId: 9, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true });
-        Object.defineProperty(ev, 'timeStamp', { value: at });
-        sound.dispatchEvent(ev);
-      }
-      sound.click();
-    };
     const first = performance.now();
-    tapAt(first);
+    press(sound, first);
     need(g.audio.muted !== was, 'settle a press outside the window toggles SOUND');
-    tapAt(first + 50);
+    press(sound, first + 50);
     need(g.audio.muted === was, 'settle two quick SOUND taps on one screen toggle twice');
   } finally {
     delete performance.now;

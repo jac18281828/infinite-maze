@@ -479,6 +479,10 @@ export function createQuickTaps() {
  * begins within DOUBLE_TAP_MS of the soft keys' screen changing drops. The
  * first screen seen starts no window; neither does a change within one screen.
  * Times are `timeStamp` ms.
+ *
+ * `drops` requires `at - since >= 0`: a press stamped before the change acts.
+ * When an engine's event clock and `performance.now()` disagree, the rule
+ * fails open and never swallows every press.
  */
 export function createSettle() {
   let current = null, since = -Infinity;
@@ -492,6 +496,27 @@ export function createSettle() {
     drops(at) { return at - since >= 0 && at - since < DOUBLE_TAP_MS; },
     /** When the window opened; -Infinity before any screen change. */
     get since() { return since; },
+  };
+}
+
+/**
+ * One soft key's press against the settle window. A press is judged where it
+ * begins, so a long hold that lifts still drops. A click with no press before
+ * it (keyboard activation, a script) is not a press and acts.
+ */
+export function createSoftPress(settle) {
+  let dropped = false;
+  return {
+    /** Judges a press beginning at `at`; true when it drops. */
+    down(at) { return (dropped = settle.drops(at)); },
+    /** Clears the judgement of a cancelled press. */
+    cancel() { dropped = false; },
+    /** Ends the press at its click; true when the click is to do nothing. */
+    click() {
+      const drop = dropped;
+      dropped = false;
+      return drop;
+    },
   };
 }
 
@@ -542,7 +567,7 @@ export function createTouch({ state, onMode }) {
   const fireHeld = new Set();
   const buttons = new Map();
   const settle = createSettle();
-  let on =touchAtBoot({
+  let on = touchAtBoot({
     maxTouchPoints: navigator.maxTouchPoints,
     coarse: Boolean(globalThis.matchMedia && matchMedia('(any-pointer: coarse)').matches),
     hash: location.hash,
@@ -578,21 +603,16 @@ export function createTouch({ state, onMode }) {
       el.tabIndex = -1;
       const cv = document.createElement('canvas');
       el.append(cv);
-      // A press is judged where it begins, so a long hold that lifts still drops. A click with no
-      // pointerdown before it (keyboard activation, a script) is not a press and acts.
-      let dropped = false;
+      const press = createSoftPress(settle);
       el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
-        dropped = settle.drops(e.timeStamp);
-        if (!dropped) el.classList.add('down');
+        if (!press.down(e.timeStamp)) el.classList.add('down');
       });
       for (const t of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(t, () => el.classList.remove('down'));
-      el.addEventListener('pointercancel', () => { dropped = false; });
+      el.addEventListener('pointercancel', () => press.cancel());
       el.addEventListener('click', () => {
         el.blur();
-        const drop = dropped;
-        dropped = false;
-        if (drop) return;
+        if (press.click()) return;
         if (k.act === 'type') typeCode(); else tap(k.code, k.key);
       });
       root.append(el);
