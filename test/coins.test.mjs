@@ -910,6 +910,27 @@ test('M23 migration moves the old slot or the legacy keys to slot 1 once per dev
   assert.deepEqual([placed.load(K1), placed.load(MIGRATED_KEY)], [null, null]);
 });
 
+// A save as 4fffe2a's build stores it: its own write, captured from the page after one coin. The test
+// fails if the reader drifts from the saves players hold.
+const LIVE_OLD_SLOT = '{"id":"8RPX8C5J","save":"YTHF-G2XB:0","level":"medium","start":"0,0","solved":[],"wallet":1,"coins":[],"tombs":[],"record":0,"continues":0,"recent":[["0,0","004"]]}';
+
+test('M23 migration moves a save exactly as 4fffe2a\'s build stores it into slot 1', () => {
+  const io = memoryIo();
+  io.m.set(OLD_SLOT_KEY, LIVE_OLD_SLOT);
+  assert.equal(migrateSaves(io), true);
+  const { record } = heldAt(io);
+  assert.deepEqual(record, recordOf({
+    id: '8RPX8C5J', save: 'YTHF-G2XB:0', level: 'medium', start: '0,0', net: 0, high: 0, wallet: 1, continues: 0, recent: [['0,0', '004']],
+  }));
+  for (const dropped of ['solved', 'coins', 'tombs', 'record', 'played']) assert.ok(!(dropped in record), `${dropped} is omitted`);
+  assert.equal(io.load(MIGRATED_KEY), '1');
+  assert.equal(io.m.get(OLD_SLOT_KEY), LIVE_OLD_SLOT, 'the old slot is unchanged');
+  assert.deepEqual([heldAt(io, 2).state, heldAt(io, 3).state], ['absent', 'absent']);
+  const before = [...io.m];
+  assert.equal(migrateSaves(io), false, 'a second pass migrates nothing');
+  assert.deepEqual([...io.m], before, 'a second pass writes nothing');
+});
+
 // `played` (design §2, R9): a known field, optional, a safe integer when present.
 const T0 = Date.UTC(2026, 9, 25, 12);
 
