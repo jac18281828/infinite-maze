@@ -820,7 +820,7 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 // it here, and again with the touch layer removed, a control mis-keyed, the
 // zoom guard dropped and each difficulty, pause-key, coin, recent-tomb, save,
 // count, continue-count, migration, splash, oil, pad-side, fire, gamepad,
-// settle-window, play-note and between-ticks rule broken, and each cell of the save matrix (design §6) broken in turn.
+// settle-window, play-note, between-ticks and frame-meter rule broken, and each cell of the save matrix (design §6) broken in turn.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -837,7 +837,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, recent-tomb, save, count, continue-count, migration, splash, oil, pad-side, fire, gamepad, save-matrix or between-ticks rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, recent-tomb, save, count, continue-count, migration, splash, oil, pad-side, fire, gamepad, save-matrix, between-ticks or frame-meter rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, (t) => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -1028,6 +1028,14 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['  p.x = g.cam.x; p.y = g.cam.y; p.fx = feetX(s); p.fy = feetY(s); p.visit = g.visit;\n', '', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
       ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, g.cam, t, d.fx, d.fy);', /^fail: touch between a frame halfway between ticks draws the camera halfway/],
       ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, d, t);', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
+      // The frame meter: F, its guards, the counter's window, the view and the hidden rule.
+      ['if (!e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) meter.toggle();', 'if (false) meter.toggle();', /^fail: touch meter F shows and hides the meter on title/],
+      ['if (!e.repeat && !e.ctrlKey', 'if (!e.ctrlKey', /^fail: touch meter an auto-repeated F, Ctrl-F, Cmd-F and Alt-F leave the meter off/],
+      ["if (e.code === 'KeyF' && g.typing === null) {", "if (e.code === 'KeyF') {", /^fail: touch meter in code entry F types F/],
+      ['const WINDOW_MS = 1000;', 'const WINDOW_MS = 500;', /^fail: touch meter the bundled counter reads 120 FPS within 1 at 120 Hz, one update a second/],
+      ['      if (now - since < WINDOW_MS) return;\n', '', /^fail: touch meter the bundled counter reads 120 FPS within 1 at 120 Hz, one update a second/],
+      ['  if (guard.shown()) paintError(g);\n  present(g.renderer);', "  if (guard.shown()) paintError(g);\n  if (meter.on) g.renderer.text(meter.text, VIEW_W - 4, 4, 'm', { align: 'right' });\n  present(g.renderer);", /^fail: touch meter a frame drawn with the meter on equals the frame drawn with it off/],
+      ['#fps[hidden] { display: none; }', '', /^fail: touch meter F shows and hides the meter on title/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);
@@ -1047,3 +1055,33 @@ test('the self-test plane leg fails when the renderer refuses board columns outs
     assert.match(verdict(guarded, '1280,720'), /^fail: plane leg/);
   });
 
+/** The #fps canvas's opening tag after `html` loads at `hash` without the self-test, in a fresh profile. */
+function meterTag(html, hash) {
+  const dir = mkdtempSync(join(tmpdir(), 'maze-fps-'));
+  try {
+    const file = join(dir, 'maze.html');
+    writeFileSync(file, html);
+    const out = spawnSync(chrome, [
+      '--headless=new', '--disable-gpu', `--user-data-dir=${join(dir, 'profile')}`, '--window-size=1280,720',
+      '--virtual-time-budget=5000', '--dump-dom', `file://${file}${hash}`,
+    ], { encoding: 'utf8', timeout: 120000 });
+    return (out.stdout.match(/<canvas id="fps"[^>]*>/) || [])[0];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// requestAnimationFrame under --dump-dom fires sparsely, so this reads the meter's state, never a count.
+test('#fps at load shows the frame meter, no hash hides it, and a boot rule that ignores #fps hides it',
+  { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, (t) => {
+    const html = build();
+    const on = meterTag(html, '#fps'), off = meterTag(html, '');
+    t.diagnostic(`#fps: ${on}; no hash: ${off}`);
+    assert.ok(on && !/\shidden[\s=>]/.test(on), `at #fps the meter shows: ${on}`);
+    assert.match(on, /aria-label="(-- FPS|\d+ FPS)"/);
+    assert.ok(off && /\shidden[\s=>]/.test(off), `with no hash the meter hides: ${off}`);
+    const from = "hash === '#fps'";
+    assert.equal(html.split(from).length, 2, `${from} occurs once`);
+    const ignored = meterTag(html.replace(from, "hash === '#fps-ignored'"), '#fps');
+    assert.ok(ignored && /\shidden[\s=>]/.test(ignored), `a boot rule that ignores #fps leaves it hidden: ${ignored}`);
+  });

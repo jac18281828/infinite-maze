@@ -1167,7 +1167,8 @@ IN?. A record with the drawn id that has moved on is the save the player
 picked, and Y goes through. The pick's confirm re-reads at its yes (§5). LOAD,
 the pick and SAVE IN? read a row at its keypress. Every confirm ignores
 auto-repeated keydowns, so a held key answers nothing, and ignores every other
-key, Space and P included, except M, which mutes as on every screen.
+key, Space and P included, except M, which mutes, and F, which toggles the
+frame meter (§9), as on every screen.
 
 **Camera.** The camera follows the explorer with a lerp and a deadzone and is
 never rounded. A frame in play draws the camera and the explorer's feet
@@ -1247,7 +1248,7 @@ next frame still runs, with no tick backlog. The line stays until the screen
 changes or a key is pressed, and an auto-repeat does not count.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
-mute and P to pause and show the save code. P returns the player to where
+mute, F to toggle the frame meter and P to pause and show the save code. P returns the player to where
 they were: from pause or the title it goes back to the game. Esc is the alias
 for players outside full screen, where a browser keeps Esc for itself and a
 real Esc press leaves full screen. The end screen takes Esc and Q to the
@@ -1262,7 +1263,8 @@ title with the run open, as from pause: P there returns to it in play with its
 torch, time and trail. P and Esc do nothing there, since P pauses and Esc
 leaves full screen, and Space does nothing, since a fresh jump as tomb 100
 lands would otherwise skip the screen. The splash ignores every auto-repeated
-keydown, so a held key cannot skip it. M mutes, as on every screen.
+keydown, so a held key cannot skip it. M mutes and F toggles the frame meter,
+as on every screen.
 
 The title (§8) opens with its cursor on `ENTER BEGIN`, each time it shows. Up
 and Down, or W and S, move it between BEGIN and LOAD, and Enter acts on the
@@ -1427,6 +1429,20 @@ closes the field, empty or not, and B submits, or closes an empty field. The
 game tells a controller's keys from the keyboard's, whose P and Q type there.
 Gamepad input grants a browser no user activation, so audio may stay silent
 until the first key, click or touch.
+
+**Frame meter.** A hidden tool reads the display's rate: `<n> FPS`, where `n`
+counts the animation frames since its previous update. An update comes on the
+first frame 1000 ms or more past the previous one, so the reading changes at
+most once a second; turned on, the meter reads `-- FPS` until its first update.
+It is off at every load and never stored. F toggles it on every screen,
+confirms included, except in code entry, where F types; an auto-repeated F and
+a keydown with Ctrl, Meta or Alt held toggle nothing. A URL hash of exactly
+`#fps` turns it on at load, for a device with no F key. No soft key and no
+controller button reaches it. It is a canvas in the page's top-right corner,
+4 CSS px inside the safe area, outside the game canvas, in the soft keys' pixel
+font on the page background, and taps pass through it. It lies over the
+image's corner only where no margin lies there. It draws nothing into the game
+canvas.
 
 ## 10. Acceptance
 

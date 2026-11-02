@@ -26,12 +26,19 @@ canvas { display: block; image-rendering: pixelated; }
 #touch button.down { background: var(--bg-down); border-color: var(--gold); }
 #touch button canvas { image-rendering: pixelated; }
 #pad, #fire { display: none; }
+#fps {
+  position: fixed; top: calc(env(safe-area-inset-top, 0px) + 4px); right: calc(env(safe-area-inset-right, 0px) + 4px);
+  padding: 2px; background: #0d0a14; pointer-events: none;
+}
+/* The canvas rule's display: block overrides the hidden attribute's own. */
+#fps[hidden] { display: none; }
 </style>
 </head>
 <body>
 <canvas id="screen" width="320" height="180"></canvas>
 <div id="safe"></div>
 <div id="touch"></div>
+<canvas id="fps" hidden></canvas>
 <script>
 /*BUNDLE*/
 </script>

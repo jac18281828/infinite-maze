@@ -107,9 +107,10 @@ test('runLoop runs its frame through the guard', () => {
   const guarded = body.indexOf('guard.run(frame, now,');
   assert.ok(guarded >= 0, 'frame calls guard.run');
   const at = (work) => body.indexOf(work);
-  for (const work of ['pollGamepads()', 'tick(g)', 'draw(g, now / 1000, guard.fraction())']) {
+  for (const work of ['meter.frame(now)', 'pollGamepads()', 'tick(g)', 'draw(g, now / 1000, guard.fraction())']) {
     assert.ok(at(work) > guarded, `${work} runs inside the guard`);
   }
+  assert.ok(at('meter.frame(now)') < at('pollGamepads()'), 'the meter counts the frame first, before the gamepad poll');
   assert.ok(at('while (due()) tick(g)') < at('draw(g, now / 1000, guard.fraction())'), 'the frame draws at the fraction left after its ticks');
   assert.ok(!body.includes('requestAnimationFrame'), 'the guard requests the next frame');
 });

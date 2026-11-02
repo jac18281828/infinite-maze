@@ -435,7 +435,7 @@ function charCode(ch) {
   return ch === '-' ? 'Minus' : ch === ':' ? 'Semicolon' : '';
 }
 
-function drawLabel(cv, text) {
+export function drawLabel(cv, text) {
   const str = text.toUpperCase();
   cv.width = textWidth(str);
   cv.height = FONT_H;

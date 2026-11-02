@@ -19,10 +19,13 @@ import {
   playedLabel, playedSlot,
 } from './wallet.mjs';
 import { createGamepad } from './gamepad.mjs';
-import { createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth, DOUBLE_TAP_MS } from './touch.mjs';
+import {
+  createTouch, layout, viewport, difficultyLabel, padSide, titleFeet, PANEL_X, textWidth, DOUBLE_TAP_MS, drawLabel,
+} from './touch.mjs';
 import { MILESTONE, rankName } from './ranks.mjs';
 import { copyWithStatus, saveLabel } from './clipboard.mjs';
 import { createGuard, errorLine } from './loop.mjs';
+import { createMeter, meterAtBoot } from './fps.mjs';
 import { createStorage } from './storage.mjs';
 import { frameOf, panFrame, sameFrame, mapModel, mapCells } from './map.mjs';
 import { RGB, idx, PALETTE, COIN, FONT_W } from './art.mjs';
@@ -2883,12 +2886,72 @@ function betweenLeg(g, { need }) {
   openTitle(g);
 }
 
+/**
+ * The frame meter: F toggles it on every screen and on a confirm, judged by
+ * its box; an auto-repeat, Ctrl, Meta or Alt and code entry leave it; the
+ * bundled counter reads 120 FPS at 120 Hz, once a second; and it changes no
+ * pixel of the display. Leaves it off.
+ */
+function meterLeg(g, { need, press }) {
+  const el = document.getElementById('fps');
+  const shown = () => el.getBoundingClientRect().width > 0;
+  const key = (init) => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF', key: 'f', bubbles: true, cancelable: true, ...init }));
+  const was = g.screen;
+  const toggles = (where) => {
+    const ok = !shown();
+    press('KeyF', 'f');
+    const on = shown();
+    press('KeyF', 'f');
+    need(ok && on && !shown(), `meter F shows and hides the meter on ${where}`);
+  };
+  for (const screen of Object.keys(SCREEN_KEYS)) {
+    g.screen = screen;
+    toggles(screen);
+  }
+  g.screen = 'title';
+  g.confirm = { kind: 'leave', go: () => {} };
+  toggles('a confirm');
+  g.confirm = null;
+  g.screen = was;
+  for (const on of [false, true]) {
+    if (shown() !== on) press('KeyF', 'f');
+    for (const init of [{ repeat: true }, { ctrlKey: true }, { metaKey: true }, { altKey: true }]) key(init);
+    need(shown() === on, `meter an auto-repeated F, Ctrl-F, Cmd-F and Alt-F leave the meter ${on ? 'on' : 'off'}`);
+  }
+  // Code entry, with the meter on and off.
+  for (const on of [true, false]) {
+    if (shown() !== on) press('KeyF', 'f');
+    openTitle(g);
+    g.screen = 'load';
+    g.typing = '';
+    press('KeyF', 'f');
+    need(g.typing === 'F' && shown() === on, `meter in code entry F types F and leaves the meter ${on ? 'on' : 'off'}`);
+    openTitle(g);
+  }
+  // The bundled counter at 120 Hz over 3 s.
+  const readings = [], m = createMeter((text) => readings.push(text));
+  m.set(true);
+  for (let k = 0; k <= 360; k++) m.frame((k * 1000) / 120);
+  const counts = readings.slice(1).map((r) => Number.parseInt(r, 10));
+  need(readings[0] === '-- FPS' && counts.length === 3 && counts.every((n) => Math.abs(n - 120) <= 1),
+    `meter the bundled counter reads 120 FPS within 1 at 120 Hz, one update a second: ${readings.length} readings from ${readings.slice(0, 3).join(', ')}`);
+  // The display with the meter on and off.
+  cleanState(g);
+  begin(g);
+  settleDraws(g, 2, 'meter');
+  press('KeyF', 'f');
+  const on = drawnPixels(g, 2);
+  press('KeyF', 'f');
+  need(!shown() && samePixels(on, drawnPixels(g, 2)), 'meter a frame drawn with the meter on equals the frame drawn with it off');
+  openTitle(g);
+}
+
 // The touch leg's legs in order: the revision 1 legs, then the matrix's.
 const LEGS = [
   difficultyLeg, coinLeg, twoGamesLeg, splashLeg, resumeLeg, continueLeg, legacyLeg, oilLeg, gamepadLeg,
   m8Leg, m19Leg, m11Leg, m1Leg, m2Leg, m10Leg, m6Leg, m7Leg, m22Leg, m21Leg, m3Leg, m5Leg, m4Leg, m9Leg,
   m12Leg, m13Leg, m14Leg, m15Leg, m16Leg, m17Leg, m18Leg, m20Leg, m24Leg, m26Leg, m27kLeg, m27tLeg, m27cLeg,
-  settleLeg, betweenLeg,
+  settleLeg, betweenLeg, meterLeg,
 ];
 
 const DIRS = {
@@ -3552,6 +3615,11 @@ function onKeyDown(g, e) {
   g.audio.start();
   if (DIRS[e.code] || e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyM' && g.typing === null) { g.audio.toggleMute(); return; }
+  // F is the meter's on every screen; Ctrl-F and Cmd-F stay the browser's find.
+  if (e.code === 'KeyF' && g.typing === null) {
+    if (!e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) meter.toggle();
+    return;
+  }
   SCREEN_KEYS[g.screen](g, e);
 }
 
@@ -3953,6 +4021,8 @@ function pollGamepads() {
 
 // The frame guard `runLoop` sets; null before it runs.
 let guard = null;
+// The frame meter `boot` binds to #fps; null before it runs.
+let meter = null;
 
 // A dark strip across the middle of the view, whatever the frame drew.
 const ERROR_STRIP = { y: 78, h: 24 };
@@ -3985,6 +4055,7 @@ function runLoop(g) {
   window.addEventListener('keydown', (e) => { if (!e.repeat) guard.release(); });
   function frame(now) {
     guard.run(frame, now, (due) => {
+      meter.frame(now);
       pollGamepads();
       while (due()) tick(g);
       draw(g, now / 1000, guard.fraction());
@@ -3994,8 +4065,21 @@ function runLoop(g) {
   requestAnimationFrame(frame);
 }
 
+/** Shows meter reading `text` on canvas `el`, each font pixel 2 CSS px, or hides it for null. */
+function showMeter(el, text) {
+  el.hidden = text === null;
+  if (text === null) return;
+  drawLabel(el, text);
+  el.style.width = `${2 * el.width}px`;
+  el.style.height = `${2 * el.height}px`;
+  el.setAttribute('aria-label', text);
+}
+
 function boot() {
   const g = newGame();
+  const fps = document.getElementById('fps');
+  meter = createMeter((text) => showMeter(fps, text));
+  if (meterAtBoot(location.hash)) meter.set(true);
   // A layout change moves the title's explorer with it.
   const refit = () => {
     fit();
