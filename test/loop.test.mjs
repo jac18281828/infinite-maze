@@ -106,8 +106,37 @@ test('runLoop runs its frame through the guard', () => {
   const body = frame.slice(0, frame.indexOf('\n  }\n'));
   const guarded = body.indexOf('guard.run(frame, now,');
   assert.ok(guarded >= 0, 'frame calls guard.run');
-  for (const work of ['pollGamepads()', 'tick(g)', 'draw(g, now / 1000)']) {
-    assert.ok(body.indexOf(work) > guarded, `${work} runs inside the guard`);
+  const at = (work) => body.indexOf(work);
+  for (const work of ['pollGamepads()', 'tick(g)', 'draw(g, now / 1000, guard.fraction())']) {
+    assert.ok(at(work) > guarded, `${work} runs inside the guard`);
   }
+  assert.ok(at('while (due()) tick(g)') < at('draw(g, now / 1000, guard.fraction())'), 'the frame draws at the fraction left after its ticks');
   assert.ok(!body.includes('requestAnimationFrame'), 'the guard requests the next frame');
+});
+
+test('fraction() is the tick fraction the accumulator holds after the frame\'s ticks', () => {
+  const r = rig();
+  const fraction = (now) => {
+    let ticks = 0;
+    r.frame(now, (due) => { while (due()) ticks++; });
+    return [ticks, r.guard.fraction()];
+  };
+  assert.equal(r.guard.fraction(), 0, 'a fresh guard holds none');
+  // 25 ms is one tick and a half; another 25 ms brings the total to 50 ms, three ticks.
+  const [t1, a1] = fraction(25);
+  assert.equal(t1, 1);
+  assert.ok(Math.abs(a1 - 0.5) < 1e-9, `${a1} after 25 ms`);
+  const [t2, a2] = fraction(50);
+  assert.equal(t2, 2);
+  assert.ok(a2 >= 0 && a2 < 1e-9, `${a2} after 50 ms`);
+  // Every frame of a jittered 120 Hz clock leaves a fraction in [0, 1).
+  let now = 50, seed = 7;
+  for (let i = 0; i < 1000; i++) {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    const [, a] = fraction(now += 1000 / 120 + (seed / 2147483648 - 0.5) * 4);
+    assert.ok(a >= 0 && a < 1, `${a} at ${now} ms`);
+  }
+  // A failed frame leaves none.
+  r.frame(now + 10, boom);
+  assert.equal(r.guard.fraction(), 0);
 });

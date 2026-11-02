@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { createWorld } from '../src/world/world.mjs';
 import { BW } from '../src/world/board.mjs';
 import { createSim, feetX, feetY } from '../src/game/sim.mjs';
-import { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, deviceSpan } from '../src/game/camera.mjs';
+import {
+  snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, deviceSpan, blendTicks, blendsTicks,
+} from '../src/game/camera.mjs';
 
 const world = createWorld('00000000');
 const mid = (m, c) => m && c % BW === 6 && ((c / BW) | 0) === 3;
@@ -59,6 +61,22 @@ test('followCam allocates under 32 bytes a call', (t) => {
   const per = bytesPerCall(() => followCam(cam, sim));
   t.diagnostic(`${per} bytes a call`);
   assert.ok(per < 32, `${per} bytes a call`);
+});
+
+test('the blend between ticks and its choice allocate under 32 bytes a call', (t) => {
+  const { sim, cam } = steady();
+  // The holders createGame builds once, a fractional camera and feet a tick apart.
+  const prev = { x: cam.x - 1.6, y: cam.y - 0.4, fx: feetX(sim) - 1.6, fy: feetY(sim), visit: 2 };
+  const drawn = { x: 0, y: 0, fx: 0, fy: 0 };
+  const fx = feetX(sim), fy = feetY(sim);
+  const alpha = new Float64Array(1);
+  const blend = bytesPerCall(() => { blendTicks(drawn, prev, cam, fx, fy, alpha[0] = (alpha[0] + 0.37) % 1); });
+  const sink = new Int32Array(1);
+  const choice = bytesPerCall(() => { sink[0] += blendsTicks(prev, 'play', 2, fx, fy) ? 1 : 0; });
+  assert.ok(sink[0] > 0 && drawn.x !== 0);
+  t.diagnostic(`blendTicks ${blend} bytes a call, blendsTicks ${choice}`);
+  assert.ok(blend < 32, `blendTicks: ${blend} bytes a call`);
+  assert.ok(choice < 32, `blendsTicks: ${choice} bytes a call`);
 });
 
 // Each edge lands on round(edge): a span is round(a + len) - round(a) device px.

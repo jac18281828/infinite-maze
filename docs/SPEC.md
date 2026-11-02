@@ -1170,13 +1170,18 @@ auto-repeated keydowns, so a held key answers nothing, and ignores every other
 key, Space and P included, except M, which mutes as on every screen.
 
 **Camera.** The camera follows the explorer with a lerp and a deadzone and is
-never rounded. The frame maps the world to device pixels through it and rounds
-only at the draw, so at a constant speed a world point's step a tick varies by
-at most one device pixel, the explorer and its torch light hold still at a
-steady lag, and the world stands still while the deadzone holds the camera.
-The explorer draws from its true feet, within a device pixel of them. It
-scrolls freely across board seams, and rock fills every position outside the
-band trees.
+never rounded. A frame in play draws the camera and the explorer's feet
+interpolated between the last two ticks of the play visit; a frame on any
+other screen, before the visit's first tick or after a tick that moved the
+feet more than a cell (48 px) on either axis draws the latest tick. Pose,
+facing, burn, the HUD and the play note show the latest tick. The frame maps
+the world to device pixels through the drawn camera and rounds only at the
+draw, so at a constant speed a world point's step a frame lies within one
+device pixel of the camera's travel over that frame's interval, at any display
+rate; the explorer and its torch light hold still at a steady lag, and the
+world stands still while the deadzone holds the camera. The explorer draws
+from its interpolated feet, within a device pixel of them. It scrolls freely
+across board seams, and rock fills every position outside the band trees.
 
 **Explorer.** A khaki-clad figure in a fedora, carrying a torch, with these
 animations:
@@ -1207,8 +1212,10 @@ quick chime on each coin taken and the torch sputtering at low burn.
 
 ## 9. Runtime
 
-The simulation runs on a fixed 60 Hz timestep, with rendering on
-`requestAnimationFrame`. The frame draws the back-wall, world and light layers
+The simulation ticks at a fixed 60 Hz; each browser frame draws once, on
+`requestAnimationFrame` at the display's rate, from the camera and the
+explorer's feet interpolated between the last two ticks; audio cues fire from
+ticks. The frame draws the back-wall, world and light layers
 at game resolution, each spanning the view and 2 px more on every side: the
 world and light layers at the whole camera ⌊cam⌋ and the back wall at
 ⌊cam / 2⌋. It then composites them, the explorer and the dust onto the display

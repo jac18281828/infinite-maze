@@ -820,7 +820,7 @@ test('the title explorer keeps its spot in band and keyboard modes', () => {
 // it here, and again with the touch layer removed, a control mis-keyed, the
 // zoom guard dropped and each difficulty, pause-key, coin, recent-tomb, save,
 // count, continue-count, migration, splash, oil, pad-side, fire, gamepad,
-// settle-window and play-note rule broken, and each cell of the save matrix (design §6) broken in turn.
+// settle-window, play-note and between-ticks rule broken, and each cell of the save matrix (design §6) broken in turn.
 const chrome = process.env.CHROME;
 const verdict = (html, window) => {
   const dir = mkdtempSync(join(tmpdir(), 'maze-touch-'));
@@ -837,7 +837,7 @@ const verdict = (html, window) => {
   }
 };
 
-test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, recent-tomb, save, count, continue-count, migration, splash, oil, pad-side, fire, gamepad or save-matrix rule broken',
+test('the self-test touch leg passes, and fails without the touch layer, with a mis-keyed control, without the zoom guard or with a difficulty, pause-key, coin, recent-tomb, save, count, continue-count, migration, splash, oil, pad-side, fire, gamepad, save-matrix or between-ticks rule broken',
   { skip: !(chrome && existsSync(chrome)) && 'set CHROME to a Chrome binary' }, (t) => {
     const html = build();
     for (const size of ['500,1000', '1000,500']) assert.equal(verdict(html, size), 'pass');
@@ -879,7 +879,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', 'g.earned = 0; begin(g, s.lastEntry, { ...runCarry(s), continues: s.continues + 1 });', /^fail: touch CONTINUE keeps the coins earned this run/],
       ['    g.pausedAt = null;\n    writeAt(g, g.sim.here);', '    writeAt(g, g.sim.here);', /^fail: touch a second pause restarts the pause map clock/],
       ["} else if (e.code === 'KeyQ' || e.key === 'Escape') { g.copied = ''; toTitle(g); }", "} else if (e.code === 'KeyQ' || e.code === 'KeyP' || e.key === 'Escape') { g.copied = ''; toTitle(g); }", /^fail: touch P on the end screen leaves it showing/],
-      ['      draw(g, now / 1000);', "      draw(g, now / 1000); throw new Error('frame');", /^fail: .*frame/],
+      ['      draw(g, now / 1000, guard.fraction());', "      draw(g, now / 1000, guard.fraction()); throw new Error('frame');", /^fail: .*frame/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'else if (false) showSplash(g, hit.k, hit.paid);', /^fail: touch tomb 100 shows the splash with TORCHBEARER at EASY/],
       ['else if (hit) showSplash(g, hit.k, hit.paid);', 'if (hit) showSplash(g, hit.k, hit.paid);', /^fail: touch a run that ends on the crossing of tomb 100 shows the end screen/],
       ['  g.splash = { k, paid };\n  writeAt(g, g.sim.here);', '  g.splash = { k, paid };', /^fail: touch the EASY splash stores the save/],
@@ -1023,6 +1023,11 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["    { id: 'begin', label: 'BEGIN', ...K('Space', ' ') },", "    { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },", /^fail: touch M27T the BEGIN key begins with the cursor on LOAD/],
       ["(fromPad && e.code === 'KeyQ') || ", '', /^fail: touch M27C Select closes code entry holding a code/],
       ["  if (fromPad && e.code === 'KeyP') return;\n", '', /^fail: touch M27C Start and A type nothing in code entry/],
+      // Frames between ticks: the fraction ignored, no snapshot, the latest camera, the sim's own feet.
+      ['if (alpha < 1 && blendsTicks(', 'if (false && blendsTicks(', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
+      ['  p.x = g.cam.x; p.y = g.cam.y; p.fx = feetX(s); p.fy = feetY(s); p.visit = g.visit;\n', '', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
+      ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, g.cam, t, d.fx, d.fy);', /^fail: touch between a frame halfway between ticks draws the camera halfway/],
+      ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, d, t);', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
     ]) {
       const broken = html.replace(from, to);
       assert.equal(html.split(from).length, 2, `${from} occurs once`);
@@ -1041,3 +1046,4 @@ test('the self-test plane leg fails when the renderer refuses board columns outs
     const guarded = html.replace(from, `${from}    if (bx < 0 || bx >= world.size.w) return null;\n`);
     assert.match(verdict(guarded, '1280,720'), /^fail: plane leg/);
   });
+

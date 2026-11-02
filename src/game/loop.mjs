@@ -40,6 +40,8 @@ export function createGuard({ request, screen, step, start, log = (e) => console
       }
       if (failed) onFail();
     },
+    /** The tick fraction the accumulator holds, in [0, 1) once the frame's ticks have run. */
+    fraction() { return acc / step; },
     release() { held = null; },
     /** Whether the ERROR line shows: from a failure until the screen changes or `release()`. */
     shown() {

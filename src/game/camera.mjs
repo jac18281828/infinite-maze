@@ -1,5 +1,5 @@
 // The camera: where it follows the explorer, and how a frame maps the world to device pixels.
-import { feetX, feetY } from './sim.mjs';
+import { feetX, feetY, CELL } from './sim.mjs';
 
 // Game px each layer spans past the view on every side, so its blit covers the
 // view at any fraction of the camera.
@@ -18,6 +18,28 @@ export function followCam(cam, sim) {
   if (ty - cam.y > 12) gy = ty - 12; else if (cam.y - ty > 12) gy = ty + 12;
   cam.x += (gx - cam.x) * 0.16;
   cam.y += (gy - cam.y) * 0.16;
+}
+
+/**
+ * Whether a frame on `screen` during play visit `visit` blends from the tick
+ * snapshot `prev` { x, y, fx, fy, visit } to the latest feet (fx, fy): only in
+ * play, in the visit the snapshot ran in, with the feet moved at most CELL on
+ * each axis. A larger move is a placement, which draws as it stands.
+ */
+export function blendsTicks(prev, screen, visit, fx, fy) {
+  return screen === 'play' && prev.visit === visit && Math.abs(fx - prev.fx) <= CELL && Math.abs(fy - prev.fy) <= CELL;
+}
+
+/**
+ * Writes to `out` { x, y, fx, fy } the camera and feet `alpha` of the way from
+ * the tick snapshot `prev` to the latest camera `cam` and feet (fx, fy);
+ * allocates nothing.
+ */
+export function blendTicks(out, prev, cam, fx, fy, alpha) {
+  out.x = prev.x + (cam.x - prev.x) * alpha;
+  out.y = prev.y + (cam.y - prev.y) * alpha;
+  out.fx = prev.fx + (fx - prev.fx) * alpha;
+  out.fy = prev.fy + (fy - prev.fy) * alpha;
 }
 
 /** A frame transform for `placeFrame` to fill. */

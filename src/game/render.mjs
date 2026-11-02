@@ -514,19 +514,22 @@ export function createRenderer(canvas, world, display) {
     }
   }
 
-  // The explorer `scene` last rendered (or null), its time, sprite and torch
-  // tip in world px, for `composite`.
-  let shown = null, shownT = 0, body = null, tipX = 0, tipY = 0;
+  // The explorer `scene` last rendered (or null), its time, drawn feet, sprite
+  // and torch tip in world px, for `composite`.
+  let shown = null, shownT = 0, shownX = 0, shownY = 0, body = null, tipX = 0, tipY = 0;
 
-  /** Sets the sprite and torch tip of the explorer `sim` from its pose and adds the torch light at the tip. */
-  function poseExplorer(sim, sx, sy, t) {
+  /**
+   * Sets the sprite of the explorer `sim` from its pose and its torch tip from
+   * the drawn feet (fx, fy), and adds the torch light at the tip.
+   */
+  function poseExplorer(sim, fx, fy, sx, sy, t) {
     const { anim, frame } = pose(sim);
     const flip = sim.facing < 0;
     body = sprites[anim][frame][flip ? 1 : 0];
     const [tx, ty] = torchTip(anim, frame);
     // The sprite's left edge stands 8 px left of the feet, its top 24 px above them.
-    tipX = feetX(sim) - 8 + (flip ? 15 - tx : tx);
-    tipY = feetY(sim) + 24 - ty;
+    tipX = fx - 8 + (flip ? 15 - tx : tx);
+    tipY = fy + 24 - ty;
     if (sim.burn > 0) {
       // Flicker amplitude grows as the burn falls.
       const amp = 1.5 + 7 * (1 - sim.burn / BURN_S);
@@ -542,9 +545,9 @@ export function createRenderer(canvas, world, display) {
     dctx.drawImage(img, Math.round(x), Math.round(y), deviceSpan(x, img.width * currentFrame.sx), deviceSpan(y, img.height * currentFrame.sy));
   }
 
-  /** Draws the explorer `sim` and its flame on the display, each at its art offset from the true feet, scaled. */
+  /** Draws the explorer `sim` and its flame on the display, each at its art offset from the drawn feet, scaled. */
   function drawExplorer(sim, t) {
-    const x = deviceX(currentFrame, feetX(sim)), y = deviceY(currentFrame, feetY(sim));
+    const x = deviceX(currentFrame, shownX), y = deviceY(currentFrame, shownY);
     blit(body, x - 8 * currentFrame.sx, y - 24 * currentFrame.sy);
     const tx = deviceX(currentFrame, tipX), ty = deviceY(currentFrame, tipY);
     if (sim.burn > 0) blit(torches[Math.floor(t * 12) % 3], tx - 2 * currentFrame.sx, ty - 4 * currentFrame.sy);
@@ -574,9 +577,11 @@ export function createRenderer(canvas, world, display) {
    * Starts a frame around `cam` with the explorer `sim` (or none): clears the
    * overlay and renders the back-wall, world and light layers at game
    * resolution for `composite`. `t` is seconds of wall time, used for flicker
-   * and animation. Returns the torch tip on the display, or null.
+   * and animation. The explorer, its torch tip and light draw from the feet
+   * (fx, fy), the sim's own by default. Returns the torch tip on the display,
+   * or null.
    */
-  function scene(sim, cam, t) {
+  function scene(sim, cam, t, fx = sim ? feetX(sim) : 0, fy = sim ? feetY(sim) : 0) {
     ctx.clearRect(0, 0, VIEW_W, VIEW_H);
     placeFrame(currentFrame, cam, display.width, display.height, VIEW_W, VIEW_H);
     const cx = currentFrame.camX, cy = currentFrame.camY;
@@ -591,12 +596,14 @@ export function createRenderer(canvas, world, display) {
     if (sim) drawBoost(lit, sx, sy, boostAlpha(sim.burn));
     drawFlames(lit, cx, cy, sx, sy, t);
     if (sim) {
-      poseExplorer(sim, sx, sy, t);
+      poseExplorer(sim, fx, fy, sx, sy, t);
       stepDrift(windDir(world, sim.bd, sim.cell), t);
     }
     shadeLight();
     shown = sim;
     shownT = t;
+    shownX = fx;
+    shownY = fy;
     return sim ? [deviceX(currentFrame, tipX), deviceY(currentFrame, tipY)] : null;
   }
 

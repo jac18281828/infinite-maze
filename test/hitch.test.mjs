@@ -10,8 +10,8 @@ import { boardMask } from '../src/game/mask.mjs';
 import { fixtureSets, dustMotes } from '../src/game/fixtures.mjs';
 import { createRenderer } from '../src/game/render.mjs';
 import { RGB, idx, ROCK } from '../src/game/art.mjs';
-import { BOARD_W, BOARD_H, createSim, feet, torchRadius } from '../src/game/sim.mjs';
-import { createFrame, placeFrame, deviceX, deviceY, deviceSpan } from '../src/game/camera.mjs';
+import { BOARD_W, BOARD_H, createSim, feet, feetX, feetY, torchRadius } from '../src/game/sim.mjs';
+import { createFrame, placeFrame, deviceX, deviceY, deviceSpan, blendTicks, blendsTicks } from '../src/game/camera.mjs';
 
 const CODE = '00000000';
 const LEVELS = ['easy', 'medium', 'hard', 'ultimate'];
@@ -290,9 +290,13 @@ test('a steady play frame allocates under 8 KB', (t) => {
     const world = createWorld(CODE, { difficulty: 'medium' });
     const renderer = createRenderer(nullCanvas(), world, display());
     const { sim, cam } = explorer(world, 300);
-    // Every draw of a play frame: the layers, the composite and the HUD.
+    // The holders createGame builds once: the tick snapshot and the drawn camera and feet.
+    const prev = { x: cam.x, y: cam.y, fx: feetX(sim), fy: feetY(sim), visit: 1 }, drawn = { x: 0, y: 0, fx: 0, fy: 0 };
+    // Every draw of a play frame between ticks: the blend, the layers, the composite and the HUD.
     const frame = (f) => {
-      renderer.scene(sim, cam, f / 60);
+      const fx = feetX(sim), fy = feetY(sim);
+      if (blendsTicks(prev, 'play', 1, fx, fy)) blendTicks(drawn, prev, cam, fx, fy, 0.5);
+      renderer.scene(sim, drawn, f / 60, drawn.fx, drawn.fy);
       renderer.composite();
       renderer.hud(sim, 0);
     };
@@ -337,5 +341,40 @@ test('the dust draws the motes dustMotes lists, each with the toFixed(3) fill', 
       }
       assert.ok(drawn > 600, `burn ${burn} draws ${drawn} motes`);
     }
+  });
+});
+
+test('the drawn feet move the torch tip and the explorer blit by d device px a game px from the sim\'s feet', (t) => {
+  withDocument(() => nullCanvas(), () => {
+    const world = createWorld(CODE, { difficulty: 'medium' });
+    const screen = display();
+    const renderer = createRenderer(nullCanvas(), world, screen);
+    const { sim, cam } = explorer(world, 300);
+    // The explorer's body blit: the first composite draw that is none of the layers.
+    const layers = new Set(Object.values(renderer.layers));
+    let body = null;
+    screen.getContext().drawImage = (img, x, y) => { if (!layers.has(img) && body === null) body = [x, y]; };
+    const draw = (...feetAt) => {
+      body = null;
+      const tip = renderer.scene(sim, cam, 0, ...feetAt);
+      renderer.composite();
+      return { tip, body };
+    };
+    const fx = feetX(sim), fy = feetY(sim), sx = 2752 / 320;
+    const at = draw(fx, fy);
+    assert.deepEqual(draw(), at, 'scene defaults to the sim\'s feet');
+    const seen = [];
+    for (const [dx, dy] of [[0.5, 0], [3, 0], [-7.25, 0], [0, 2.5], [1.5, -4]]) {
+      const moved = draw(fx + dx, fy + dy);
+      const tip = [moved.tip[0] - at.tip[0], moved.tip[1] - at.tip[1]], blit = [moved.body[0] - at.body[0], moved.body[1] - at.body[1]];
+      seen.push(`(${dx}, ${dy}): tip ${tip.map((v) => v.toFixed(2))}, blit ${blit}`);
+      // y runs down the display.
+      const want = [dx * sx, -dy * sx];
+      for (const i of [0, 1]) {
+        assert.ok(Math.abs(tip[i] - want[i]) <= 1, `feet (${dx}, ${dy}) move the tip ${tip} device px, want ${want}`);
+        assert.ok(Math.abs(blit[i] - want[i]) <= 1, `feet (${dx}, ${dy}) move the blit ${blit} device px, want ${want}`);
+      }
+    }
+    t.diagnostic(seen.join('; '));
   });
 });

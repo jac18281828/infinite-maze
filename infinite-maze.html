@@ -2887,7 +2887,7 @@ return { TICK, CELL, BOARD_W, BOARD_H, RUN_SPEED, GALLERY_SPEED, LADDER_SPEED, B
 
 // src/game/camera.mjs
 const __m11 = (() => {
-const { feetX, feetY } = __m10;
+const { feetX, feetY, CELL } = __m10;
 // The camera: where it follows the explorer, and how a frame maps the world to device pixels.
 
 
@@ -2908,6 +2908,28 @@ function followCam(cam, sim) {
   if (ty - cam.y > 12) gy = ty - 12; else if (cam.y - ty > 12) gy = ty + 12;
   cam.x += (gx - cam.x) * 0.16;
   cam.y += (gy - cam.y) * 0.16;
+}
+
+/**
+ * Whether a frame on `screen` during play visit `visit` blends from the tick
+ * snapshot `prev` { x, y, fx, fy, visit } to the latest feet (fx, fy): only in
+ * play, in the visit the snapshot ran in, with the feet moved at most CELL on
+ * each axis. A larger move is a placement, which draws as it stands.
+ */
+function blendsTicks(prev, screen, visit, fx, fy) {
+  return screen === 'play' && prev.visit === visit && Math.abs(fx - prev.fx) <= CELL && Math.abs(fy - prev.fy) <= CELL;
+}
+
+/**
+ * Writes to `out` { x, y, fx, fy } the camera and feet `alpha` of the way from
+ * the tick snapshot `prev` to the latest camera `cam` and feet (fx, fy);
+ * allocates nothing.
+ */
+function blendTicks(out, prev, cam, fx, fy, alpha) {
+  out.x = prev.x + (cam.x - prev.x) * alpha;
+  out.y = prev.y + (cam.y - prev.y) * alpha;
+  out.fx = prev.fx + (fx - prev.fx) * alpha;
+  out.fy = prev.fy + (fy - prev.fy) * alpha;
 }
 
 /** A frame transform for `placeFrame` to fill. */
@@ -2965,7 +2987,7 @@ function deviceY(f, y) {
 function deviceSpan(a, len) {
   return Math.round(a + len) - Math.round(a);
 }
-return { LAYER_MARGIN, snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, deviceSpan };
+return { LAYER_MARGIN, snapCam, followCam, blendsTicks, blendTicks, createFrame, placeFrame, deviceX, deviceY, deviceSpan };
 })();
 
 // src/game/art.mjs
@@ -5086,19 +5108,22 @@ function createRenderer(canvas, world, display) {
     }
   }
 
-  // The explorer `scene` last rendered (or null), its time, sprite and torch
-  // tip in world px, for `composite`.
-  let shown = null, shownT = 0, body = null, tipX = 0, tipY = 0;
+  // The explorer `scene` last rendered (or null), its time, drawn feet, sprite
+  // and torch tip in world px, for `composite`.
+  let shown = null, shownT = 0, shownX = 0, shownY = 0, body = null, tipX = 0, tipY = 0;
 
-  /** Sets the sprite and torch tip of the explorer `sim` from its pose and adds the torch light at the tip. */
-  function poseExplorer(sim, sx, sy, t) {
+  /**
+   * Sets the sprite of the explorer `sim` from its pose and its torch tip from
+   * the drawn feet (fx, fy), and adds the torch light at the tip.
+   */
+  function poseExplorer(sim, fx, fy, sx, sy, t) {
     const { anim, frame } = pose(sim);
     const flip = sim.facing < 0;
     body = sprites[anim][frame][flip ? 1 : 0];
     const [tx, ty] = torchTip(anim, frame);
     // The sprite's left edge stands 8 px left of the feet, its top 24 px above them.
-    tipX = feetX(sim) - 8 + (flip ? 15 - tx : tx);
-    tipY = feetY(sim) + 24 - ty;
+    tipX = fx - 8 + (flip ? 15 - tx : tx);
+    tipY = fy + 24 - ty;
     if (sim.burn > 0) {
       // Flicker amplitude grows as the burn falls.
       const amp = 1.5 + 7 * (1 - sim.burn / BURN_S);
@@ -5114,9 +5139,9 @@ function createRenderer(canvas, world, display) {
     dctx.drawImage(img, Math.round(x), Math.round(y), deviceSpan(x, img.width * currentFrame.sx), deviceSpan(y, img.height * currentFrame.sy));
   }
 
-  /** Draws the explorer `sim` and its flame on the display, each at its art offset from the true feet, scaled. */
+  /** Draws the explorer `sim` and its flame on the display, each at its art offset from the drawn feet, scaled. */
   function drawExplorer(sim, t) {
-    const x = deviceX(currentFrame, feetX(sim)), y = deviceY(currentFrame, feetY(sim));
+    const x = deviceX(currentFrame, shownX), y = deviceY(currentFrame, shownY);
     blit(body, x - 8 * currentFrame.sx, y - 24 * currentFrame.sy);
     const tx = deviceX(currentFrame, tipX), ty = deviceY(currentFrame, tipY);
     if (sim.burn > 0) blit(torches[Math.floor(t * 12) % 3], tx - 2 * currentFrame.sx, ty - 4 * currentFrame.sy);
@@ -5146,9 +5171,11 @@ function createRenderer(canvas, world, display) {
    * Starts a frame around `cam` with the explorer `sim` (or none): clears the
    * overlay and renders the back-wall, world and light layers at game
    * resolution for `composite`. `t` is seconds of wall time, used for flicker
-   * and animation. Returns the torch tip on the display, or null.
+   * and animation. The explorer, its torch tip and light draw from the feet
+   * (fx, fy), the sim's own by default. Returns the torch tip on the display,
+   * or null.
    */
-  function scene(sim, cam, t) {
+  function scene(sim, cam, t, fx = sim ? feetX(sim) : 0, fy = sim ? feetY(sim) : 0) {
     ctx.clearRect(0, 0, VIEW_W, VIEW_H);
     placeFrame(currentFrame, cam, display.width, display.height, VIEW_W, VIEW_H);
     const cx = currentFrame.camX, cy = currentFrame.camY;
@@ -5163,12 +5190,14 @@ function createRenderer(canvas, world, display) {
     if (sim) drawBoost(lit, sx, sy, boostAlpha(sim.burn));
     drawFlames(lit, cx, cy, sx, sy, t);
     if (sim) {
-      poseExplorer(sim, sx, sy, t);
+      poseExplorer(sim, fx, fy, sx, sy, t);
       stepDrift(windDir(world, sim.bd, sim.cell), t);
     }
     shadeLight();
     shown = sim;
     shownT = t;
+    shownX = fx;
+    shownY = fy;
     return sim ? [deviceX(currentFrame, tipX), deviceY(currentFrame, tipY)] : null;
   }
 
@@ -6734,6 +6763,8 @@ function createGuard({ request, screen, step, start, log = (e) => console.error(
       }
       if (failed) onFail();
     },
+    /** The tick fraction the accumulator holds, in [0, 1) once the frame's ticks have run. */
+    fraction() { return acc / step; },
     release() { held = null; },
     /** Whether the ERROR line shows: from a failure until the screen changes or `release()`. */
     shown() {
@@ -6787,8 +6818,8 @@ const { DIFFICULTY, DIFFICULTIES } = __m3;
 const { parseCode, formatCode, codeFromBytes } = __m1;
 const { encodeSave, decodeSave } = __m6;
 const { floorItems, itemSpot, coinRows, rowSpot } = __m7;
-const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
-const { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY } = __m11;
+const { createSim, step, runCarry, TICK, BURN_S, KEY, feet, feetX, feetY, pose, nodeXY, tombCount, inputEdges, createTrail } = __m10;
+const { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, blendsTicks, blendTicks } = __m11;
 const { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas } = __m18;
 const { createAudio } = __m19;
 const { runScript, createAutopilot, SELFTEST_CODE } = __m20;
@@ -9623,12 +9654,69 @@ function settleLeg(g, { need }) {
   need(g.screen === 'title', 'settle a click with no press before it acts inside the window');
 }
 
+/** The display's pixels after `draw(g, t, alpha)`. */
+function drawnPixels(g, t, alpha = 1) {
+  draw(g, t, alpha);
+  return dctx.getImageData(0, 0, display.width, display.height).data;
+}
+
+const samePixels = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * Draws at `t` until two draws match, so the world work a frame does near a
+ * fresh start, its warming of the boards around the camera, changes no
+ * pixel of the next. Throws `touch <what> ...` past 60 draws.
+ */
+function settleDraws(g, t, what) {
+  let last = drawnPixels(g, t);
+  for (let i = 0; i < 60; i++) {
+    const next = drawnPixels(g, t);
+    if (samePixels(last, next)) return;
+    last = next;
+  }
+  throw new Error(`touch ${what} the frame settles within 60 draws`);
+}
+
+/**
+ * Frames between ticks, at a tick that moves only the feet and one that moves
+ * only the camera: a draw at fraction 0.5 differs from one at 1, and after a
+ * screen write back to play, a new visit, the two match. Each move spans at
+ * least 2 game px, so its half step moves a device pixel at any scale.
+ */
+function betweenLeg(g, { need }) {
+  const check = (what) => {
+    settleDraws(g, 1, 'between');
+    need(!samePixels(drawnPixels(g, 1, 0.5), drawnPixels(g, 1)), `between a frame halfway between ticks draws the ${what} halfway`);
+    g.screen = 'play';
+    settleDraws(g, 1, 'between');
+    need(samePixels(drawnPixels(g, 1, 0.5), drawnPixels(g, 1)), `between a frame of a new play visit draws the ${what} at the latest tick`);
+  };
+  openTitle(g);
+  cleanState(g);
+  g.keys.clear();
+  // The feet alone: a jump's first tick, inside the deadzone of a camera just snapped.
+  begin(g);
+  const cam = { ...g.cam }, y = feetY(g.sim);
+  g.jump = true;
+  tick(g);
+  need(g.cam.x === cam.x && g.cam.y === cam.y && feetY(g.sim) - y >= 2, 'between a jump\'s first tick moves the feet 2 px and the camera not at all');
+  check('feet');
+  // The camera alone: settling 60 px off the feet, toward them at rest.
+  begin(g);
+  g.cam.x += 60;
+  const x = g.cam.x, feetAt = feet(g.sim);
+  tick(g);
+  need(x - g.cam.x >= 2 && feet(g.sim).every((v, i) => v === feetAt[i]), 'between a settling camera moves 2 px and the feet not at all');
+  check('camera');
+  openTitle(g);
+}
+
 // The touch leg's legs in order: the revision 1 legs, then the matrix's.
 const LEGS = [
   difficultyLeg, coinLeg, twoGamesLeg, splashLeg, resumeLeg, continueLeg, legacyLeg, oilLeg, gamepadLeg,
   m8Leg, m19Leg, m11Leg, m1Leg, m2Leg, m10Leg, m6Leg, m7Leg, m22Leg, m21Leg, m3Leg, m5Leg, m4Leg, m9Leg,
   m12Leg, m13Leg, m14Leg, m15Leg, m16Leg, m17Leg, m18Leg, m20Leg, m24Leg, m26Leg, m27kLeg, m27tLeg, m27cLeg,
-  settleLeg,
+  settleLeg, betweenLeg,
 ];
 
 const DIRS = {
@@ -9723,6 +9811,10 @@ function createGame() {
     // The note play shows for its ticks: its text and ink.
     noteText: '', noteInk: 'm', noteTicks: 0,
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
+    // The camera and feet before the latest tick and the visit it ran in,
+    // which a frame between ticks blends from, and the camera and feet that
+    // frame draws. Built once, so no frame or tick allocates them.
+    prev: { x: 0, y: 0, fx: 0, fy: 0, visit: -1 }, drawn: { x: 0, y: 0, fx: 0, fy: 0 },
     // Key edges since the last tick: KEY bits pressed and released, and a jump press.
     press: 0, release: 0, jump: false,
     code: firstSeed(),
@@ -10353,7 +10445,8 @@ function tick(g) {
   if (g.screen !== 'play') return;
   // The note counts ticks of play alone, so a pause or a splash holds it.
   if (g.noteTicks > 0) g.noteTicks--;
-  const s = g.sim;
+  const s = g.sim, p = g.prev;
+  p.x = g.cam.x; p.y = g.cam.y; p.fx = feetX(s); p.fy = feetY(s); p.visit = g.visit;
   const was = tombCount(s), jars = s.jars.size, lead = s.recent[0];
   stepSim(g);
   // Each coin the step takes pushes one 'coin' event, which a drop of the tomb the explorer left does not undo.
@@ -10644,12 +10737,21 @@ function drawSplash(g) {
 const NOTE_Y = 14;
 const NOTE_AT = { align: 'center' };
 
-function draw(g, t) {
+/**
+ * Draws a frame at `t` s of wall time. In play, `alpha` in [0, 1) draws the
+ * camera and feet `alpha` of the way from before the latest tick to after it,
+ * where blendsTicks allows; 1, the default, draws the latest state.
+ */
+function draw(g, t, alpha = 1) {
   if (g.screen === 'title') drawTitle(g, t);
   else if (g.screen === 'load') drawLoad(g, t);
   else if (g.screen === 'pick') drawPick(g, t);
   else {
-    g.renderer.scene(g.sim, g.cam, t);
+    const s = g.sim, d = g.drawn, fx = feetX(s), fy = feetY(s);
+    if (alpha < 1 && blendsTicks(g.prev, g.screen, g.visit, fx, fy)) {
+      blendTicks(d, g.prev, g.cam, fx, fy, alpha);
+      g.renderer.scene(s, d, t, d.fx, d.fy);
+    } else g.renderer.scene(s, g.cam, t);
     g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'play') { if (g.noteTicks > 0) g.renderer.text(g.noteText, VIEW_W / 2, NOTE_Y, g.noteInk, NOTE_AT); }
     else if (g.screen === 'pause') drawPause(g, t);
@@ -10691,7 +10793,7 @@ function paintError(g) {
   r.text(errorLine(g.point && g.point.save, formatCode(g.code)), VIEW_W / 2, ERROR_STRIP.y + 8, 'o', { align: 'center' });
 }
 
-/** Fixed 60 Hz ticks, rendering once per animation frame. */
+/** Fixed 60 Hz ticks, rendering once per animation frame between the last two. */
 function runLoop(g) {
   guard = createGuard({
     request: (next) => requestAnimationFrame(next),
@@ -10713,7 +10815,7 @@ function runLoop(g) {
     guard.run(frame, now, (due) => {
       pollGamepads();
       while (due()) tick(g);
-      draw(g, now / 1000);
+      draw(g, now / 1000, guard.fraction());
     });
   }
   draw(g, 0);

@@ -7,9 +7,9 @@ import { parseCode, formatCode, codeFromBytes } from '../world/hash.mjs';
 import { encodeSave, decodeSave } from '../world/save.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot } from '../world/floor.mjs';
 import {
-  createSim, step, runCarry, TICK, BURN_S, KEY, feet, pose, nodeXY, tombCount, inputEdges, createTrail,
+  createSim, step, runCarry, TICK, BURN_S, KEY, feet, feetX, feetY, pose, nodeXY, tombCount, inputEdges, createTrail,
 } from './sim.mjs';
-import { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY } from './camera.mjs';
+import { snapCam, followCam, createFrame, placeFrame, deviceX, deviceY, blendsTicks, blendTicks } from './camera.mjs';
 import { createRenderer, VIEW_W, VIEW_H, MAP_SCALE, shade, spriteCanvas } from './render.mjs';
 import { createAudio } from './audio.mjs';
 import { runScript, createAutopilot, SELFTEST_CODE } from './autopilot.mjs';
@@ -2826,12 +2826,69 @@ function settleLeg(g, { need }) {
   need(g.screen === 'title', 'settle a click with no press before it acts inside the window');
 }
 
+/** The display's pixels after `draw(g, t, alpha)`. */
+function drawnPixels(g, t, alpha = 1) {
+  draw(g, t, alpha);
+  return dctx.getImageData(0, 0, display.width, display.height).data;
+}
+
+const samePixels = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * Draws at `t` until two draws match, so the world work a frame does near a
+ * fresh start, its warming of the boards around the camera, changes no
+ * pixel of the next. Throws `touch <what> ...` past 60 draws.
+ */
+function settleDraws(g, t, what) {
+  let last = drawnPixels(g, t);
+  for (let i = 0; i < 60; i++) {
+    const next = drawnPixels(g, t);
+    if (samePixels(last, next)) return;
+    last = next;
+  }
+  throw new Error(`touch ${what} the frame settles within 60 draws`);
+}
+
+/**
+ * Frames between ticks, at a tick that moves only the feet and one that moves
+ * only the camera: a draw at fraction 0.5 differs from one at 1, and after a
+ * screen write back to play, a new visit, the two match. Each move spans at
+ * least 2 game px, so its half step moves a device pixel at any scale.
+ */
+function betweenLeg(g, { need }) {
+  const check = (what) => {
+    settleDraws(g, 1, 'between');
+    need(!samePixels(drawnPixels(g, 1, 0.5), drawnPixels(g, 1)), `between a frame halfway between ticks draws the ${what} halfway`);
+    g.screen = 'play';
+    settleDraws(g, 1, 'between');
+    need(samePixels(drawnPixels(g, 1, 0.5), drawnPixels(g, 1)), `between a frame of a new play visit draws the ${what} at the latest tick`);
+  };
+  openTitle(g);
+  cleanState(g);
+  g.keys.clear();
+  // The feet alone: a jump's first tick, inside the deadzone of a camera just snapped.
+  begin(g);
+  const cam = { ...g.cam }, y = feetY(g.sim);
+  g.jump = true;
+  tick(g);
+  need(g.cam.x === cam.x && g.cam.y === cam.y && feetY(g.sim) - y >= 2, 'between a jump\'s first tick moves the feet 2 px and the camera not at all');
+  check('feet');
+  // The camera alone: settling 60 px off the feet, toward them at rest.
+  begin(g);
+  g.cam.x += 60;
+  const x = g.cam.x, feetAt = feet(g.sim);
+  tick(g);
+  need(x - g.cam.x >= 2 && feet(g.sim).every((v, i) => v === feetAt[i]), 'between a settling camera moves 2 px and the feet not at all');
+  check('camera');
+  openTitle(g);
+}
+
 // The touch leg's legs in order: the revision 1 legs, then the matrix's.
 const LEGS = [
   difficultyLeg, coinLeg, twoGamesLeg, splashLeg, resumeLeg, continueLeg, legacyLeg, oilLeg, gamepadLeg,
   m8Leg, m19Leg, m11Leg, m1Leg, m2Leg, m10Leg, m6Leg, m7Leg, m22Leg, m21Leg, m3Leg, m5Leg, m4Leg, m9Leg,
   m12Leg, m13Leg, m14Leg, m15Leg, m16Leg, m17Leg, m18Leg, m20Leg, m24Leg, m26Leg, m27kLeg, m27tLeg, m27cLeg,
-  settleLeg,
+  settleLeg, betweenLeg,
 ];
 
 const DIRS = {
@@ -2926,6 +2983,10 @@ function createGame() {
     // The note play shows for its ticks: its text and ink.
     noteText: '', noteInk: 'm', noteTicks: 0,
     audio: createAudio(), keys: new Set(), cam: { x: 0, y: 0 },
+    // The camera and feet before the latest tick and the visit it ran in,
+    // which a frame between ticks blends from, and the camera and feet that
+    // frame draws. Built once, so no frame or tick allocates them.
+    prev: { x: 0, y: 0, fx: 0, fy: 0, visit: -1 }, drawn: { x: 0, y: 0, fx: 0, fy: 0 },
     // Key edges since the last tick: KEY bits pressed and released, and a jump press.
     press: 0, release: 0, jump: false,
     code: firstSeed(),
@@ -3556,7 +3617,8 @@ function tick(g) {
   if (g.screen !== 'play') return;
   // The note counts ticks of play alone, so a pause or a splash holds it.
   if (g.noteTicks > 0) g.noteTicks--;
-  const s = g.sim;
+  const s = g.sim, p = g.prev;
+  p.x = g.cam.x; p.y = g.cam.y; p.fx = feetX(s); p.fy = feetY(s); p.visit = g.visit;
   const was = tombCount(s), jars = s.jars.size, lead = s.recent[0];
   stepSim(g);
   // Each coin the step takes pushes one 'coin' event, which a drop of the tomb the explorer left does not undo.
@@ -3847,12 +3909,21 @@ function drawSplash(g) {
 const NOTE_Y = 14;
 const NOTE_AT = { align: 'center' };
 
-function draw(g, t) {
+/**
+ * Draws a frame at `t` s of wall time. In play, `alpha` in [0, 1) draws the
+ * camera and feet `alpha` of the way from before the latest tick to after it,
+ * where blendsTicks allows; 1, the default, draws the latest state.
+ */
+function draw(g, t, alpha = 1) {
   if (g.screen === 'title') drawTitle(g, t);
   else if (g.screen === 'load') drawLoad(g, t);
   else if (g.screen === 'pick') drawPick(g, t);
   else {
-    g.renderer.scene(g.sim, g.cam, t);
+    const s = g.sim, d = g.drawn, fx = feetX(s), fy = feetY(s);
+    if (alpha < 1 && blendsTicks(g.prev, g.screen, g.visit, fx, fy)) {
+      blendTicks(d, g.prev, g.cam, fx, fy, alpha);
+      g.renderer.scene(s, d, t, d.fx, d.fy);
+    } else g.renderer.scene(s, g.cam, t);
     g.renderer.hud(g.sim, g.wallet);
     if (g.screen === 'play') { if (g.noteTicks > 0) g.renderer.text(g.noteText, VIEW_W / 2, NOTE_Y, g.noteInk, NOTE_AT); }
     else if (g.screen === 'pause') drawPause(g, t);
@@ -3894,7 +3965,7 @@ function paintError(g) {
   r.text(errorLine(g.point && g.point.save, formatCode(g.code)), VIEW_W / 2, ERROR_STRIP.y + 8, 'o', { align: 'center' });
 }
 
-/** Fixed 60 Hz ticks, rendering once per animation frame. */
+/** Fixed 60 Hz ticks, rendering once per animation frame between the last two. */
 function runLoop(g) {
   guard = createGuard({
     request: (next) => requestAnimationFrame(next),
@@ -3916,7 +3987,7 @@ function runLoop(g) {
     guard.run(frame, now, (due) => {
       pollGamepads();
       while (due()) tick(g);
-      draw(g, now / 1000);
+      draw(g, now / 1000, guard.fraction());
     });
   }
   draw(g, 0);
