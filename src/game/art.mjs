@@ -408,23 +408,24 @@ export const ROCK = [
 ];
 
 // Back wall, seen through every passage at half the camera speed:
-// lapis-washed plaster with painted glyph registers.
+// lapis-washed plaster with painted glyph registers. The frame is closed on
+// all four sides; the wall build fills the '.' interior, leaving the tile opaque.
 export const WALL = [
   [
     'dddddddddddddddd',
     'deeeeeeeeeeeeeed',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
-    'de.............e',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
+    'de............ed',
     'deeeeeeeeeeeeeed',
     'dddddddddddddddd',
   ],

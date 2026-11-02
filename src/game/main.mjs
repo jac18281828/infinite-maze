@@ -317,6 +317,12 @@ function selftest() {
     const cam = { x: 0, y: 0 };
     snapCam(cam, sim);
     r.scene(sim, cam, 0);
+    // The display is never cleared by a frame, so any translucent back-wall pixel shows its history.
+    const wall = r.layers.wall;
+    const wallPx = wall.getContext('2d').getImageData(0, 0, wall.width, wall.height).data;
+    for (let i = 3; i < wallPx.length; i += 4) {
+      if (wallPx[i] !== 255) { finish('fail: every back-wall pixel is opaque'); return; }
+    }
     r.hud(sim);
     // Draws an unsaved run's pause screen over the scene, so a draw-time error fails the gate.
     drawPause({

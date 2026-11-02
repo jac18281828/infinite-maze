@@ -1011,6 +1011,8 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ['return kept && kept.code === save.code && kept.p === save.p;', 'return kept && kept.code === save.code;', /^fail: touch M22 another save code starts at TOMB 0/],
       ['    played: Date.now(),\n', '', /^fail: touch M24 its next write adds played/],
       ['  const n = playedSlot(SAVE_SLOTS.map(heldSave), true);\n  return n === null', '  const n = playedSlot(SAVE_SLOTS.map(heldSave), false);\n  return n === null', /^fail: touch M24 boot shows the seed of the most recently played/],
+      // The back wall's plaster leaves column 14 of every panel transparent.
+      ['const plaster = spriteCanvas(WALL[0]);', "const plaster = spriteCanvas(WALL[0].map((row) => row.slice(0, 14) + '.d'));", /^fail: every back-wall pixel is opaque/],
       ["  if (now !== null) r.text(playedLabel(played, now), 84, y + 9, lit ? 'm' : '9');", "  if (now !== null) r.text(playedLabel(played ?? 0, now), 84, y + 9, lit ? 'm' : '9');", /^fail: touch M24 its row shows no time/],
       // M26, the farming loops: the PAUSE writer and SAVE IN? from pause each pair the explorer's board with
       // the entry save point's net.

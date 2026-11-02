@@ -887,7 +887,8 @@ takes (§8 **Score.**), and adds one to the count.
 - The world, the back wall, the explorer, the light and the dust draw through
   one world-to-device transform at device-pixel precision: a layer's pixel
   edges and a sprite's outer edges land on the device pixels nearest their
-  true positions. The HUD and the screens stay on whole game pixels.
+  true positions. The HUD and the screens stay on whole game pixels. Every
+  back-wall pixel is opaque, so the display's history never shows through.
 - In touch mode (§9) the canvas's backing store is in device pixels and the
   page background fills the letterbox. When the safe area holds a whole scale
   of at least 6 device pixels per game pixel, the view scales by the largest
