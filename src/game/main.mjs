@@ -3978,9 +3978,9 @@ const NOTE_Y = 14;
 const NOTE_AT = { align: 'center' };
 
 /**
- * Draws a frame at `t` s of wall time. In play, `alpha` in [0, 1) draws the
- * camera and feet `alpha` of the way from before the latest tick to after it,
- * where blendsTicks allows; 1, the default, draws the latest state.
+ * Draws a frame at `t` s of wall time. In play, `alpha` draws the camera and
+ * feet `alpha` of the way from before the latest tick to after it, where
+ * blendsTicks allows; 1, the default, draws the latest state.
  */
 function draw(g, t, alpha = 1) {
   if (g.screen === 'title') drawTitle(g, t);
@@ -3988,7 +3988,7 @@ function draw(g, t, alpha = 1) {
   else if (g.screen === 'pick') drawPick(g, t);
   else {
     const s = g.sim, d = g.drawn, fx = feetX(s), fy = feetY(s);
-    if (alpha < 1 && blendsTicks(g.prev, g.screen, g.visit, fx, fy)) {
+    if (blendsTicks(g.prev, g.screen, g.visit, fx, fy, alpha)) {
       blendTicks(d, g.prev, g.cam, fx, fy, alpha);
       g.renderer.scene(s, d, t, d.fx, d.fy);
     } else g.renderer.scene(s, g.cam, t);

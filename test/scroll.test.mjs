@@ -203,7 +203,7 @@ function keep(prev, cam, sim, visit) {
  */
 function pick(h, screen, visit, cam, sim, alpha) {
   const fx = feetX(sim), fy = feetY(sim);
-  if (alpha < 1 && blendsTicks(h.prev, screen, visit, fx, fy)) {
+  if (blendsTicks(h.prev, screen, visit, fx, fy, alpha)) {
     blendTicks(h.drawn, h.prev, cam, fx, fy, alpha);
     return { cam: h.drawn, fx: h.drawn.fx, fy: h.drawn.fy, blended: true };
   }
@@ -224,7 +224,10 @@ function driveFrames(display, rate, place, ticks, frame) {
   snapCam(cam, sim);
   const guard = createGuard({ request: () => {}, screen: () => 'play', step: TICK, start: 0 });
   let k = 0, last = 0;
+  // Twice the frames the ticks take, plus a margin: a guard that never ticks fails here rather than hang.
+  const bound = Math.ceil(2 * ticks * TICK * rate.hz) + 60;
   for (let i = 1; k < ticks; i++) {
+    assert.ok(i <= bound, `driveFrames stalled: ${k} of ${ticks} ticks after ${i - 1} frames at ${rate.name}`);
     const now = (i * 1000) / rate.hz + (next() * 2 - 1) * rate.jitter;
     guard.run(() => {}, now, (due) => {
       while (due()) {
@@ -336,7 +339,25 @@ test('(F4) a frame of the snapshot\'s own play visit blends', () => {
   const at = pick(h, 'play', 3, cam, sim, 0.25);
   assert.equal(at.blended, true);
   assert.ok(Math.abs(at.cam.x - (h.prev.x + 0.2)) < 1e-9 && Math.abs(at.fx - (h.prev.fx + 0.4)) < 1e-9, `drawn at ${at.cam.x}, ${at.fx}`);
+  assert.equal(pick(h, 'play', 3, cam, sim, 0).blended, true, 'a frame at fraction 0 blends');
   assert.equal(pick(h, 'play', 3, cam, sim, 1).blended, false, 'a frame at fraction 1 draws the latest state itself');
+});
+
+test('(F4) a frame at a fraction of 1 or more, or below 0, draws the latest state', () => {
+  const { sim, cam, h } = f4();
+  for (const alpha of [1, 1.5, -0.25, -1e-9]) {
+    const at = pick(h, 'play', 3, cam, sim, alpha);
+    assert.ok(!at.blended && at.cam === cam && at.fx === feetX(sim) && at.fy === feetY(sim), `fraction ${alpha}`);
+  }
+});
+
+test('(F4) a frame stamped before the guard\'s start draws the latest state', () => {
+  const { sim, cam, h } = f4();
+  const guard = createGuard({ request: () => {}, screen: () => 'play', step: TICK, start: 100 });
+  guard.run(() => {}, 92, () => {});
+  assert.ok(guard.fraction() < 0, `fraction ${guard.fraction()}`);
+  const at = pick(h, 'play', 3, cam, sim, guard.fraction());
+  assert.ok(!at.blended && at.cam === cam && at.fx === feetX(sim) && at.fy === feetY(sim));
 });
 
 test('(F4) a frame of a later visit draws the latest state', () => {

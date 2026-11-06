@@ -295,7 +295,7 @@ test('a steady play frame allocates under 8 KB', (t) => {
     // Every draw of a play frame between ticks: the blend, the layers, the composite and the HUD.
     const frame = (f) => {
       const fx = feetX(sim), fy = feetY(sim);
-      if (blendsTicks(prev, 'play', 1, fx, fy)) blendTicks(drawn, prev, cam, fx, fy, 0.5);
+      if (blendsTicks(prev, 'play', 1, fx, fy, 0.5)) blendTicks(drawn, prev, cam, fx, fy, 0.5);
       renderer.scene(sim, drawn, f / 60, drawn.fx, drawn.fy);
       renderer.composite();
       renderer.hud(sim, 0);

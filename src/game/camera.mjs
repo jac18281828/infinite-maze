@@ -21,13 +21,16 @@ export function followCam(cam, sim) {
 }
 
 /**
- * Whether a frame on `screen` during play visit `visit` blends from the tick
- * snapshot `prev` { x, y, fx, fy, visit } to the latest feet (fx, fy): only in
- * play, in the visit the snapshot ran in, with the feet moved at most CELL on
- * each axis. A larger move is a placement, which draws as it stands.
+ * Whether a frame on `screen` during play visit `visit` at fraction `alpha`
+ * blends from the tick snapshot `prev` { x, y, fx, fy, visit } to the latest
+ * feet (fx, fy): only in play, in the visit the snapshot ran in, with the feet
+ * moved at most CELL on each axis and `alpha` in [0, 1). A larger move is a
+ * placement, which draws as it stands; so does a fraction of 1 or more, or
+ * below 0.
  */
-export function blendsTicks(prev, screen, visit, fx, fy) {
-  return screen === 'play' && prev.visit === visit && Math.abs(fx - prev.fx) <= CELL && Math.abs(fy - prev.fy) <= CELL;
+export function blendsTicks(prev, screen, visit, fx, fy, alpha) {
+  return screen === 'play' && prev.visit === visit && Math.abs(fx - prev.fx) <= CELL && Math.abs(fy - prev.fy) <= CELL
+    && alpha >= 0 && alpha < 1;
 }
 
 /**

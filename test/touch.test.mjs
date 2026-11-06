@@ -1024,7 +1024,7 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["(fromPad && e.code === 'KeyQ') || ", '', /^fail: touch M27C Select closes code entry holding a code/],
       ["  if (fromPad && e.code === 'KeyP') return;\n", '', /^fail: touch M27C Start and A type nothing in code entry/],
       // Frames between ticks: the fraction ignored, no snapshot, the latest camera, the sim's own feet.
-      ['if (alpha < 1 && blendsTicks(', 'if (false && blendsTicks(', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
+      ['if (blendsTicks(g.prev, g.screen, g.visit, fx, fy, alpha)) {', 'if (false && blendsTicks(g.prev, g.screen, g.visit, fx, fy, alpha)) {', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
       ['  p.x = g.cam.x; p.y = g.cam.y; p.fx = feetX(s); p.fy = feetY(s); p.visit = g.visit;\n', '', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
       ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, g.cam, t, d.fx, d.fy);', /^fail: touch between a frame halfway between ticks draws the camera halfway/],
       ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, d, t);', /^fail: touch between a frame halfway between ticks draws the feet halfway/],

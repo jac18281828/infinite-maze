@@ -1248,15 +1248,15 @@ next frame still runs, with no tick backlog. The line stays until the screen
 changes or a key is pressed, and an auto-repeat does not count.
 
 Controls are the arrow keys or WASD for movement, Space or Z to jump, M to
-mute, F to toggle the frame meter and P to pause and show the save code. P returns the player to where
-they were: from pause or the title it goes back to the game. Esc is the alias
-for players outside full screen, where a browser keeps Esc for itself and a
-real Esc press leaves full screen. The end screen takes Esc and Q to the
-title and takes no P, so a pause press as the torch dies cannot skip the end
-screen and its save code. The end screen ignores an auto-repeated Space, and
-the title, LOAD, the pick and every confirm ignore every auto-repeated key but
-the arrows, so a held key cannot skip a screen. Code entry takes every
-keydown, so a held Backspace deletes.
+mute, F to toggle the frame meter and P to pause and show the save code. P
+returns the player to where they were: from pause or the title it goes back to
+the game. Esc is the alias for players outside full screen, where a browser
+keeps Esc for itself and a real Esc press leaves full screen. The end screen
+takes Esc and Q to the title and takes no P, so a pause press as the torch dies
+cannot skip the end screen and its save code. The end screen ignores an
+auto-repeated Space, and the title, LOAD, the pick and every confirm ignore
+every auto-repeated key but the arrows, so a held key cannot skip a screen.
+Code entry takes every keydown, so a held Backspace deletes.
 
 On the milestone splash (§8), Enter continues the same run and Q goes to the
 title with the run open, as from pause: P there returns to it in play with its
@@ -1434,15 +1434,15 @@ until the first key, click or touch.
 counts the animation frames since its previous update. An update comes on the
 first frame 1000 ms or more past the previous one, so the reading changes at
 most once a second; turned on, the meter reads `-- FPS` until its first update.
-It is off at every load and never stored. F toggles it on every screen,
-confirms included, except in code entry, where F types; an auto-repeated F and
-a keydown with Ctrl, Meta or Alt held toggle nothing. A URL hash of exactly
-`#fps` turns it on at load, for a device with no F key. No soft key and no
-controller button reaches it. It is a canvas in the page's top-right corner,
-4 CSS px inside the safe area, outside the game canvas, in the soft keys' pixel
-font on the page background, and taps pass through it. It lies over the
-image's corner only where no margin lies there. It draws nothing into the game
-canvas.
+It is off at every load but `#fps`'s, and never stored. F toggles it on every
+screen, confirms included, except in code entry, where F types; an
+auto-repeated F and a keydown with Ctrl, Meta or Alt held toggle nothing. A URL
+hash of exactly `#fps` turns it on at load, for a device with no F key. No soft
+key and no controller button reaches it. It is a canvas in the page's top-right
+corner, 4 CSS px inside the safe area, outside the game canvas, in the soft
+keys' pixel font on the page background, and taps pass through it. It lies over
+the image's corner only where no margin lies there. It draws nothing into the
+game canvas.
 
 ## 10. Acceptance
 

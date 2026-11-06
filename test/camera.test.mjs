@@ -72,7 +72,7 @@ test('the blend between ticks and its choice allocate under 32 bytes a call', (t
   const alpha = new Float64Array(1);
   const blend = bytesPerCall(() => { blendTicks(drawn, prev, cam, fx, fy, alpha[0] = (alpha[0] + 0.37) % 1); });
   const sink = new Int32Array(1);
-  const choice = bytesPerCall(() => { sink[0] += blendsTicks(prev, 'play', 2, fx, fy) ? 1 : 0; });
+  const choice = bytesPerCall(() => { sink[0] += blendsTicks(prev, 'play', 2, fx, fy, alpha[0]) ? 1 : 0; });
   assert.ok(sink[0] > 0 && drawn.x !== 0);
   t.diagnostic(`blendTicks ${blend} bytes a call, blendsTicks ${choice}`);
   assert.ok(blend < 32, `blendTicks: ${blend} bytes a call`);
