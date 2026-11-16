@@ -918,11 +918,11 @@ test('M23 migration moves a save exactly as 4fffe2a\'s build stores it into slot
   const io = memoryIo();
   io.m.set(OLD_SLOT_KEY, LIVE_OLD_SLOT);
   assert.equal(migrateSaves(io), true);
-  const { record } = heldAt(io);
+  const { record, extra } = heldAt(io);
   assert.deepEqual(record, recordOf({
     id: '8RPX8C5J', save: 'YTHF-G2XB:0', level: 'medium', start: '0,0', net: 0, high: 0, wallet: 1, continues: 0, recent: [['0,0', '004']],
   }));
-  for (const dropped of ['solved', 'coins', 'tombs', 'record', 'played']) assert.ok(!(dropped in record), `${dropped} is omitted`);
+  assert.deepEqual(extra, {}, 'solved, tombs, record and coins are dropped, stored nowhere');
   assert.equal(io.load(MIGRATED_KEY), '1');
   assert.equal(io.m.get(OLD_SLOT_KEY), LIVE_OLD_SLOT, 'the old slot is unchanged');
   assert.deepEqual([heldAt(io, 2).state, heldAt(io, 3).state], ['absent', 'absent']);
