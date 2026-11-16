@@ -5,8 +5,7 @@
 // 60 Hz tick; no DOM.
 import { DX, DY, BW, NCELL } from '../world/board.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } from '../world/floor.mjs';
-import { tombOf } from '../world/world.mjs';
-import { coinId, tombItems, takenTombs } from './wallet.mjs';
+import { coinId, tombItems, idTomb, takenTombs } from './wallet.mjs';
 
 export const TICK = 1 / 60;
 export const CELL = 48;
@@ -127,13 +126,6 @@ export function runCarry(s) {
 
 const tombKey = (bd) => `${bd.u},${bd.v}`;
 
-/** The tomb "u,v" holding the board that coin or jar id `x,y,n` names. */
-function idTomb(world, id) {
-  const [x, y] = id.split(',', 2).map(Number);
-  const t = tombOf(x, y, world.size);
-  return `${t.u},${t.v}`;
-}
-
 /** The run's tomb count, which TOMB n shows: the high of its net. */
 export function tombCount(s) {
   return s.high;
@@ -196,13 +188,21 @@ export function createSim(world, start, carry = null, { collected = new Set() } 
   if (carry) {
     for (const id of carry.collected || []) if (recent.includes(idTomb(world, id))) collected.add(id);
     for (const id of carry.jars || []) if (recent.includes(idTomb(world, id))) s.jars.add(id);
-    for (const [key, list] of carry.items || []) if (recent.includes(key)) s.items.set(key, list);
-    for (const key of takenTombs(world, s.collected, s.jars)) {
-      if (recent.includes(key) && !s.items.has(key)) s.items.set(key, tombItems(world, key));
-    }
+    adoptItems(world, s, carry);
   }
   recordStood(s.trail, s.bd, s.cell);
   return s;
+}
+
+/**
+ * Fills `s.items` from `carry`: the carry's list for each recent tomb it lists,
+ * then a built list for each recent tomb that holds a take and has none.
+ */
+function adoptItems(world, s, carry) {
+  for (const [key, list] of carry.items || []) if (s.recent.includes(key)) s.items.set(key, list);
+  for (const key of takenTombs(world, s.collected, s.jars)) {
+    if (s.recent.includes(key) && !s.items.has(key)) s.items.set(key, tombItems(world, key));
+  }
 }
 
 export function canGo(s, d) {

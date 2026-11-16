@@ -1934,6 +1934,7 @@ function newSlotId() {
 const idList = (list, pattern) => Array.isArray(list) && list.every((id) => typeof id === 'string' && pattern.test(id));
 
 const BITS = /^[0-9a-f]*$/;
+const SET_BIT = /[1-9a-f]/;
 
 /**
  * The `recent` field as [[tomb, bits], …], latest tomb first. An absent field
@@ -2000,16 +2001,17 @@ function tombItems(world, key) {
   return { ids: [...jars, ...coins, ...rows], jarCount: jars.length };
 }
 
+/** The tomb "u,v" holding the board that coin or jar id `x,y,n` names. */
+function idTomb(world, id) {
+  const [x, y] = id.split(',', 2).map(Number);
+  const t = tombOf(x, y, world.size);
+  return `${t.u},${t.v}`;
+}
+
 /** The keys "u,v" of the tombs that hold an id of any set in `sets`, as a Set. */
 function takenTombs(world, ...sets) {
   const out = new Set();
-  for (const set of sets) {
-    for (const id of set) {
-      const [x, y] = id.split(',', 2).map(Number);
-      const t = tombOf(x, y, world.size);
-      out.add(`${t.u},${t.v}`);
-    }
-  }
+  for (const set of sets) for (const id of set) out.add(idTomb(world, id));
   return out;
 }
 
@@ -2050,7 +2052,7 @@ function packRecent(world, s) {
 function unpackRecent(world, recent) {
   const collected = new Set(), jars = new Set(), items = new Map();
   for (const [key, bits] of recent) {
-    if (!/[1-9a-f]/.test(bits)) continue;
+    if (!SET_BIT.test(bits)) continue;
     const list = tombItems(world, key);
     items.set(key, list);
     const { ids, jarCount } = list;
@@ -2254,21 +2256,19 @@ function migrateSaves(io) {
   for (const k of Object.values(LEGACY_KEYS)) io.remove(k);
   return true;
 }
-return { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, newSlotId, parseSlot, tombItems, takenTombs, packRecent, unpackRecent, legacySlot, SAVE_V, SAVE_SLOTS, saveKey, MIGRATED_KEY, parseSave, serializeSave, playedLabel, playedSlot, risePay, commitSave, takeSave, migrateSaves };
+return { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, newSlotId, parseSlot, tombItems, idTomb, takenTombs, packRecent, unpackRecent, legacySlot, SAVE_V, SAVE_SLOTS, saveKey, MIGRATED_KEY, parseSave, serializeSave, playedLabel, playedSlot, risePay, commitSave, takeSave, migrateSaves };
 })();
 
 // src/game/sim.mjs
 const __m10 = (() => {
 const { DX, DY, BW, NCELL } = __m2;
 const { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } = __m7;
-const { tombOf } = __m5;
-const { coinId, tombItems, takenTombs } = __m9;
+const { coinId, tombItems, idTomb, takenTombs } = __m9;
 // Simulation: the explorer moves along the cell graph, so motion admits
 // exactly the tree's links. A jump is an air state of the current cell: on
 // the ground or in the air, the explorer leaves a cell only along a link or
 // door. A let-go drops from a ladder over its lower cell. Runs on a fixed
 // 60 Hz tick; no DOM.
-
 
 
 
@@ -2392,13 +2392,6 @@ function runCarry(s) {
 
 const tombKey = (bd) => `${bd.u},${bd.v}`;
 
-/** The tomb "u,v" holding the board that coin or jar id `x,y,n` names. */
-function idTomb(world, id) {
-  const [x, y] = id.split(',', 2).map(Number);
-  const t = tombOf(x, y, world.size);
-  return `${t.u},${t.v}`;
-}
-
 /** The run's tomb count, which TOMB n shows: the high of its net. */
 function tombCount(s) {
   return s.high;
@@ -2461,13 +2454,21 @@ function createSim(world, start, carry = null, { collected = new Set() } = {}) {
   if (carry) {
     for (const id of carry.collected || []) if (recent.includes(idTomb(world, id))) collected.add(id);
     for (const id of carry.jars || []) if (recent.includes(idTomb(world, id))) s.jars.add(id);
-    for (const [key, list] of carry.items || []) if (recent.includes(key)) s.items.set(key, list);
-    for (const key of takenTombs(world, s.collected, s.jars)) {
-      if (recent.includes(key) && !s.items.has(key)) s.items.set(key, tombItems(world, key));
-    }
+    adoptItems(world, s, carry);
   }
   recordStood(s.trail, s.bd, s.cell);
   return s;
+}
+
+/**
+ * Fills `s.items` from `carry`: the carry's list for each recent tomb it lists,
+ * then a built list for each recent tomb that holds a take and has none.
+ */
+function adoptItems(world, s, carry) {
+  for (const [key, list] of carry.items || []) if (s.recent.includes(key)) s.items.set(key, list);
+  for (const key of takenTombs(world, s.collected, s.jars)) {
+    if (s.recent.includes(key) && !s.items.has(key)) s.items.set(key, tombItems(world, key));
+  }
 }
 
 function canGo(s, d) {

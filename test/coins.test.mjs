@@ -464,7 +464,7 @@ function orderOf(world, key) {
   return { ids: [...jars, ...coins, ...rows], jarCount: jars.length };
 }
 
-/** The record's `recent` as the eager build wrote it: each recent tomb's bits from its `orderOf` list, whatever the sim holds. */
+/** The record's `recent` with each recent tomb's bits read from a list `orderOf` builds whole, whatever the sim holds. */
 function referencePack(world, s, lists = new Map()) {
   return s.recent.map((key) => {
     if (!lists.has(key)) lists.set(key, orderOf(world, key));
@@ -579,7 +579,7 @@ test('a run keeps the coins and jars of its two recent tombs: A, B, A keeps both
   let packs = 0;
   const seen = () => {
     events();
-    assert.deepEqual(packRecent(world, sim), referencePack(world, sim, lists), 'the slot packs the bits the eager build wrote');
+    assert.deepEqual(packRecent(world, sim), referencePack(world, sim, lists), 'the slot packs the bits of a whole list');
     packs++;
   };
   assert.deepEqual(sim.recent, [A]);
@@ -748,6 +748,30 @@ test('packRecent builds no board: a sim whose older recent tomb lies two tombs a
   assert.deepEqual(packed, [[C, ''], [A, packRecent(world, { recent: [A], collected: sim.collected, jars: sim.jars, items: new Map() })[0][1]]]);
   assert.notEqual(packed[1][1], '', 'A\'s takes are packed');
   assert.ok(world.boardsBuilt() > built, 'a pack with no stored list rebuilds the dropped boards');
+});
+
+test('a carry hands its lists over: createSim of a runCarry shares the carried list and builds no board', () => {
+  const world = createWorld(CODE, { difficulty: 'medium' }), { A, C } = route(world);
+  const { ids, jarCount } = orderOf(world, A);
+  const [u, v] = C.split(',').map(Number);
+  const start = entryOf(world, C);
+  const first = createSim(world, start, { recent: [A], collected: new Set([ids[jarCount]]), jars: new Set([ids[0]]) });
+  assert.ok(first.items.has(A), 'a carried take brings its tomb\'s list');
+  world.retain(u, v);
+  const built = world.boardsBuilt();
+  const next = createSim(world, start, runCarry(first));
+  assert.equal(world.boardsBuilt(), built, 'the carried list builds no board');
+  assert.equal(next.items.get(A), first.items.get(A), 'the list is the carried one');
+  assert.notEqual(next.items, first.items, 'the Map is the sim\'s own');
+});
+
+test('unpackRecent lists no tomb whose bits are "" or all 0 digits and builds no board for it', () => {
+  const world = createWorld(CODE, { difficulty: 'medium' }), { A, B } = route(world);
+  const built = world.boardsBuilt();
+  const out = unpackRecent(world, [[A, ''], [B, '000']]);
+  assert.equal(out.items.size, 0);
+  assert.deepEqual(out.recent, [A, B]);
+  assert.equal(world.boardsBuilt(), built, 'unpacking builds nothing');
 });
 
 test('a same-id write stores the writer\'s recent tombs, whatever the stored record held', () => {

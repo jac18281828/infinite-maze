@@ -103,6 +103,7 @@ export function newSlotId() {
 const idList = (list, pattern) => Array.isArray(list) && list.every((id) => typeof id === 'string' && pattern.test(id));
 
 const BITS = /^[0-9a-f]*$/;
+const SET_BIT = /[1-9a-f]/;
 
 /**
  * The `recent` field as [[tomb, bits], …], latest tomb first. An absent field
@@ -169,16 +170,17 @@ export function tombItems(world, key) {
   return { ids: [...jars, ...coins, ...rows], jarCount: jars.length };
 }
 
+/** The tomb "u,v" holding the board that coin or jar id `x,y,n` names. */
+export function idTomb(world, id) {
+  const [x, y] = id.split(',', 2).map(Number);
+  const t = tombOf(x, y, world.size);
+  return `${t.u},${t.v}`;
+}
+
 /** The keys "u,v" of the tombs that hold an id of any set in `sets`, as a Set. */
 export function takenTombs(world, ...sets) {
   const out = new Set();
-  for (const set of sets) {
-    for (const id of set) {
-      const [x, y] = id.split(',', 2).map(Number);
-      const t = tombOf(x, y, world.size);
-      out.add(`${t.u},${t.v}`);
-    }
-  }
+  for (const set of sets) for (const id of set) out.add(idTomb(world, id));
   return out;
 }
 
@@ -219,7 +221,7 @@ export function packRecent(world, s) {
 export function unpackRecent(world, recent) {
   const collected = new Set(), jars = new Set(), items = new Map();
   for (const [key, bits] of recent) {
-    if (!/[1-9a-f]/.test(bits)) continue;
+    if (!SET_BIT.test(bits)) continue;
     const list = tombItems(world, key);
     items.set(key, list);
     const { ids, jarCount } = list;
