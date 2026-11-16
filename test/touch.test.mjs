@@ -1023,11 +1023,12 @@ test('the self-test touch leg passes, and fails without the touch layer, with a 
       ["    { id: 'begin', label: 'BEGIN', ...K('Space', ' ') },", "    { id: 'begin', label: 'BEGIN', ...K('Enter', 'Enter') },", /^fail: touch M27T the BEGIN key begins with the cursor on LOAD/],
       ["(fromPad && e.code === 'KeyQ') || ", '', /^fail: touch M27C Select closes code entry holding a code/],
       ["  if (fromPad && e.code === 'KeyP') return;\n", '', /^fail: touch M27C Start and A type nothing in code entry/],
-      // Frames between ticks: the fraction ignored, no snapshot, the latest camera, the sim's own feet.
+      // Frames between ticks: the fraction ignored, a constant fraction, no snapshot, the latest camera, the sim's own feet.
       ['if (blendsTicks(g.prev, g.screen, g.visit, fx, fy, alpha)) {', 'if (false && blendsTicks(g.prev, g.screen, g.visit, fx, fy, alpha)) {', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
       ['  p.x = g.cam.x; p.y = g.cam.y; p.fx = feetX(s); p.fy = feetY(s); p.visit = g.visit;\n', '', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
       ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, g.cam, t, d.fx, d.fy);', /^fail: touch between a frame halfway between ticks draws the camera halfway/],
       ['g.renderer.scene(s, d, t, d.fx, d.fy);', 'g.renderer.scene(s, d, t);', /^fail: touch between a frame halfway between ticks draws the feet halfway/],
+      ['if (blendsTicks(g.prev, g.screen, g.visit, fx, fy, alpha)) {', 'if (blendsTicks(g.prev, g.screen, g.visit, fx, fy, 0)) {', /^fail: touch between a frame at a negative fraction draws the feet at the latest tick/],
       // The frame meter: F, its guards, the counter's window, the view and the hidden rule.
       ['if (!e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) meter.toggle();', 'if (false) meter.toggle();', /^fail: touch meter F shows and hides the meter on title/],
       ['if (!e.repeat && !e.ctrlKey', 'if (!e.ctrlKey', /^fail: touch meter an auto-repeated F, Ctrl-F, Cmd-F and Alt-F leave the meter off/],

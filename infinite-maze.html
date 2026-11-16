@@ -9764,14 +9764,16 @@ function settleDraws(g, t, what) {
 
 /**
  * Frames between ticks, at a tick that moves only the feet and one that moves
- * only the camera: a draw at fraction 0.5 differs from one at 1, and after a
- * screen write back to play, a new visit, the two match. Each move spans at
+ * only the camera: a draw at fraction 0.5 differs from one at 1, a draw at a
+ * negative fraction matches it, and after a screen write back to play, a new
+ * visit, the draws at 0.5 and 1 match. Each move spans at
  * least 2 game px, so its half step moves a device pixel at any scale.
  */
 function betweenLeg(g, { need }) {
   const check = (what) => {
     settleDraws(g, 1, 'between');
     need(!samePixels(drawnPixels(g, 1, 0.5), drawnPixels(g, 1)), `between a frame halfway between ticks draws the ${what} halfway`);
+    need(samePixels(drawnPixels(g, 1, -0.25), drawnPixels(g, 1)), `between a frame at a negative fraction draws the ${what} at the latest tick`);
     g.screen = 'play';
     settleDraws(g, 1, 'between');
     need(samePixels(drawnPixels(g, 1, 0.5), drawnPixels(g, 1)), `between a frame of a new play visit draws the ${what} at the latest tick`);
