@@ -461,7 +461,22 @@ function orderOf(world, key) {
     for (const it of floorItems(world, bd)) (it.kind === 'oil' ? jars : coins).push(coinId(bd, it.cell));
     for (const cell of coinRows(world, bd)) for (let k = 0; k < ROW_COINS; k++) rows.push(coinId(bd, cell, k));
   }
-  return { ids: [...jars, ...coins, ...rows], jars: jars.length };
+  return { ids: [...jars, ...coins, ...rows], jarCount: jars.length };
+}
+
+/** The record's `recent` as the eager build wrote it: each recent tomb's bits from its `orderOf` list, whatever the sim holds. */
+function referencePack(world, s, lists = new Map()) {
+  return s.recent.map((key) => {
+    if (!lists.has(key)) lists.set(key, orderOf(world, key));
+    const { ids, jarCount } = lists.get(key);
+    let bits = '';
+    for (let k = 0; k < ids.length; k += 4) {
+      let digit = 0;
+      for (let m = 0; m < 4 && k + m < ids.length; m++) if ((k + m < jarCount ? s.jars : s.collected).has(ids[k + m])) digit |= 1 << m;
+      bits += digit.toString(16);
+    }
+    return [key, bits.replace(/0+$/, '')];
+  });
 }
 
 /** Board, cell and floor point of coin or jar `id`: `x,y,cell` for a dead end, `x,y,NCELL + 3 cell + i` for a row coin. */
@@ -556,11 +571,17 @@ function coinEvents(sim) {
 
 test('a run keeps the coins and jars of its two recent tombs: A, B, A keeps both takes, A, B, C lays A\'s back and the walk back takes them afresh', () => {
   const world = worlds.medium, { A, B, C, qa, qb, gate } = route(world);
-  const { ids, jars } = orderOf(world, A);
-  const coin = ids[jars], jar = ids[0];
+  const { ids, jarCount } = orderOf(world, A);
+  const coin = ids[jarCount], jar = ids[0];
   assert.equal(tombKeyOf(world, coin), A);
   const sim = createSim(world, world.startPoint());
-  const seen = coinEvents(sim);
+  const lists = new Map(), events = coinEvents(sim);
+  let packs = 0;
+  const seen = () => {
+    events();
+    assert.deepEqual(packRecent(world, sim), referencePack(world, sim, lists), 'the slot packs the bits the eager build wrote');
+    packs++;
+  };
   assert.deepEqual(sim.recent, [A]);
   reach(sim, coin, seen);
   reach(sim, jar, seen);
@@ -585,11 +606,17 @@ test('a run keeps the coins and jars of its two recent tombs: A, B, A keeps both
   reach(sim, jar, seen);
   assert.ok(sim.jars.has(jar), 'the jar is taken again');
   assert.deepEqual(sim.recent, [A, B]);
+  assert.ok(packs > 100, 'every tick packed');
+  const written = packRecent(world, sim);
+  assert.notEqual(written[0][1], '', 'the slot holds takes');
+  const back = createSim(world, entryOf(world, A), unpackRecent(world, written));
+  assert.deepEqual(back.recent, sim.recent);
+  assert.deepEqual(packRecent(world, back), written, 'a restored slot packs back to the bits it was written with');
 });
 
 test('a sim built from a carry applies the recent tombs to the tomb it starts in', () => {
   const world = worlds.medium, { A, B, C } = route(world);
-  const pick = (key) => { const { ids, jars } = orderOf(world, key); return { coin: ids[jars], jar: ids[0] }; };
+  const pick = (key) => { const { ids, jarCount } = orderOf(world, key); return { coin: ids[jarCount], jar: ids[0] }; };
   const a = pick(A), b = pick(B);
   const carry = () => ({ recent: [B, A], collected: new Set([a.coin, b.coin]), jars: new Set([a.jar, b.jar]) });
   const sorted = (set) => [...set].sort();
@@ -647,11 +674,11 @@ test('a reload keeps the previous tomb\'s jar taken: the slot unpacks to a sim i
 test('packRecent sets bit k of a recent tomb for item k of the slot\'s order, latest tomb first, and a slot round-trips them', () => {
   const world = worlds.medium, { A, B } = route(world);
   const order = { [A]: orderOf(world, A), [B]: orderOf(world, B) };
-  assert.ok(order[A].jars > 5 && order[A].ids.length > order[A].jars + 4 && order[B].ids.length > order[B].jars + 4, 'jars, dead-end coins and rows');
+  assert.ok(order[A].jarCount > 5 && order[A].ids.length > order[A].jarCount + 4 && order[B].ids.length > order[B].jarCount + 4, 'jars, dead-end coins and rows');
   const made = (recent, taken) => {
     const collected = new Set(), jars = new Set();
-    for (const [key, list] of Object.entries(taken)) for (const k of list) (k < order[key].jars ? jars : collected).add(order[key].ids[k]);
-    return { recent, collected, jars };
+    for (const [key, list] of Object.entries(taken)) for (const k of list) (k < order[key].jarCount ? jars : collected).add(order[key].ids[k]);
+    return { recent, collected, jars, items: new Map() };
   };
   assert.deepEqual(packRecent(world, made([A, B], {})), [[A, ''], [B, '']], 'nothing taken writes "" for every recent tomb');
   assert.deepEqual(packRecent(world, made([B, A], {})).map(([key]) => key), [B, A], 'latest first');
@@ -664,7 +691,7 @@ test('packRecent sets bit k of a recent tomb for item k of the slot\'s order, la
     }
   }
   // Row coins come last, by board, cell and coin; a jar's id never appears among the coins' bits.
-  const rows = order[A].ids.slice(order[A].jars).filter((id) => Number(id.split(',')[2]) >= NCELL);
+  const rows = order[A].ids.slice(order[A].jarCount).filter((id) => Number(id.split(',')[2]) >= NCELL);
   assert.deepEqual(order[A].ids.slice(-rows.length), rows, 'row coins close the list');
   // Round trip through the record's text.
   const run = made([B, A], {
@@ -709,16 +736,16 @@ test('the old slot reads recent absent, or malformed in any form of R8, as no re
 
 test('packRecent builds no board: a sim whose older recent tomb lies two tombs away packs after retain drops that tomb', () => {
   const world = createWorld(CODE, { difficulty: 'medium' }), { A, C } = route(world);
-  const { ids, jars } = orderOf(world, A);
+  const { ids, jarCount } = orderOf(world, A);
   const [u, v] = C.split(',').map(Number);
   // R5's third case: the sim starts in C, two tombs from the carried latest, A.
-  const sim = createSim(world, entryOf(world, C), { recent: [A], collected: new Set([ids[jars]]), jars: new Set([ids[0]]) });
+  const sim = createSim(world, entryOf(world, C), { recent: [A], collected: new Set([ids[jarCount]]), jars: new Set([ids[0]]) });
   assert.deepEqual(sim.recent, [C, A]);
   world.retain(u, v);
   const built = world.boardsBuilt();
   const packed = packRecent(world, sim);
   assert.equal(world.boardsBuilt(), built, 'packing builds nothing');
-  assert.deepEqual(packed, [[C, ''], [A, packRecent(world, { recent: [A], collected: sim.collected, jars: sim.jars })[0][1]]]);
+  assert.deepEqual(packed, [[C, ''], [A, packRecent(world, { recent: [A], collected: sim.collected, jars: sim.jars, items: new Map() })[0][1]]]);
   assert.notEqual(packed[1][1], '', 'A\'s takes are packed');
   assert.ok(world.boardsBuilt() > built, 'a pack with no stored list rebuilds the dropped boards');
 });

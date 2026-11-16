@@ -3165,6 +3165,7 @@ function beginSaved(g, p, run) {
   begin(g, p, run && {
     time: 0, entry: run.entry, high: run.high, start: run.start, lastEntry: p, continues: run.continues,
     recent: run.recent, collected: run.collected, jars: run.jars,
+    items: run.items,
   });
   g.earned = 0;
 }

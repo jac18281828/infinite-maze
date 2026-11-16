@@ -1979,11 +1979,11 @@ function parseSlot(text) {
 }
 
 /**
- * The items of tomb `key` ("u,v") in the record's bit order, as { ids, jars }:
- * the ids of its jars, then its dead-end coins, then its row coins, each kind
- * by board index, cell and row coin; the first `jars` ids are jars. It builds
- * the tomb's boards the world has dropped, so a run reads it once while the
- * tomb stays recent.
+ * The items of tomb `key` ("u,v") in the record's bit order, as { ids,
+ * jarCount }: the ids of its jars, then its dead-end coins, then its row
+ * coins, each kind by board index, cell and row coin; the first `jarCount` ids
+ * are jars. It builds the tomb's boards the world has dropped, so a sim keeps
+ * the list of a tomb while it stays recent.
  */
 function tombItems(world, key) {
   const [u, v] = key.split(',').map(Number);
@@ -1997,23 +1997,43 @@ function tombItems(world, key) {
     }
     for (const cell of coinRows(world, bd)) for (let j = 0; j < ROW_COINS; j++) rows.push(coinId(bd, cell, j));
   }
-  return { ids: [...jars, ...coins, ...rows], jars: jars.length };
+  return { ids: [...jars, ...coins, ...rows], jarCount: jars.length };
+}
+
+/** The keys "u,v" of the tombs that hold an id of any set in `sets`, as a Set. */
+function takenTombs(world, ...sets) {
+  const out = new Set();
+  for (const set of sets) {
+    for (const id of set) {
+      const [x, y] = id.split(',', 2).map(Number);
+      const t = tombOf(x, y, world.size);
+      out.add(`${t.u},${t.v}`);
+    }
+  }
+  return out;
 }
 
 /**
- * The record's `recent` for sim `s`: per recent tomb, latest first, a pair
- * [tomb, bits]. Item k of the tomb's `tombItems` is hex digit k >> 2, value
- * 1 << (k & 3), set when taken; trailing 0 digits drop. It reads the sim's
- * stored item lists and builds a board only for a tomb the sim holds none of.
+ * The record's `recent` for sim `s` = { recent, collected, jars, items }: per
+ * recent tomb, latest first, a pair [tomb, bits]. Item k of the tomb's
+ * `tombItems` is hex digit k >> 2, value 1 << (k & 3), set when taken;
+ * trailing 0 digits drop. A tomb holding no take packs to "" and builds
+ * nothing; a tomb holding one reads its list from `s.items`, a Map from a
+ * tomb key to its `tombItems` list, and builds and stores the list there when
+ * it has none.
  */
 function packRecent(world, s) {
+  const held = takenTombs(world, s.collected, s.jars);
   return s.recent.map((key) => {
-    const { ids, jars } = (s.items && s.items.get(key)) || tombItems(world, key);
+    if (!held.has(key)) return [key, ''];
+    let list = s.items.get(key);
+    if (!list) s.items.set(key, list = tombItems(world, key));
+    const { ids, jarCount } = list;
     let bits = '';
     for (let k = 0; k < ids.length; k += 4) {
       let digit = 0;
       for (let m = 0; m < 4 && k + m < ids.length; m++) {
-        if ((k + m < jars ? s.jars : s.collected).has(ids[k + m])) digit |= 1 << m;
+        if ((k + m < jarCount ? s.jars : s.collected).has(ids[k + m])) digit |= 1 << m;
       }
       bits += digit.toString(16);
     }
@@ -2022,18 +2042,23 @@ function packRecent(world, s) {
 }
 
 /**
- * A parsed `recent` as { recent, collected, jars }, the takes `createSim`'s
- * carry holds. A bit past a tomb's last item is ignored.
+ * A parsed `recent` as { recent, collected, jars, items }, the takes and lists
+ * `createSim`'s carry holds. `items` holds the `tombItems` list of each tomb
+ * whose bits set an item; a tomb whose bits are "" or all 0 digits builds
+ * none. A bit past a tomb's last item is ignored.
  */
 function unpackRecent(world, recent) {
-  const collected = new Set(), jars = new Set();
+  const collected = new Set(), jars = new Set(), items = new Map();
   for (const [key, bits] of recent) {
-    const { ids, jars: n } = tombItems(world, key);
+    if (!/[1-9a-f]/.test(bits)) continue;
+    const list = tombItems(world, key);
+    items.set(key, list);
+    const { ids, jarCount } = list;
     for (let k = 0; k < ids.length; k++) {
-      if ((parseInt(bits[k >> 2] ?? '0', 16) >> (k & 3)) & 1) (k < n ? jars : collected).add(ids[k]);
+      if ((parseInt(bits[k >> 2] ?? '0', 16) >> (k & 3)) & 1) (k < jarCount ? jars : collected).add(ids[k]);
     }
   }
-  return { recent: recent.map(([key]) => key), collected, jars };
+  return { recent: recent.map(([key]) => key), collected, jars, items };
 }
 
 /**
@@ -2229,7 +2254,7 @@ function migrateSaves(io) {
   for (const k of Object.values(LEGACY_KEYS)) io.remove(k);
   return true;
 }
-return { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, newSlotId, parseSlot, tombItems, packRecent, unpackRecent, legacySlot, SAVE_V, SAVE_SLOTS, saveKey, MIGRATED_KEY, parseSave, serializeSave, playedLabel, playedSlot, risePay, commitSave, takeSave, migrateSaves };
+return { OLD_SLOT_KEY, LEGACY_KEYS, COIN_RATE, milestonePayout, coinKey, coinId, parseWallet, TOMB_ID, parseIdSets, parsePaid, newSlotId, parseSlot, tombItems, takenTombs, packRecent, unpackRecent, legacySlot, SAVE_V, SAVE_SLOTS, saveKey, MIGRATED_KEY, parseSave, serializeSave, playedLabel, playedSlot, risePay, commitSave, takeSave, migrateSaves };
 })();
 
 // src/game/sim.mjs
@@ -2237,7 +2262,7 @@ const __m10 = (() => {
 const { DX, DY, BW, NCELL } = __m2;
 const { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } = __m7;
 const { tombOf } = __m5;
-const { coinId, tombItems } = __m9;
+const { coinId, tombItems, takenTombs } = __m9;
 // Simulation: the explorer moves along the cell graph, so motion admits
 // exactly the tree's links. A jump is an air state of the current cell: on
 // the ground or in the air, the explorer leaves a cell only along a link or
@@ -2354,13 +2379,14 @@ function recordWalk(trail, bd, cell, d, to) {
 
 /**
  * Everything a Continue carries into the next run: the entry save point and
- * the high, its start tomb, continue count and the takes of the two recent
- * tombs, which read as where the explorer has just been.
+ * the high, its start tomb, continue count, the takes of the two recent
+ * tombs, which read as where the explorer has just been, and the item lists
+ * the sim holds for them, so the next run builds none twice.
  */
 function runCarry(s) {
   return {
     time: s.time, entry: s.entry, high: s.high, lastEntry: s.lastEntry, trail: s.trail, start: s.start, continues: s.continues,
-    recent: s.recent, collected: s.collected, jars: s.jars,
+    recent: s.recent, collected: s.collected, jars: s.jars, items: s.items,
   };
 }
 
@@ -2388,7 +2414,11 @@ function tombCount(s) {
  * starts in: when it is one of them it moves to the front and both stay;
  * otherwise it comes first, the carried latest follows and the older tomb's
  * takes lie back. A carry's entry save point gives the run its net, and its
- * high carries; without one both start at 0.
+ * high carries; without one both start at 0. The sim's `items` is a new Map
+ * from a recent tomb's key to its item list (`tombItems`): it holds the
+ * carry's list for each recent tomb the carry lists, and a built list for each
+ * recent tomb that holds a carried take and arrives without one; a sim
+ * without a carry builds none.
  */
 function createSim(world, start, carry = null, { collected = new Set() } = {}) {
   const first = tombKey(start.board);
@@ -2421,16 +2451,20 @@ function createSim(world, start, carry = null, { collected = new Set() } = {}) {
     collected,
     // The oil jars taken in the recent tombs, keyed as coins are.
     jars: new Set(),
-    // The recent tombs' keys "u,v", the explorer's tomb first; `items` holds each one's item list,
-    // read once while the tomb stays recent so that a slot write builds no board.
+    // The recent tombs' keys "u,v", the explorer's tomb first; `items` holds the item list of each one
+    // that has been needed, built once while the tomb stays recent by the write that packs a take in it.
     recent,
-    items: new Map(recent.map((key) => [key, tombItems(world, key)])),
+    items: new Map(),
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
   if (carry) {
     for (const id of carry.collected || []) if (recent.includes(idTomb(world, id))) collected.add(id);
     for (const id of carry.jars || []) if (recent.includes(idTomb(world, id))) s.jars.add(id);
+    for (const [key, list] of carry.items || []) if (recent.includes(key)) s.items.set(key, list);
+    for (const key of takenTombs(world, s.collected, s.jars)) {
+      if (recent.includes(key) && !s.items.has(key)) s.items.set(key, tombItems(world, key));
+    }
   }
   recordStood(s.trail, s.bd, s.cell);
   return s;
@@ -2493,7 +2527,8 @@ function forget(s, set, key) {
 
 /**
  * The explorer moves from tomb `from` to the tomb of `bd`: the list becomes
- * [bd's tomb, from], and a tomb that leaves it lays its takes back.
+ * [bd's tomb, from], and a tomb that leaves it lays its takes back and drops
+ * its item list. It builds no list.
  */
 function enterTomb(s, from, bd) {
   const recent = [tombKey(bd), tombKey(from)];
@@ -2503,7 +2538,6 @@ function enterTomb(s, from, bd) {
     forget(s, s.collected, key);
     forget(s, s.jars, key);
   }
-  for (const key of recent) if (!s.items.has(key)) s.items.set(key, tombItems(s.world, key));
   s.recent = recent;
 }
 
@@ -10061,6 +10095,7 @@ function beginSaved(g, p, run) {
   begin(g, p, run && {
     time: 0, entry: run.entry, high: run.high, start: run.start, lastEntry: p, continues: run.continues,
     recent: run.recent, collected: run.collected, jars: run.jars,
+    items: run.items,
   });
   g.earned = 0;
 }

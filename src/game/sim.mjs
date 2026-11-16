@@ -6,7 +6,7 @@
 import { DX, DY, BW, NCELL } from '../world/board.mjs';
 import { floorItems, itemSpot, coinRows, rowSpot, ROW_COINS } from '../world/floor.mjs';
 import { tombOf } from '../world/world.mjs';
-import { coinId, tombItems } from './wallet.mjs';
+import { coinId, tombItems, takenTombs } from './wallet.mjs';
 
 export const TICK = 1 / 60;
 export const CELL = 48;
@@ -114,13 +114,14 @@ function recordWalk(trail, bd, cell, d, to) {
 
 /**
  * Everything a Continue carries into the next run: the entry save point and
- * the high, its start tomb, continue count and the takes of the two recent
- * tombs, which read as where the explorer has just been.
+ * the high, its start tomb, continue count, the takes of the two recent
+ * tombs, which read as where the explorer has just been, and the item lists
+ * the sim holds for them, so the next run builds none twice.
  */
 export function runCarry(s) {
   return {
     time: s.time, entry: s.entry, high: s.high, lastEntry: s.lastEntry, trail: s.trail, start: s.start, continues: s.continues,
-    recent: s.recent, collected: s.collected, jars: s.jars,
+    recent: s.recent, collected: s.collected, jars: s.jars, items: s.items,
   };
 }
 
@@ -148,7 +149,11 @@ export function tombCount(s) {
  * starts in: when it is one of them it moves to the front and both stay;
  * otherwise it comes first, the carried latest follows and the older tomb's
  * takes lie back. A carry's entry save point gives the run its net, and its
- * high carries; without one both start at 0.
+ * high carries; without one both start at 0. The sim's `items` is a new Map
+ * from a recent tomb's key to its item list (`tombItems`): it holds the
+ * carry's list for each recent tomb the carry lists, and a built list for each
+ * recent tomb that holds a carried take and arrives without one; a sim
+ * without a carry builds none.
  */
 export function createSim(world, start, carry = null, { collected = new Set() } = {}) {
   const first = tombKey(start.board);
@@ -181,16 +186,20 @@ export function createSim(world, start, carry = null, { collected = new Set() } 
     collected,
     // The oil jars taken in the recent tombs, keyed as coins are.
     jars: new Set(),
-    // The recent tombs' keys "u,v", the explorer's tomb first; `items` holds each one's item list,
-    // read once while the tomb stays recent so that a slot write builds no board.
+    // The recent tombs' keys "u,v", the explorer's tomb first; `items` holds the item list of each one
+    // that has been needed, built once while the tomb stays recent by the write that packs a take in it.
     recent,
-    items: new Map(recent.map((key) => [key, tombItems(world, key)])),
+    items: new Map(),
     events: [],
     trail: carry && carry.trail ? carry.trail : createTrail(),
   };
   if (carry) {
     for (const id of carry.collected || []) if (recent.includes(idTomb(world, id))) collected.add(id);
     for (const id of carry.jars || []) if (recent.includes(idTomb(world, id))) s.jars.add(id);
+    for (const [key, list] of carry.items || []) if (recent.includes(key)) s.items.set(key, list);
+    for (const key of takenTombs(world, s.collected, s.jars)) {
+      if (recent.includes(key) && !s.items.has(key)) s.items.set(key, tombItems(world, key));
+    }
   }
   recordStood(s.trail, s.bd, s.cell);
   return s;
@@ -253,7 +262,8 @@ function forget(s, set, key) {
 
 /**
  * The explorer moves from tomb `from` to the tomb of `bd`: the list becomes
- * [bd's tomb, from], and a tomb that leaves it lays its takes back.
+ * [bd's tomb, from], and a tomb that leaves it lays its takes back and drops
+ * its item list. It builds no list.
  */
 function enterTomb(s, from, bd) {
   const recent = [tombKey(bd), tombKey(from)];
@@ -263,7 +273,6 @@ function enterTomb(s, from, bd) {
     forget(s, s.collected, key);
     forget(s, s.jars, key);
   }
-  for (const key of recent) if (!s.items.has(key)) s.items.set(key, tombItems(s.world, key));
   s.recent = recent;
 }
 

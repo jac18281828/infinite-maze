@@ -148,11 +148,11 @@ export function parseSlot(text) {
 }
 
 /**
- * The items of tomb `key` ("u,v") in the record's bit order, as { ids, jars }:
- * the ids of its jars, then its dead-end coins, then its row coins, each kind
- * by board index, cell and row coin; the first `jars` ids are jars. It builds
- * the tomb's boards the world has dropped, so a run reads it once while the
- * tomb stays recent.
+ * The items of tomb `key` ("u,v") in the record's bit order, as { ids,
+ * jarCount }: the ids of its jars, then its dead-end coins, then its row
+ * coins, each kind by board index, cell and row coin; the first `jarCount` ids
+ * are jars. It builds the tomb's boards the world has dropped, so a sim keeps
+ * the list of a tomb while it stays recent.
  */
 export function tombItems(world, key) {
   const [u, v] = key.split(',').map(Number);
@@ -166,23 +166,43 @@ export function tombItems(world, key) {
     }
     for (const cell of coinRows(world, bd)) for (let j = 0; j < ROW_COINS; j++) rows.push(coinId(bd, cell, j));
   }
-  return { ids: [...jars, ...coins, ...rows], jars: jars.length };
+  return { ids: [...jars, ...coins, ...rows], jarCount: jars.length };
+}
+
+/** The keys "u,v" of the tombs that hold an id of any set in `sets`, as a Set. */
+export function takenTombs(world, ...sets) {
+  const out = new Set();
+  for (const set of sets) {
+    for (const id of set) {
+      const [x, y] = id.split(',', 2).map(Number);
+      const t = tombOf(x, y, world.size);
+      out.add(`${t.u},${t.v}`);
+    }
+  }
+  return out;
 }
 
 /**
- * The record's `recent` for sim `s`: per recent tomb, latest first, a pair
- * [tomb, bits]. Item k of the tomb's `tombItems` is hex digit k >> 2, value
- * 1 << (k & 3), set when taken; trailing 0 digits drop. It reads the sim's
- * stored item lists and builds a board only for a tomb the sim holds none of.
+ * The record's `recent` for sim `s` = { recent, collected, jars, items }: per
+ * recent tomb, latest first, a pair [tomb, bits]. Item k of the tomb's
+ * `tombItems` is hex digit k >> 2, value 1 << (k & 3), set when taken;
+ * trailing 0 digits drop. A tomb holding no take packs to "" and builds
+ * nothing; a tomb holding one reads its list from `s.items`, a Map from a
+ * tomb key to its `tombItems` list, and builds and stores the list there when
+ * it has none.
  */
 export function packRecent(world, s) {
+  const held = takenTombs(world, s.collected, s.jars);
   return s.recent.map((key) => {
-    const { ids, jars } = (s.items && s.items.get(key)) || tombItems(world, key);
+    if (!held.has(key)) return [key, ''];
+    let list = s.items.get(key);
+    if (!list) s.items.set(key, list = tombItems(world, key));
+    const { ids, jarCount } = list;
     let bits = '';
     for (let k = 0; k < ids.length; k += 4) {
       let digit = 0;
       for (let m = 0; m < 4 && k + m < ids.length; m++) {
-        if ((k + m < jars ? s.jars : s.collected).has(ids[k + m])) digit |= 1 << m;
+        if ((k + m < jarCount ? s.jars : s.collected).has(ids[k + m])) digit |= 1 << m;
       }
       bits += digit.toString(16);
     }
@@ -191,18 +211,23 @@ export function packRecent(world, s) {
 }
 
 /**
- * A parsed `recent` as { recent, collected, jars }, the takes `createSim`'s
- * carry holds. A bit past a tomb's last item is ignored.
+ * A parsed `recent` as { recent, collected, jars, items }, the takes and lists
+ * `createSim`'s carry holds. `items` holds the `tombItems` list of each tomb
+ * whose bits set an item; a tomb whose bits are "" or all 0 digits builds
+ * none. A bit past a tomb's last item is ignored.
  */
 export function unpackRecent(world, recent) {
-  const collected = new Set(), jars = new Set();
+  const collected = new Set(), jars = new Set(), items = new Map();
   for (const [key, bits] of recent) {
-    const { ids, jars: n } = tombItems(world, key);
+    if (!/[1-9a-f]/.test(bits)) continue;
+    const list = tombItems(world, key);
+    items.set(key, list);
+    const { ids, jarCount } = list;
     for (let k = 0; k < ids.length; k++) {
-      if ((parseInt(bits[k >> 2] ?? '0', 16) >> (k & 3)) & 1) (k < n ? jars : collected).add(ids[k]);
+      if ((parseInt(bits[k >> 2] ?? '0', 16) >> (k & 3)) & 1) (k < jarCount ? jars : collected).add(ids[k]);
     }
   }
-  return { recent: recent.map(([key]) => key), collected, jars };
+  return { recent: recent.map(([key]) => key), collected, jars, items };
 }
 
 /**

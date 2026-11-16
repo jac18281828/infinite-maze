@@ -10,7 +10,11 @@ import { boardMask } from '../src/game/mask.mjs';
 import { fixtureSets, dustMotes } from '../src/game/fixtures.mjs';
 import { createRenderer } from '../src/game/render.mjs';
 import { RGB, idx, ROCK } from '../src/game/art.mjs';
-import { BOARD_W, BOARD_H, createSim, feet, feetX, feetY, torchRadius } from '../src/game/sim.mjs';
+import { BOARD_W, BOARD_H, BURN_S, createSim, step, inputEdges, feet, feetX, feetY, torchRadius } from '../src/game/sim.mjs';
+import { createAutopilot } from '../src/game/autopilot.mjs';
+import { tombItems, packRecent } from '../src/game/wallet.mjs';
+import { DX, DY } from '../src/world/board.mjs';
+import { floorItems, coinRows } from '../src/world/floor.mjs';
 import { createFrame, placeFrame, deviceX, deviceY, deviceSpan, blendTicks, blendsTicks } from '../src/game/camera.mjs';
 
 const CODE = '00000000';
@@ -377,4 +381,102 @@ test('the drawn feet move the torch tip and the explorer blit by d device px a g
     }
     t.diagnostic(seen.join('; '));
   });
+});
+
+const seeds = (n) => Array.from({ length: n }, (_, i) => `0000000${i}`);
+
+for (const difficulty of LEVELS) {
+  test(`createSim without a carry builds no board at ${difficulty}`, () => {
+    for (const code of seeds(8)) {
+      const world = createWorld(code, { difficulty });
+      const start = world.startPoint();
+      const built = world.boardsBuilt();
+      createSim(world, start);
+      assert.equal(world.boardsBuilt(), built, `seed ${code}`);
+    }
+  });
+}
+
+/** Builds every board of the tombs within one tomb of (u, v). */
+function buildAround(world, u, v) {
+  for (let dv = -1; dv <= 1; dv++) {
+    for (let du = -1; du <= 1; du++) {
+      for (let i = 0; i < world.size.w * world.size.h; i++) {
+        const { x, y } = boardCoords(u + du, v + dv, i, world.size);
+        world.board(x, y);
+      }
+    }
+  }
+}
+
+/**
+ * A world with every board around tomb (0, 0) and the tomb B its exit leads to built, and the cell `across` that
+ * exit door. The scan of the board holding `across`, which the step onto it makes whatever a sim does, is cached.
+ */
+function crossingWorld(code, difficulty) {
+  const world = createWorld(code, { difficulty });
+  const d = world.exit(0, 0), b = { u: DX[d], v: DY[d] };
+  const across = world.tombFlames(0, 0).chains[0].at(-1);
+  buildAround(world, 0, 0);
+  buildAround(world, b.u, b.v);
+  const onto = world.board(across.x, across.y);
+  floorItems(world, onto);
+  coinRows(world, onto);
+  return { world, across, B: `${b.u},${b.v}` };
+}
+
+/** The ms of the step that moves a sim from the start point of tomb (0, 0) across its exit door. */
+function crossingStep(code, difficulty) {
+  const { world, across } = crossingWorld(code, difficulty);
+  const sim = createSim(world, world.startPoint());
+  const auto = createAutopilot(world, [across]);
+  let ph = 0, pv = 0;
+  for (let i = 0; i < 60000; i++) {
+    const [h, v, jump] = auto(sim);
+    const lead = sim.recent[0];
+    sim.burn = BURN_S;
+    const t0 = performance.now();
+    step(sim, h, v, jump, inputEdges(ph, pv, h, v));
+    const ms = performance.now() - t0;
+    if (sim.recent[0] !== lead) return ms;
+    ph = h;
+    pv = v;
+  }
+  throw new Error(`seed ${code} at ${difficulty} never crosses`);
+}
+
+/** The ms of `tombItems` over tomb B of a world in the state `crossingStep` starts from. */
+function enteredItems(code, difficulty) {
+  const { world, B } = crossingWorld(code, difficulty);
+  const t0 = performance.now();
+  tombItems(world, B);
+  return performance.now() - t0;
+}
+
+for (const difficulty of ['hard', 'ultimate']) {
+  test(`a crossing step at ${difficulty} costs at most a quarter of the entered tomb's tombItems`, (t) => {
+    const [warm, ...codes] = seeds(9);
+    crossingStep(warm, difficulty);
+    enteredItems(warm, difficulty);
+    const steps = codes.map((code) => crossingStep(code, difficulty));
+    const lists = codes.map((code) => enteredItems(code, difficulty));
+    const stepMs = median(steps), list = median(lists);
+    t.diagnostic(`crossing ${stepMs.toFixed(3)} ms against tombItems ${list.toFixed(3)} ms`);
+    assert.ok(stepMs <= list / 4, `crossing step ${stepMs.toFixed(3)} ms against tombItems ${list.toFixed(3)} ms`);
+  });
+}
+
+test('a tomb holding no take packs to "" without building a board', () => {
+  const world = createWorld(CODE, { difficulty: 'medium' });
+  const onward = ({ u, v }) => ({ u: u + DX[world.exit(u, v)], v: v + DY[world.exit(u, v)] });
+  const A = { u: 0, v: 0 }, C = onward(onward(A));
+  const key = ({ u, v }) => `${u},${v}`;
+  const at = boardCoords(C.u, C.v, world.tomb(C.u, C.v).entries[0], world.size);
+  const sim = createSim(world, world.resumePoint(at.x, at.y), { recent: [key(A)] });
+  assert.deepEqual(sim.recent, [key(C), key(A)]);
+  world.retain(C.u, C.v);
+  const built = world.boardsBuilt();
+  assert.deepEqual(packRecent(world, sim), [[key(C), ''], [key(A), '']]);
+  assert.equal(world.boardsBuilt(), built, 'packing builds nothing');
+  assert.equal(sim.items.size, 0, 'no list is stored');
 });

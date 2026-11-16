@@ -1286,7 +1286,7 @@ test('createSim carries the trail and every field runCarry returns; a fresh run 
   s.collected.add(taken);
   s.jars.add(`${start.bd.x},${start.bd.y},${start.cell + 1}`);
   const c = runCarry(s);
-  assert.deepEqual(Object.keys(c).sort(), ['collected', 'continues', 'entry', 'high', 'jars', 'lastEntry', 'recent', 'start', 'time', 'trail']);
+  assert.deepEqual(Object.keys(c).sort(), ['collected', 'continues', 'entry', 'high', 'items', 'jars', 'lastEntry', 'recent', 'start', 'time', 'trail']);
   const before = stoodCells(s);
   const next = world.resumePoint(start.bd.x, start.bd.y);
   const n = createSim(world, next, c);
