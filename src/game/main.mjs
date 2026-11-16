@@ -317,12 +317,7 @@ function selftest() {
     const cam = { x: 0, y: 0 };
     snapCam(cam, sim);
     r.scene(sim, cam, 0);
-    // The display is never cleared by a frame, so any translucent back-wall pixel shows its history.
-    const wall = r.layers.wall;
-    const wallPx = wall.getContext('2d').getImageData(0, 0, wall.width, wall.height).data;
-    for (let i = 3; i < wallPx.length; i += 4) {
-      if (wallPx[i] !== 255) { finish('fail: every back-wall pixel is opaque'); return; }
-    }
+    wallLeg(r);
     r.hud(sim);
     // Draws an unsaved run's pause screen over the scene, so a draw-time error fails the gate.
     drawPause({
@@ -342,6 +337,19 @@ function selftest() {
     setTimeout(() => finish(errors.length ? `fail: ${errors[0]}` : 'pass'), 0);
   } catch (e) {
     finish(`fail: ${e && e.message ? e.message : e}`);
+  }
+}
+
+/**
+ * Throws unless every pixel of the renderer's back-wall layer is opaque. A
+ * frame never clears the display, so a translucent back-wall pixel shows its
+ * history. Reads the layer after the scene is drawn and draws nothing.
+ */
+function wallLeg(r) {
+  const wall = r.layers.wall;
+  const px = wall.getContext('2d').getImageData(0, 0, wall.width, wall.height).data;
+  for (let i = 3; i < px.length; i += 4) {
+    if (px[i] !== 255) throw new Error('every back-wall pixel is opaque');
   }
 }
 
