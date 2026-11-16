@@ -2,7 +2,7 @@
   "name": "infinite-maze",
   "version": "0.1.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "BSD-3-Clause",
   "description": "Infrastructure only: the game itself has no dependencies.",
   "scripts": {
     "build": "tsc",
