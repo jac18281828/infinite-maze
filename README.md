@@ -214,3 +214,7 @@ aws cloudfront create-invalidation --paths "/*" \
   --distribution-id "$(aws cloudformation describe-stacks --stack-name StackMaze2adCom \
     --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)"
 ```
+
+## License
+
+BSD 3-Clause; see [LICENSE](LICENSE).
